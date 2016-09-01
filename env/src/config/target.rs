@@ -11,6 +11,11 @@ pub struct Target {
 }
 
 impl Target {
+
+    pub fn new() -> Target {
+        Target { actions: Vec::new() }
+    }
+
     pub fn len(&self) -> usize {
         self.actions.len()
     }

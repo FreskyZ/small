@@ -1,8 +1,6 @@
 // use std::env;
 // use std::process;
 
-// let config = Config::parse();
-// let config = Config::parse_file(file: Path);
 // config.get_target(Vec<&str>) -> Option<Target>
 // config.get_next_hint(Vec<&str>) -> Vec<&str>
 
