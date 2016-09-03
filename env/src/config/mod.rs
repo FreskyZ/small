@@ -4,157 +4,164 @@ use std::fs::File;
 
 // https://github.com/netvl/xml-rs
 use self::xml::reader::{ EventReader as XmlReader, XmlEvent };
-use self::xml::attribute::OwnedAttribute;
 
-mod target;
 mod config_error;
+mod parsed_element;
+mod target;
 
-use std::path::PathBuf;
-pub use self::target::Target;
-pub use self::target::TargetAction;
+use self::parsed_element::ParsedElement;
 pub use self::config_error::ConfigError;
+pub use self::target::Target;
 
-fn get_attribute<'a, 'b>(attributes: &'a Vec<OwnedAttribute>, name: &'b str) -> Option<&'a str> {
-    for attribute in &attributes {
-        if attribute.name == name {
-            Some(attribute.value)
-        }
-    }
-    None
-}
+fn get_target_name_by_path(path: &Vec<&str>, parser: &mut XmlReader<File>) -> Result<String, ConfigError> {
 
-fn get_target_name_by_path<'a>(path: &Vec<&str>, parser: &'a mut XmlReader<File>) -> Result<&'a str, ConfigError<'a>> {
+    // Expecting path at index
+    struct Expecting<'a>(usize, Option<&'a str>);
 
-    enum State {
-        WaitingForPaths,
-        WaitingForPExpectingPForNext,
-        WaitingForPExpectingPForCurrent,
-        // WaitingForAnEndP,
-    }
-
+    let mut in_paths = false;
     let mut path_iter = path.into_iter();
-    let mut state = State::WaitingForPaths;
-    let mut current_path: &str;
+    let mut depth = 0_usize;
+    let mut state = Expecting(depth, path_iter.next().map(|p| *p));
+    let indent = ["  ", "    ", "      ", "        ", "          ", "            "];
     loop {
         match parser.next() {
-            Ok(XmlEvent::StartElement { name, attributes, .. }) => {
-                match state {
-                    State::WaitingForPaths if name == "paths" => {
-                        // Into XMLElement paths
-                        state = State::WaitingForPExpectingPForNext;
-                    }
-                    State::WaitingForPExpectingPForNext => {
-                        if name == "p" { // Other tag name is ignored
-                            match path_iter.next() {
-                                Some(current) => {
-                                    let name = match get_attribute(&attributes, "value") {
-                                        Some(name) => name,
-                                        None => { return Err(ConfigError::PathNodeNameNotSet); } 
-                                    };
-                                    if current == name { // If match, continue, if not, return err
-                                        current_path = current;
-                                        // state = State::WaitingForPExpectingPForNext;
-                                    } else {
-                                        state = State::WaitingForPExpectingPForCurrent; // Go to check next child node
+            Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
+                match ParsedElement::from(name, attributes) {
+                    ParsedElement::Paths => {
+                        perrorln!("Paths started");
+                        in_paths = true;
+                    },
+                    ParsedElement::PathNode { ref inner } if in_paths => {
+                        perrorln!("{}{:?}", indent[depth], inner);
+                        perror!("{}expecting {:?} @ {}, ", indent[depth], state.1, state.0);
+
+                        if depth == state.0 && inner.has(state.1.unwrap_or("(Iter ended)")) {
+                            match path_iter.next().map(|p| *p) {
+                                Some(next) => {
+                                    perrorln!("found, move forward");
+                                    state = Expecting(state.0 + 1, Some(next));
+                                },
+                                None => {
+                                    match inner.target {
+                                        Some(target) => { 
+                                            perrorln!("found, target is {:?}", target);
+                                            return Ok(target.to_owned()); 
+                                        }
+                                        None => {
+                                            perrorln!("found, target not set"); 
+                                            return Err(ConfigError::TargetNotSet); 
+                                        }
                                     }
                                 }
-                                None => {
-                                    // End of input paths, try get target
-                                    return match get_attribute(&attributes, "target") {
-                                        Some(value) => Ok(value),
-                                        None => Err(ConfigError::TargetNotSet)
-                                    };
-                                }
                             }
-                        }
-                    }
-                    State::WaitingForPExpectingPForCurrent => {
-                        let name = match get_attribute(&attributes, "value") {
-                            Some(name) => name,
-                            None => { return Err(ConfigError::PathNodeNameNotSet); } 
-                        };
-                        if current_path == name { // If match, continue, if not, return err
-                            state = State::WaitingForPExpectingPForNext;
                         } else {
-                            // state = State::WaitingForPExpectingPForCurrent; // Go to check next child node
+                            perrorln!("not match, continue");
                         }
-                    }
+
+                        depth += 1;
+                    },
+                    _ => ()
                 }
             }
             Ok(XmlEvent::EndElement { name }) => {
-                match state {
-                    State::WaitingForPaths => {
-                        
-                    }
-                    State::WaitingForPExpectingPForNext => {
-                        return Err(ConfigError::UnexpectedPath);
-                    }
-                    State::WaitingForPExpectingPForCurrent => {
-                        // Quiting current children enumeration
-                        return Err(ConfigError::UnexpectedPath);
-                    }
+                match &*name.local_name {
+                    "paths" => {
+                        perrorln!("Paths end\n");
+                        break;
+                    },
+                    "p" => {
+                        depth -= 1;
+                    },
+                    _ => ()
                 }
             }
             Err(e) => {
-                Err(ConfigError::FailParse { inner_error: e })
+                return Err(ConfigError::FailParse { inner_error: e })
+            }
+            Ok(XmlEvent::EndDocument) => {
+                break;
             }
             _ => ()
         };
     }
+
+    Err(ConfigError::UnexpectedPath)
 }
 
-fn get_target_by_name<'a>(target_name: &str, parser: &'a mut XmlReader<File>) -> Result<Target<'a>, ConfigError<'a>> {
+fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result<Target, ConfigError> {
 
-    let in_targets = false;
-    let recording = false; // recording pathadd and scriptexec
-    let ret_val = Vec::new(); // ret_val's inner
+    let mut in_targets = false;
+    let mut in_target = false;
+    let mut ret_val = Target { actions: Vec::new() };
 
     loop {
         match parser.next() {
-            Ok (XmlEvent::StartElement { name, attributes, .. }) => {
-                if name == "targets" {
-                    in_targets = true;
-                    continue;
-                } else if in_targets && name == "target" {
-                    match get_attribute(&attributes, "name") {
-                        Some(name) if name == target_name => {
-                            in_targets = false; // Found first, no need to go back
-                            recording = true;
+            Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
+                match ParsedElement::from(name, attributes) {
+                    ParsedElement::Targets => {
+                        // perrorln!("Targets started");
+                        in_targets = true;
+                    },
+                    ParsedElement::TargetNode { name } if in_targets => {
+                        match name {
+                            Some(name) if name == target_name => {
+                                in_target = true;
+                                // perrorln!("in target {}: ", target_name);
+                            },
+                            _ => ()
                         }
-                        None => {
-                            // Ignore <target> without @name
+                    },
+                    ParsedElement::PathAdd(value) if in_target => {
+                        match value {
+                            Some(value) => ret_val.push_path(value),
+                            None => ()
                         }
-                    };
-                } else if recording {
-                    match get_attribute(&attributes, "value") {
-                        Some(value) => {
-                            match name {
-                                "pathadd" => ret_val.push(TargetAction::PathAdd(PathBuf::from(value))),
-                                "scriptexec" => ret_val.push(TargetAction::ScriptExecute(PathBuf::from(value))),
-                                _ => { /* Ignore other <> in <target> */ }
-                            }
+                        // perrorln!("   pathadd: {:?}", value.unwrap_or("(Not set)"));
+                    },
+                    ParsedElement::ScriptExecute(value) if in_target => {
+                        match value {
+                            Some(value) => ret_val.push_script(value),
+                            None => ()
                         }
-                        None => {
-                            // Ignore <pathadd> and <scriptexec> or other <> in <target> without @value
-                        }
+                        // perrorln!("   scriptexec: {:?}", value.unwrap_or("(Not set)"));
                     }
+                    _ => ()
                 }
             }
-        }
-    };
+            Ok(XmlEvent::EndElement { name }) => {
+                match &*name.local_name {
+                    "targets" => {
+                        // perrorln!("Targets end\n");
+                        break;
+                    },
+                    "target" if in_target => {
+                        // perrorln!("Leaving target");
+                        return Ok(ret_val);
+                    }
+                    _ => ()
+                }
+            }
+            Err(e) => {
+                return Err(ConfigError::FailParse { inner_error: e })
+            }
+            Ok(XmlEvent::EndDocument) => {
+                break;
+            }
+            _ => ()
+        };
+    }
     
-    // Will return empty if not found
-    Ok(Target::Actions(ret_val))
+    Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() })
 }
 
-pub fn get_target<'a>(path: Vec<&str>) -> Result<Target<'a>, ConfigError<'a>> {
+pub fn get_target(path: Vec<&str>) -> Result<Target, ConfigError> {
     
     let file = try!(File::open(".env")
         .map_err(|e| ConfigError::FailOpenFile { inner_error: e }));
-    let parser = XmlReader::new(file);
+    let mut parser = XmlReader::new(file);
 
-    try!(get_target_name_by_path(&path, &mut parser)
-        .and_then(|name| get_target_by_name(name, &mut parser)))
+    get_target_name_by_path(&path, &mut parser)
+        .and_then(|target_name| get_target_by_name(&*target_name, &mut parser))
 }
 
 #[cfg(test)]
@@ -164,7 +171,9 @@ mod tests {
     #[test]
     fn load_xml_file() {
         match get_target(vec!["vcpp", "19", "amd64"]) {
-            Ok(_) => (),
+            Ok(target) => {
+                perrorln!("Get target: {:?}", target);
+            },
             Err(e) => perrorln!("Error: {}", e),
         }
     }

@@ -1,16 +1,16 @@
 use std::fmt::{ Display, Formatter, Result as FormatResult };
 use std::io;
 
-pub enum ConfigError<'a> {
+pub enum ConfigError {
     FailOpenFile { inner_error: io::Error },
     FailParse { inner_error: super::xml::reader::Error },
     UnexpectedPath,
     PathNodeNameNotSet,
     TargetNotSet,
-    TargetNotExist { target_name: &'a str },
+    TargetNotExist { target_name: String },
 }
 
-impl<'a> Display for ConfigError<'a> {
+impl Display for ConfigError {
     fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
             ConfigError::FailOpenFile{ ref inner_error } => {
@@ -31,7 +31,7 @@ impl<'a> Display for ConfigError<'a> {
             ConfigError::TargetNotExist { ref target_name } => {
                 writeln!(f, "Target not exist: {}", target_name)
             }
-            _ => { writeln!(f, "Wait to check other availability") }
+            // _ => { writeln!(f, "Wait to check other availability") }
         }
     }
 }
