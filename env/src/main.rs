@@ -1,18 +1,14 @@
 // use std::env;
 // use std::process;
 
-// config.get_target(Vec<&str>) -> Option<Target>
-// config.get_next_hint(Vec<&str>) -> Vec<&str>
-
-// env --help | env --list
-// Available next token:
-//  python | py
-//  vcpp | msvc 
-//  git
-//  rust 
-// Available option:
-//  --help | --list | <empty> | -h | -l (any case)
-//  --version | -v (any case)
+// Usage:
+//      env /python/msvc16/amd64 /git/27
+//      env /python --list  # or `-l` list only available for one path
+//          # subpath for `/python`: 2.7(27, 2), msvc16, amd64 
+// Option:
+//      --version | -v  # any case, quit immediately
+//      --setup | -s   # open config file for setup
+//      --help | -h | any other, for help string, quit immediately
 
 #![allow(dead_code)]
 
