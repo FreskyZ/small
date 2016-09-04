@@ -5,7 +5,7 @@ use super::xml::name::OwnedName;
 
 #[derive(PartialEq, Eq)]
 pub struct PathNodeInner<'a> {
-    values: Vec<&'a str>,
+    pub values: Vec<&'a str>,
     pub target: Option<&'a str>
 }
 
