@@ -12,7 +12,16 @@ use self::parsed_element::ParsedElement;
 pub use self::config_error::ConfigError;
 pub use self::target::Target;
 
-fn get_target_name_by_path(path: &Vec<&str>, parser: &mut XmlReader<File>, require_list: bool) -> Result<String, ConfigError> {
+enum SearchResult {
+    Target(String),
+    Available(Vec<String>),
+}
+
+fn get_target_name_by_path(
+    path: &Vec<&str>, 
+    parser: &mut XmlReader<File>, 
+    require_list: bool) 
+    -> Result<SearchResult, ConfigError> {
 
     // Expecting path at index
     enum State<'a> {
@@ -24,62 +33,43 @@ fn get_target_name_by_path(path: &Vec<&str>, parser: &mut XmlReader<File>, requi
     let mut path_iter = path.into_iter();
     let mut depth = 0_usize;
     let mut state = State::Expecting(depth, path_iter.next().map(|p| *p));
-    let indent = ["  ", "    ", "      ", "        ", "          ", "            "];
     loop {
         match parser.next() {
             Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
                 match ParsedElement::from(name, attributes) {
                     ParsedElement::Paths => {
-                        perrorln!("Paths started");
                         in_paths = true;
                     },
                     ParsedElement::PathNode { ref inner } if in_paths => {
-                        perrorln!("{}{:?}", indent[depth], inner);
-
                         match state {
                             State::Expecting(expected_depth, expected_value) => {
-                                perror!("{}expecting {:?} @ {}, ", indent[depth], expected_value, expected_depth);
-
                                 if depth == expected_depth && inner.has(expected_value.unwrap_or("(Iter ended)")) {
                                     match path_iter.next().map(|p| *p) {
                                         Some(next) => {
-                                            perrorln!("found, move forward");
                                             state = State::Expecting(expected_depth + 1, Some(next));
                                         },
                                         None => {
                                             if require_list {
-                                                perrorln!("{}Require listing, now recording", indent[depth]);
                                                 state = State::Recording(expected_depth + 1, Vec::new());
                                             } else {
                                                 match inner.target {
                                                     Some(target) => { 
-                                                        perrorln!("found, target is {:?}\n", target);
-                                                        return Ok(target.to_owned());
+                                                        return Ok(SearchResult::Target(target.to_owned()));
                                                     }
                                                     None => {
-                                                        perrorln!("found, target not set, going to record nexts\n");
-                                                        state = State::Recording(expected_depth + 1, Vec::new()); 
-                                                        // return Err(ConfigError::TargetNotSet); 
+                                                        state = State::Recording(expected_depth + 1, Vec::new());
                                                     }
                                                 }
                                             }
                                         }
                                     }
-                                } else {
-                                    perrorln!("not match, continue");
                                 }
                             }
                             State::Recording(expected_depth, ref mut recorded_values) => {
                                 if depth > expected_depth {
-                                    perrorln!("{}Inner values, not recorded", indent[depth]);
                                     // Ignore, no need to record
                                 } else if depth == expected_depth {
-                                    perrorln!("{}Recorded these values", indent[depth]);
-                                    recorded_values.push(String::new());
-                                    for value in &inner.values {
-                                        recorded_values.last_mut().unwrap().extend(value.chars());
-                                        recorded_values.last_mut().unwrap().extend(", ".to_owned().chars());
-                                    }
+                                    recorded_values.push(inner.to_string());
                                 } else if depth < expected_depth {
                                     unreachable!();
                                 }
@@ -93,15 +83,13 @@ fn get_target_name_by_path(path: &Vec<&str>, parser: &mut XmlReader<File>, requi
             Ok(XmlEvent::EndElement { name }) => {
                 match &*name.local_name {
                     "paths" => {
-                        perrorln!("Paths end\n");
                     },
                     "p" => {
                         depth -= 1;
                         if let State::Recording(recording_depth, ref recorded_values) = state {
                             if recording_depth - 1 == depth {
                                 // Out of recording area, return
-                                perrorln!("{}Record should be finished, recorded: {:?}", indent[depth], recorded_values);
-                                return Err(ConfigError::TargetNotSet);
+                                return Ok(SearchResult::Available(recorded_values.clone()));
                             } 
                         }
                     },
@@ -185,10 +173,27 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
     Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() })
 }
 
-pub fn get_target(parser: &mut XmlReader<File>, path: Vec<&str>, require_list: bool) -> Result<Target, ConfigError> {
+#[derive(Debug)]
+pub enum SomeResult {
+    Target(Target),
+    Availables(Vec<String>),
+}
+
+pub fn get_target(
+    parser: &mut XmlReader<File>, 
+    path: Vec<&str>, 
+    require_list: bool) 
+    -> Result<SomeResult, ConfigError> {
     
-    get_target_name_by_path(&path, parser, require_list)
-        .and_then(|target_name| get_target_by_name(&*target_name, parser))
+    match get_target_name_by_path(&path, parser, require_list) {
+        Ok(target_name) => {
+            return Ok(match target_name {
+                SearchResult::Available(availables) => SomeResult::Availables(availables),
+                SearchResult::Target(target_name) => SomeResult::Target(try!(get_target_by_name(&*target_name, parser)))
+            });
+        },
+        Err(e) => return Err(e),
+    }
 }
 
 #[cfg(test)]

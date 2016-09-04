@@ -5,7 +5,7 @@ use super::xml::name::OwnedName;
 
 #[derive(PartialEq, Eq)]
 pub struct PathNodeInner<'a> {
-    pub values: Vec<&'a str>,
+    values: Vec<&'a str>,
     pub target: Option<&'a str>
 }
 
@@ -17,6 +17,27 @@ impl<'a> PathNodeInner<'a> {
             }
         }
         false
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+
+    pub fn to_string(&self) -> String {
+
+        if self.is_empty() { 
+            String::new() 
+        } else {
+            let mut ret_val = self.values[0].to_owned();
+            if self.values.len() > 1 {
+                ret_val.push_str("(");
+                for i in 1..self.values.len() - 1 {
+                    ret_val.push_str(&*format!("{}, ", self.values[i]));
+                }
+                ret_val.push_str(&*format!("{})", self.values.last().unwrap()));
+            }
+            ret_val
+        }
     }
 }
 
@@ -166,5 +187,6 @@ mod tests {
         assert_eq!(inner.has("value1"), true);
         assert_eq!(inner.has("alias2"), true);
         assert_eq!(inner.has("asdasd"), false);
+        assert_eq!(inner.to_string(), "value1(alias1, alias2)");
     }
 }
