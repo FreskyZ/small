@@ -4,31 +4,27 @@ use std::fs::File;
 // https://github.com/netvl/xml-rs
 use self::xml::reader::{ EventReader as XmlReader, XmlEvent };
 
-mod config_error;
+mod error;
 mod parsed_element;
-mod config_result;
+mod result;
+mod parser;
 
 use self::parsed_element::ParsedElement;
-pub use self::config_error::ConfigError;
-pub use self::config_result:: { TargetAction, ConfigResult };
+pub use self::error::Error;
+pub use self::parser::{ ConfigEvent, ConfigParser };
+pub use self::result::{ TargetAction, ConfigResult };
 
-enum SearchResult {
-    Target(String),
-    Available(Vec<String>),
-}
+pub fn get_target(parser: &mut XmlReader<File>, 
+    path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
 
-fn get_target_name_by_path(
-    path: &Vec<&str>, 
-    parser: &mut XmlReader<File>, 
-    require_list: bool) 
-    -> Result<SearchResult, ConfigError> {
-
+    let mut target_name = String::new();
+    {
     #[derive(Debug)]
     enum State<'a> {
         WaitingPaths,
         SearchingPathNode {
             current_depth: usize,
-            expect_depth: usize,
+            expect_depth: usize,    
             expect_value: &'a str,
         },
         RecordingAvailables {
@@ -90,7 +86,8 @@ fn get_target_name_by_path(
                                             } else {
                                                 match inner.target {
                                                     Some(target) => { 
-                                                        return Ok(SearchResult::Target(target.to_owned()));
+                                                        target_name = target.to_owned();
+                                                        break;
                                                     }
                                                     None => {
                                                         state = State::RecordingAvailables {
@@ -129,10 +126,10 @@ fn get_target_name_by_path(
                     "paths" => {
                         match state {
                             State::RecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
-                                return Ok(SearchResult::Available(ret_val.clone()));                                
+                                return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));                                
                             },
                             State::SearchingPathNode { .. } => {
-                                return Err(ConfigError::UnexpectedPath);
+                                return Err(Error::UnexpectedPath);
                             }
                             _ => (),
                         }
@@ -143,7 +140,7 @@ fn get_target_name_by_path(
                             State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
                                 if *expect_depth == *current_depth {
                                     // Out of recording area, return
-                                    return Ok(SearchResult::Available(ret_val.clone()));
+                                    return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));
                                 } 
                                 *current_depth -= 1;
                             }
@@ -157,7 +154,7 @@ fn get_target_name_by_path(
                 }
             }
             Err(e) => {
-                return Err(ConfigError::FailParse { inner_error: e })
+                return Err(Error::FailParse { inner_error: e })
             }
             Ok(XmlEvent::EndDocument) => {
                 break;
@@ -166,11 +163,10 @@ fn get_target_name_by_path(
         };
     }
 
-    Err(ConfigError::UnexpectedPath)
-}
+    }
 
-fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result<ConfigResult, ConfigError> {
-
+    {
+    #[derive(Debug)]
     enum State<'a> {
         WaitingTargets {
             target_name: &'a str,
@@ -183,7 +179,7 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
         }
     }
 
-    let mut state = State::WaitingTargets { target_name: target_name };
+    let mut state = State::WaitingTargets { target_name: &*target_name };
 
     loop {
         match parser.next() {
@@ -241,10 +237,10 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
                         match state {
                             State::WaitingTargets { .. } => {
                                 // Err::TargetsNotExist
-                                return Err(ConfigError::TargetsNotExist);
+                                return Err(Error::TargetsNotExist);
                             }
                             State::SearchingTarget { .. } => {
-                                return Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() } );
+                                return Err(Error::TargetNotExist { target_name: target_name.to_owned() } );
                             }
                             State::RecordingTargetActions { .. } => {
                                 // an entire <targets> in <target>, ignore
@@ -268,7 +264,7 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
                 }
             }
             Err(e) => {
-                return Err(ConfigError::FailParse { inner_error: e })
+                return Err(Error::FailParse { inner_error: e })
             }
             Ok(XmlEvent::EndDocument) => {
                 break;
@@ -276,29 +272,9 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
             _ => ()
         };
     }
-    
-    Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() })
-}
 
-pub fn get_target(
-    parser: &mut XmlReader<File>, 
-    path: Vec<&str>, 
-    require_list: bool) 
-    -> Result<ConfigResult, ConfigError> {
-    
-    match get_target_name_by_path(&path, parser, require_list) {
-        Ok(target_name) => {
-            match target_name {
-                SearchResult::Available(availables) => {
-                    return Ok(ConfigResult::AvailablePathNodes(availables)); 
-                },
-                SearchResult::Target(target_name) => {
-                    return get_target_by_name(&*target_name, parser);
-                }
-            };
-        },
-        Err(e) => return Err(e),
     }
+    unreachable!();
 }
 
 #[cfg(test)]
@@ -319,10 +295,10 @@ mod tests {
         };
         let mut parser = XmlReader::new(file);  
 
-        match get_target(&mut parser, vec!["msvc", "19"], true) {
+        match get_target(&mut parser, &vec!["msvc", "19"], true) {
             Ok(ConfigResult::Actions(_)) => unreachable!(),
             Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["x86", "amd64(x64)"]),
-            Err(e) => panic!("{}", e), 
+            Err(e) => panic!("{:?}", e), 
         }
     }
     
@@ -335,13 +311,13 @@ mod tests {
         };
         let mut parser = XmlReader::new(file);  
 
-        match get_target(&mut parser, vec!["msvc", "19", "amd64"], false) {
+        match get_target(&mut parser, &vec!["msvc", "19", "amd64"], false) {
             Ok(ConfigResult::Actions(actions)) => assert_eq!(actions,
                 [TargetAction::ScriptExecute("script for cl64".to_owned()), 
                 TargetAction::PathAdd("path add value for cl64".to_owned()), 
                 TargetAction::ScriptExecute("another script for cl64".to_owned())]),
             Ok(ConfigResult::AvailablePathNodes(_)) => unreachable!(),
-            Err(e) => panic!("{}", e), 
+            Err(e) => panic!("{:?}", e), 
         }
     }
 
@@ -354,10 +330,10 @@ mod tests {
         };
         let mut parser = XmlReader::new(file);  
 
-        match get_target(&mut parser, vec![], true) {
+        match get_target(&mut parser, &vec![], true) {
             Ok(ConfigResult::Actions(_)) => unreachable!(),
             Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)", ""]),
-            Err(e) => panic!("{}", e), 
+            Err(e) => panic!("{:?}", e), 
         }
     }
 }
