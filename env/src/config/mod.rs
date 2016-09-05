@@ -14,10 +14,15 @@ pub use self::error::Error;
 pub use self::parser::{ ConfigEvent, ConfigParser };
 pub use self::result::{ TargetAction, ConfigResult };
 
-pub fn get_target(parser: &mut XmlReader<File>, 
+pub fn get_target(file_name: &str, 
     path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
 
+    let file = try!(File::open(file_name)
+        .map_err(|e| Error::FailOpenFile { inner_error: e }));
+    let parser = &mut XmlReader::new(file);  
+
     let mut target_name = String::new();
+
     {
     #[derive(Debug)]
     enum State<'a> {
@@ -280,22 +285,13 @@ pub fn get_target(parser: &mut XmlReader<File>,
 #[cfg(test)]
 mod tests {
     use super::get_target;
-    use std::fs::File;
-
-    use super::xml::reader::{ EventReader as XmlReader };
     use super::ConfigResult;
     use super::TargetAction;
 
     #[test]
     fn get_target_availables() {
 
-        let file = match File::open(".env") {
-            Ok(file) => file,
-            Err(e) => panic!("Open file error: {}", e),
-        };
-        let mut parser = XmlReader::new(file);  
-
-        match get_target(&mut parser, &vec!["msvc", "19"], true) {
+        match get_target(".env", &vec!["msvc", "19"], true) {
             Ok(ConfigResult::Actions(_)) => unreachable!(),
             Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["x86", "amd64(x64)"]),
             Err(e) => panic!("{:?}", e), 
@@ -305,13 +301,7 @@ mod tests {
     #[test]
     fn get_target_targets() {
 
-        let file = match File::open(".env") {
-            Ok(file) => file,
-            Err(e) => panic!("Open file error: {}", e),
-        };
-        let mut parser = XmlReader::new(file);  
-
-        match get_target(&mut parser, &vec!["msvc", "19", "amd64"], false) {
+        match get_target(".env", &vec!["msvc", "19", "amd64"], false) {
             Ok(ConfigResult::Actions(actions)) => assert_eq!(actions,
                 [TargetAction::ScriptExecute("script for cl64".to_owned()), 
                 TargetAction::PathAdd("path add value for cl64".to_owned()), 
@@ -324,13 +314,7 @@ mod tests {
     #[test]
     fn get_target_empty_input() {
         
-        let file = match File::open(".env") {
-            Ok(file) => file,
-            Err(e) => panic!("Open file error: {}", e),
-        };
-        let mut parser = XmlReader::new(file);  
-
-        match get_target(&mut parser, &vec![], true) {
+        match get_target(".env", &vec![], true) {
             Ok(ConfigResult::Actions(_)) => unreachable!(),
             Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)", ""]),
             Err(e) => panic!("{:?}", e), 
