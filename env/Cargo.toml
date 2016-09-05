@@ -1,7 +1,12 @@
 [package]
-name = "env"
+name = "fsz-env"
 version = "0.1.0"
-authors = ["Fresk"]
+authors = ["FreskyZ <fresky7@outlook.com>"]
+description = "Dynamic environment variable control for Windows, for PATH decoupling and multi version control"
 
 [dependencies]
 xml-rs = "0.3.4"
+
+[[bin]]
+name = "env"
+path = "src/main.rs"

@@ -6,11 +6,11 @@ use self::xml::reader::{ EventReader as XmlReader, XmlEvent };
 
 mod config_error;
 mod parsed_element;
-mod target;
+mod config_result;
 
 use self::parsed_element::ParsedElement;
 pub use self::config_error::ConfigError;
-pub use self::target::Target;
+pub use self::config_result:: { TargetAction, ConfigResult };
 
 enum SearchResult {
     Target(String),
@@ -23,74 +23,134 @@ fn get_target_name_by_path(
     require_list: bool) 
     -> Result<SearchResult, ConfigError> {
 
-    // Expecting path at index
+    #[derive(Debug)]
     enum State<'a> {
-        Expecting(usize, Option<&'a str>),
-        Recording(usize, Vec<String>),
+        WaitingPaths,
+        SearchingPathNode {
+            current_depth: usize,
+            expect_depth: usize,
+            expect_value: &'a str,
+        },
+        RecordingAvailables {
+            current_depth: usize,
+            expect_depth: usize, 
+            ret_val: Vec<String>
+        },
     }
 
-    let mut in_paths = false;
     let mut path_iter = path.into_iter();
-    let mut depth = 0_usize;
-    let mut state = State::Expecting(depth, path_iter.next().map(|p| *p));
+    let mut state = State::WaitingPaths;
     loop {
         match parser.next() {
             Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
                 match ParsedElement::from(name, attributes) {
                     ParsedElement::Paths => {
-                        in_paths = true;
-                    },
-                    ParsedElement::PathNode { ref inner } if in_paths => {
                         match state {
-                            State::Expecting(expected_depth, expected_value) => {
-                                if depth == expected_depth && inner.has(expected_value.unwrap_or("(Iter ended)")) {
+                            State::WaitingPaths => {
+                                match path_iter.next().map(|p| *p) {
+                                    Some(next) => {
+                                        state = State::SearchingPathNode {
+                                            current_depth: 0_usize,
+                                            expect_depth: 0_usize, 
+                                            expect_value: next 
+                                        };
+                                    }
+                                    None => {
+                                        state = State::RecordingAvailables {
+                                            current_depth: 0_usize,
+                                            expect_depth: 0_usize,
+                                            ret_val: Vec::new()
+                                        };
+                                    }
+                                }
+                            }
+                            _ => (),
+                        }
+                    },
+                    ParsedElement::PathNode { inner } => {
+                        // perrorln!("{:?}\nstate {:?}", inner, state);
+                        match state {
+                            State::SearchingPathNode { current_depth, expect_depth, expect_value } => {
+                                if current_depth == expect_depth && inner.has(expect_value) {
                                     match path_iter.next().map(|p| *p) {
                                         Some(next) => {
-                                            state = State::Expecting(expected_depth + 1, Some(next));
+                                            state = State::SearchingPathNode { 
+                                                current_depth: current_depth + 1,
+                                                expect_depth: expect_depth + 1, 
+                                                expect_value: next 
+                                            };
                                         },
                                         None => {
                                             if require_list {
-                                                state = State::Recording(expected_depth + 1, Vec::new());
+                                                state = State::RecordingAvailables {
+                                                    current_depth: current_depth + 1,
+                                                    expect_depth: expect_depth + 1,
+                                                    ret_val: Vec::new()
+                                                };
                                             } else {
                                                 match inner.target {
                                                     Some(target) => { 
                                                         return Ok(SearchResult::Target(target.to_owned()));
                                                     }
                                                     None => {
-                                                        state = State::Recording(expected_depth + 1, Vec::new());
+                                                        state = State::RecordingAvailables {
+                                                            current_depth: current_depth + 1,
+                                                            expect_depth: expect_depth + 1,
+                                                            ret_val: Vec::new()
+                                                        };
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
-                            }
-                            State::Recording(expected_depth, ref mut recorded_values) => {
-                                if depth > expected_depth {
-                                    // Ignore, no need to record
-                                } else if depth == expected_depth {
-                                    recorded_values.push(inner.to_string());
-                                } else if depth < expected_depth {
-                                    unreachable!();
+                                else {
+                                    state = State::SearchingPathNode {
+                                        current_depth: current_depth + 1,
+                                        expect_depth: expect_depth,
+                                        expect_value: expect_value,
+                                    };
                                 }
                             }
+                            State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+                                if *current_depth == *expect_depth { 
+                                    ret_val.push(inner.to_string());
+                                } // else ignore
+                                *current_depth += 1;
+                            }
+                            _ => () // WaitingPaths => <p> not in <paths>, ignore
                         }
-                        depth += 1;
                     },
-                    _ => ()
+                    _ => () // Other start element, ignore
                 }
             }
             Ok(XmlEvent::EndElement { name }) => {
                 match &*name.local_name {
                     "paths" => {
+                        match state {
+                            State::RecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
+                                return Ok(SearchResult::Available(ret_val.clone()));                                
+                            },
+                            State::SearchingPathNode { .. } => {
+                                return Err(ConfigError::UnexpectedPath);
+                            }
+                            _ => (),
+                        }
                     },
                     "p" => {
-                        depth -= 1;
-                        if let State::Recording(recording_depth, ref recorded_values) = state {
-                            if recording_depth - 1 == depth {
-                                // Out of recording area, return
-                                return Ok(SearchResult::Available(recorded_values.clone()));
-                            } 
+                        // perrorln!("end p\nstate: {:?}", state);
+                        match state {
+                            State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+                                if *expect_depth == *current_depth {
+                                    // Out of recording area, return
+                                    return Ok(SearchResult::Available(ret_val.clone()));
+                                } 
+                                *current_depth -= 1;
+                            }
+                            State::SearchingPathNode { ref mut current_depth, .. } => {
+                                *current_depth -= 1;
+                            }
+                            _ => (),
                         }
                     },
                     _ => ()
@@ -109,39 +169,67 @@ fn get_target_name_by_path(
     Err(ConfigError::UnexpectedPath)
 }
 
-fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result<Target, ConfigError> {
+fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result<ConfigResult, ConfigError> {
 
-    let mut in_targets = false;
-    let mut in_target = false;
-    let mut ret_val = Target { actions: Vec::new() };
+    enum State<'a> {
+        WaitingTargets {
+            target_name: &'a str,
+        },
+        SearchingTarget {
+            target_name: &'a str,
+        },
+        RecordingTargetActions {
+            ret_val: Vec<TargetAction>,
+        }
+    }
+
+    let mut state = State::WaitingTargets { target_name: target_name };
 
     loop {
         match parser.next() {
             Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => {
                 match ParsedElement::from(name, attributes) {
                     ParsedElement::Targets => {
-                        // perrorln!("Targets started");
-                        in_targets = true;
-                    },
-                    ParsedElement::TargetNode { name } if in_targets => {
-                        match name {
-                            Some(name) if name == target_name => {
-                                in_target = true;
-                                // perrorln!("in target {}: ", target_name);
-                            },
+                        match state {
+                            State::WaitingTargets { target_name } => {
+                                state = State::SearchingTarget { target_name: target_name };
+                            }
                             _ => ()
                         }
                     },
-                    ParsedElement::PathAdd(value) if in_target => {
-                        match value {
-                            Some(value) => ret_val.push_path(value),
-                            None => ()
+                    ParsedElement::TargetNode { name } => {
+                        match state {
+                            State::SearchingTarget { target_name } => {
+                                match name {
+                                    Some(name) if name == target_name => {
+                                        state = State::RecordingTargetActions { ret_val: Vec::new() };
+                                    },
+                                    _ => ()
+                                }
+                            }
+                            _ => ()
                         }
                     },
-                    ParsedElement::ScriptExecute(value) if in_target => {
-                        match value {
-                            Some(value) => ret_val.push_script(value),
-                            None => ()
+                    ParsedElement::PathAdd(value) => {
+                        match state {
+                            State::RecordingTargetActions { ref mut ret_val } => {
+                                match value {
+                                    Some(value) => ret_val.push(TargetAction::PathAdd(value.to_owned())),
+                                    None => ()
+                                }
+                            }
+                            _ => ()
+                        }
+                    },
+                    ParsedElement::ScriptExecute(value) => {
+                        match state {
+                            State::RecordingTargetActions { ref mut ret_val } => {
+                                match value {
+                                    Some(value) => ret_val.push(TargetAction::ScriptExecute(value.to_owned())),
+                                    None => ()
+                                }
+                            }
+                            _ => ()
                         }
                     }
                     _ => ()
@@ -150,12 +238,31 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
             Ok(XmlEvent::EndElement { name }) => {
                 match &*name.local_name {
                     "targets" => {
-                        // perrorln!("Targets end\n");
-                        break;
+                        match state {
+                            State::WaitingTargets { .. } => {
+                                // Err::TargetsNotExist
+                                return Err(ConfigError::TargetsNotExist);
+                            }
+                            State::SearchingTarget { .. } => {
+                                return Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() } );
+                            }
+                            State::RecordingTargetActions { .. } => {
+                                // an entire <targets> in <target>, ignore
+                            }
+                        }
                     },
-                    "target" if in_target => {
-                        // perrorln!("Leaving target");
-                        return Ok(ret_val);
+                    "target" => {
+                        match state {
+                            State::WaitingTargets { .. } => {
+                                // <target> outside of <targets>, ignore
+                            }
+                            State::SearchingTarget { .. } => {
+                                // normal search match fail, ignore
+                            }
+                            State::RecordingTargetActions { ret_val } => {
+                                return Ok(ConfigResult::Actions(ret_val));
+                            }
+                        }
                     }
                     _ => ()
                 }
@@ -173,24 +280,22 @@ fn get_target_by_name(target_name: &str, parser: &mut XmlReader<File>) -> Result
     Err(ConfigError::TargetNotExist { target_name: target_name.to_owned() })
 }
 
-#[derive(Debug)]
-pub enum SomeResult {
-    Target(Target),
-    Availables(Vec<String>),
-}
-
 pub fn get_target(
     parser: &mut XmlReader<File>, 
     path: Vec<&str>, 
     require_list: bool) 
-    -> Result<SomeResult, ConfigError> {
+    -> Result<ConfigResult, ConfigError> {
     
     match get_target_name_by_path(&path, parser, require_list) {
         Ok(target_name) => {
-            return Ok(match target_name {
-                SearchResult::Available(availables) => SomeResult::Availables(availables),
-                SearchResult::Target(target_name) => SomeResult::Target(try!(get_target_by_name(&*target_name, parser)))
-            });
+            match target_name {
+                SearchResult::Available(availables) => {
+                    return Ok(ConfigResult::AvailablePathNodes(availables)); 
+                },
+                SearchResult::Target(target_name) => {
+                    return get_target_by_name(&*target_name, parser);
+                }
+            };
         },
         Err(e) => return Err(e),
     }
@@ -202,9 +307,11 @@ mod tests {
     use std::fs::File;
 
     use super::xml::reader::{ EventReader as XmlReader };
+    use super::ConfigResult;
+    use super::TargetAction;
 
     #[test]
-    fn load_xml_file() {
+    fn get_target_availables() {
 
         let file = match File::open(".env") {
             Ok(file) => file,
@@ -213,10 +320,44 @@ mod tests {
         let mut parser = XmlReader::new(file);  
 
         match get_target(&mut parser, vec!["msvc", "19"], true) {
-            Ok(target) => {
-                perrorln!("Get target: {:?}", target);
-            },
-            Err(e) => perrorln!("Error: {}", e),
+            Ok(ConfigResult::Actions(_)) => unreachable!(),
+            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["x86", "amd64(x64)"]),
+            Err(e) => panic!("{}", e), 
+        }
+    }
+    
+    #[test]
+    fn get_target_targets() {
+
+        let file = match File::open(".env") {
+            Ok(file) => file,
+            Err(e) => panic!("Open file error: {}", e),
+        };
+        let mut parser = XmlReader::new(file);  
+
+        match get_target(&mut parser, vec!["msvc", "19", "amd64"], false) {
+            Ok(ConfigResult::Actions(actions)) => assert_eq!(actions,
+                [TargetAction::ScriptExecute("script for cl64".to_owned()), 
+                TargetAction::PathAdd("path add value for cl64".to_owned()), 
+                TargetAction::ScriptExecute("another script for cl64".to_owned())]),
+            Ok(ConfigResult::AvailablePathNodes(_)) => unreachable!(),
+            Err(e) => panic!("{}", e), 
+        }
+    }
+
+    #[test]
+    fn get_target_empty_input() {
+        
+        let file = match File::open(".env") {
+            Ok(file) => file,
+            Err(e) => panic!("Open file error: {}", e),
+        };
+        let mut parser = XmlReader::new(file);  
+
+        match get_target(&mut parser, vec![], true) {
+            Ok(ConfigResult::Actions(_)) => unreachable!(),
+            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)", ""]),
+            Err(e) => panic!("{}", e), 
         }
     }
 }

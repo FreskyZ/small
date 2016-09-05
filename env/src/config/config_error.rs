@@ -6,6 +6,7 @@ pub enum ConfigError {
     FailParse { inner_error: super::xml::reader::Error },
     UnexpectedPath,
     PathNodeNameNotSet,
+    TargetsNotExist,
     TargetNotSet,
     TargetNotExist { target_name: String },
 }
@@ -31,7 +32,7 @@ impl Display for ConfigError {
             ConfigError::TargetNotExist { ref target_name } => {
                 writeln!(f, "Target not exist: {}", target_name)
             }
-            // _ => { writeln!(f, "Wait to check other availability") }
+            _ => { writeln!(f, "Wait to check other availability") }
         }
     }
 }
