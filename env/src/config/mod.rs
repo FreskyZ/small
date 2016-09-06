@@ -14,6 +14,35 @@ pub use self::error::Error;
 pub use self::parser::{ ConfigEvent, ConfigParser };
 pub use self::result::{ TargetAction, ConfigResult };
 
+// TODO: Big change State
+// TODO: Big change Error
+// TODO: Result applier
+// TODO: Commandline Interface
+
+#[derive(Debug)]
+enum State<'a> {
+    WaitingPaths,
+    SearchingPathNode {
+        current_depth: usize,
+        expect_depth: usize,    
+        expect_value: &'a str,
+    },
+    RecordingAvailables {
+        current_depth: usize,
+        expect_depth: usize, 
+        ret_val: Vec<String>
+    },
+    WaitingTargets {
+        target_name: &'a str,
+    },
+    SearchingTarget {
+        target_name: &'a str,
+    },
+    RecordingTargetActions {
+        ret_val: Vec<TargetAction>,
+    },
+}
+
 pub fn get_target(file_name: &str, 
     path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
 
@@ -22,22 +51,6 @@ pub fn get_target(file_name: &str,
     let parser = &mut XmlReader::new(file);  
 
     let mut target_name = String::new();
-
-    {
-    #[derive(Debug)]
-    enum State<'a> {
-        WaitingPaths,
-        SearchingPathNode {
-            current_depth: usize,
-            expect_depth: usize,    
-            expect_value: &'a str,
-        },
-        RecordingAvailables {
-            current_depth: usize,
-            expect_depth: usize, 
-            ret_val: Vec<String>
-        },
-    }
 
     let mut path_iter = path.into_iter();
     let mut state = State::WaitingPaths;
@@ -168,22 +181,6 @@ pub fn get_target(file_name: &str,
         };
     }
 
-    }
-
-    {
-    #[derive(Debug)]
-    enum State<'a> {
-        WaitingTargets {
-            target_name: &'a str,
-        },
-        SearchingTarget {
-            target_name: &'a str,
-        },
-        RecordingTargetActions {
-            ret_val: Vec<TargetAction>,
-        }
-    }
-
     let mut state = State::WaitingTargets { target_name: &*target_name };
 
     loop {
@@ -250,6 +247,7 @@ pub fn get_target(file_name: &str,
                             State::RecordingTargetActions { .. } => {
                                 // an entire <targets> in <target>, ignore
                             }
+                            _ => (),
                         }
                     },
                     "target" => {
@@ -263,6 +261,7 @@ pub fn get_target(file_name: &str,
                             State::RecordingTargetActions { ret_val } => {
                                 return Ok(ConfigResult::Actions(ret_val));
                             }
+                            _ => (),
                         }
                     }
                     _ => ()
@@ -278,7 +277,6 @@ pub fn get_target(file_name: &str,
         };
     }
 
-    }
     unreachable!();
 }
 
