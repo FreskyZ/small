@@ -1,11 +1,7 @@
-extern crate xml;
-
-// https://github.com/netvl/xml-rs
 
 mod error;
 mod result;
 mod parser;
-mod parsed_element;
 
 pub use self::error::Error;
 pub use self::parser::{ ConfigEvent, ConfigParser };
@@ -151,7 +147,7 @@ pub fn get_target(file_name: &str,
             _ => (),
             }
         },
-        ConfigEvent::XMLParserError { e } => {
+        ConfigEvent::XMLParseError { e } => {
             return Err(e);
         },
          _ => ()
@@ -215,7 +211,7 @@ pub fn get_target(file_name: &str,
             _ => (),
             }
         }
-        ConfigEvent::XMLParserError { e } => {
+        ConfigEvent::XMLParseError { e } => {
             return Err(e);
         }
          _ => ()
@@ -259,7 +255,7 @@ mod tests {
         
         match get_target(".env", &vec![], true) {
             Ok(ConfigResult::Actions(_)) => unreachable!(),
-            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)", ""]),
+            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)"]),
             Err(e) => panic!("{:?}", e), 
         }
     }

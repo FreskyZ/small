@@ -3,7 +3,7 @@ use std::io;
 
 pub enum Error {
     FailOpenFile { inner_error: io::Error },
-    FailParse { inner_error: super::xml::reader::Error },
+    FailParse { inner_error: super::parser::xml::reader::Error },
     UnexpectedPath,
     PathNodeNameNotSet,
     TargetsNotExist,

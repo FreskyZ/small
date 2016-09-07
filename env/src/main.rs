@@ -17,7 +17,7 @@ use std::process::{ Command };
 mod macros;
 mod config;
 
-use config::{ get_target };
+use config::{ get_target, ConfigResult };
 
 const USAGE_STRING : &'static str = 
 "Usage: 
@@ -113,8 +113,8 @@ pub fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
     Some((configs, has_list))
 }
 
-fn apply_result(results: Vec<ConfigResult>) {
-
+fn apply_result(_results: Vec<ConfigResult>) {
+    
 }
 
 fn main() {
@@ -146,9 +146,10 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::preprocess_args;
+    // use super::process_input;
 
     #[test]
+    #[ignore]
     fn preprocess() {
 
     }
