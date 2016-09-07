@@ -19,8 +19,8 @@ impl Debug for ConfigResult {
             ConfigResult::Actions(ref actions) => {
                 for action in actions {
                     match action {
-                        &TargetAction::PathAdd(ref value) => { try!(writeln!(f, "PathAdd: {:?}", value)); },
-                        &TargetAction::ScriptExecute(ref value) => { try!(writeln!(f, "ScriptExecute: {:?}", value)); }
+                        &TargetAction::PathAdd(ref value) => { try!(write!(f, "PathAdd: {:?}", value)); },
+                        &TargetAction::ScriptExecute(ref value) => { try!(write!(f, "ScriptExecute: {:?}", value)); }
                     }
                 }
             }

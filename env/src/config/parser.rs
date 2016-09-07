@@ -121,7 +121,7 @@ pub struct ConfigParser {
 }
 
 impl ConfigParser {
-    fn from(file_name: &str) -> Result<ConfigParser, Error> {
+    pub fn from(file_name: &str) -> Result<ConfigParser, Error> {
         File::open(file_name)
             .map(|file| ConfigParser { parser: EventReader::new(file) })
             .map_err(|e| Error::FailOpenFile { inner_error: e })
