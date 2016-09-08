@@ -80,7 +80,7 @@ pub fn get_target(file_name: &str,
             _ => (),
             }
         },
-        ConfigEvent::StartP { inner } => {
+        ConfigEvent::StartP { mut inner } => {
             // perrorln!("{:?}\nstate {:?}", inner, state);
             match state {
             State::SearchingPathNode { current_depth, expect_depth, expect_value } => {
@@ -167,8 +167,15 @@ pub fn get_target(file_name: &str,
         },
         ConfigEvent::StartTarget { name } => {
             if let State::SearchingTarget { target_name } = state {
-                if name == target_name {
-                    state = State::RecordingTargetActions { ret_val: Vec::new() };
+                match name {
+                    Some(name) => {
+                        if name == target_name {
+                            state = State::RecordingTargetActions { ret_val: Vec::new() };
+                        }
+                    }
+                    None => {
+                        // Ignore temporary
+                    }
                 }
             }
         },

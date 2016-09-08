@@ -33,6 +33,7 @@ Options:
     --version, -v       Print version and quit
     --help, -h          Print this help string
     --config, -c        Open config file with default text editor
+    --print-config, -p  Print current valid configs
 
     Open new command prompt and apply the target actions include add path 
     and other environment variables and execute a certain script
