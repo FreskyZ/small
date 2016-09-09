@@ -73,6 +73,7 @@ enum ConfigEventFull {
     StartTarget { name: Option<String> },
     PathAdd { value: String },
     ScriptExecute { value: String },
+    VariableAdd { var: String, value: String },
 
     StartOther { tag_name: String },
 
@@ -85,8 +86,8 @@ enum ConfigEventFull {
 pub enum ConfigEvent {
 
     StartPaths,
-    StartP { inner: PathNode },
-    EndP,
+    StartP { depth: usize, inner: PathNode },
+    EndP { depth: usize },
     EndPaths,
 
     StartTargets,
@@ -98,13 +99,16 @@ pub enum ConfigEvent {
 
     XMLReaderError { e: Error },
 }
+
+const INDENT: [&'static str; 7] 
+    = ["", "   ", "      ", "         ", "            ", "               ", "                    "];
 impl Debug for ConfigEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use self::ConfigEvent::*;
         match *self {
             StartPaths => write!(f, "------ Paths Start ------"),
-            StartP { ref inner } => write!(f, "P: {:?}", inner),
-            EndP => write!(f, "P: end"),
+            StartP { ref depth, ref inner } => write!(f, "{}P: {:?}", INDENT[*depth], inner),
+            EndP { ref depth } => write!(f, "{}P: end", INDENT[*depth]),
             EndPaths => write!(f, "------ Paths End ------"),
 
             StartTargets => write!(f, "------ Targets Start ------"),
@@ -218,6 +222,15 @@ impl ConfigParser {
                             None => ConfigEventFull::NotCare,
                         }
                     },
+                    "varadd" => {
+                        match get_attribute(attributes, "var") {
+                            Some(var) => match get_attribute(attributes, "value") {
+                                Some(value) => ConfigEventFull::VariableAdd { var: var.to_owned(), value: value.to_owned() },
+                                None => ConfigEventFull::NotCare,
+                            },
+                            None => ConfigEventFull::NotCare,
+                        }
+                    },
                     another_name => ConfigEventFull::StartOther { tag_name: another_name.to_owned() },
                 }
             }),
@@ -298,7 +311,7 @@ impl Iterator for ConfigParser {
                         continue;
                     } 
                     // Valid path in valid path
-                    return Some(ConfigEvent::StartP { inner: ret_val });
+                    return Some(ConfigEvent::StartP { depth: self.current_depth - 1, inner: ret_val });
                 }
                 Some(ConfigEventFull::EndP) => { 
                     if !self.in_some_paths {
@@ -313,7 +326,7 @@ impl Iterator for ConfigParser {
                     }
                     
                     if should_return {
-                        return Some(ConfigEvent::EndP);
+                        return Some(ConfigEvent::EndP { depth: self.current_depth });
                     } else {
                         continue;
                     }
@@ -370,6 +383,13 @@ impl Iterator for ConfigParser {
                     if self.in_some_targets && self.in_some_target && !self.in_invalid_target {
                         if !value.is_empty() {
                             self.target_action_buffer.push(TargetAction::ScriptExecute(value));
+                        }
+                    }
+                }
+                Some(ConfigEventFull::VariableAdd { var, value }) => {
+                    if self.in_some_targets && self.in_some_target && !self.in_invalid_target {
+                        if !var.is_empty() && !value.is_empty() {
+                            self.target_action_buffer.push(TargetAction::VariableAdd(var, value));
                         }
                     }
                 }
@@ -660,7 +680,7 @@ fn parser_valid() {
     macro_rules! n_start_p {
         ($parser: ident, [$($names:tt)*]) => ({
             let next = $parser.next();
-            if let Some(StartP { inner }) = next {
+            if let Some(StartP { depth: _depth, inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
                 for name in borrowed_names {
@@ -673,7 +693,7 @@ fn parser_valid() {
         });
         ($parser: ident, [$($names:tt)*] => $target: expr) => ({
             let next = $parser.next();
-            if let Some(StartP { inner }) = next {
+            if let Some(StartP { depth: _depth, inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
                 for name in borrowed_names {
@@ -693,6 +713,16 @@ fn parser_valid() {
                 assert_eq!(vec![$($actions)+], actions);
             } else {
                 panic!("next is not start target but is {:?}", next);
+            }
+        )
+    }
+
+    macro_rules! n_end_p {
+        ($parser: ident) => (
+            let next = $parser.next();
+            match next {
+                Some(EndP { .. }) => (),
+                _ => panic!("Next is not EndP but is {:?}", next),
             }
         )
     }
@@ -718,9 +748,6 @@ fn parser_valid() {
     macro_rules! n_end_targets {
         ($parser: ident) => (n_none!($parser, EndTargets))
     }    
-    macro_rules! n_end_p {
-        ($parser: ident) => (n_none!($parser, EndP))
-    }
 
     let mut parser = match ConfigParser::from(".env_full") {
         Ok(parser) => parser,

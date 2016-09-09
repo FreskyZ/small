@@ -80,7 +80,7 @@ pub fn get_target(file_name: &str,
                     _ => (),
                 }
             },
-            Some(ConfigEvent::StartP { mut inner }) => {
+            Some(ConfigEvent::StartP { depth: _depth, mut inner }) => {
                 // perrorln!("{:?}\nstate {:?}", inner, state);
                 match state {
                     State::SearchingPathNode { current_depth, expect_depth, expect_value } => {
@@ -131,7 +131,7 @@ pub fn get_target(file_name: &str,
                     _ => (),
                 }
             },
-            Some(ConfigEvent::EndP) => {
+            Some(ConfigEvent::EndP { depth: _depth }) => {
                 // perrorln!("end p\nstate: {:?}", state);
                 match state {
                     State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
@@ -186,7 +186,7 @@ pub fn get_target(file_name: &str,
             }
             None => break,
             _ => ()
-            };
+        };
     }
     unreachable!();
 }
@@ -232,7 +232,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn get_target_f() {
         
         let mut parser = ConfigParser::from(".env").unwrap();

@@ -5,6 +5,7 @@ use std::fmt::{ self, Debug, Formatter };
 pub enum TargetAction {
     PathAdd(String),
     ScriptExecute(String),
+    VariableAdd(String, String),
 }
 
 #[derive(Eq, PartialEq)]
@@ -21,6 +22,7 @@ impl Debug for ConfigResult {
                     match action {
                         &TargetAction::PathAdd(ref value) => { try!(write!(f, "PathAdd: {:?}", value)); },
                         &TargetAction::ScriptExecute(ref value) => { try!(write!(f, "ScriptExecute: {:?}", value)); }
+                        &TargetAction::VariableAdd(ref var, ref value) => { try!(write!(f, "VarAdd: {:?}={:?}", var, value)); }
                     }
                 }
             }
