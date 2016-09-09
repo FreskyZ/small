@@ -16,7 +16,7 @@ use super::result::TargetAction;
 // #region PathNode
 #[derive(PartialEq, Eq)]
 pub struct PathNode {
-    pub names: Vec<String>,
+    names: Vec<String>,
     pub target: Option<String>
 }
 
@@ -50,7 +50,7 @@ impl PathNode {
 impl Debug for PathNode {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let not_set = "(Not set)".to_owned();
-        write!(f, "P: {:?} => {:?}", 
+        write!(f, "{:?} => {:?}", 
             self.names, {
                 match &self.target {
                     &Some(ref value) => value,
@@ -62,7 +62,8 @@ impl Debug for PathNode {
 // #endregion
 
 // #region ConfigEvent
-pub enum ConfigEventFull {
+#[derive(Debug)]
+enum ConfigEventFull {
     NotCare,
     XMLParseError { e: Error },
 
@@ -81,28 +82,6 @@ pub enum ConfigEventFull {
     EndTarget,
 }
 
-impl Debug for ConfigEventFull {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use self::ConfigEventFull::*;
-        match *self {
-            StartPaths => write!(f, "------ Paths Start ------"),
-            StartTargets => write!(f, "------ Targets Start ------"),
-            StartP { ref inner } => write!(f, "{:?}", inner),
-            StartTarget { ref name } => write!(f, "target: {:?}", name),
-            PathAdd { ref value } => write!(f, "pathadd: {}", value),
-            ScriptExecute { ref value } => write!(f, "scriptexec: {}", value),
-            StartOther { ref tag_name } => write!(f, "other: {}", tag_name),
-            EndPaths => write!(f, "------ Paths End ------"),
-            EndTargets => write!(f, "------ Targets End ------"),
-            EndP => write!(f, "p: end"),
-            EndTarget => write!(f, "target: end"),
-            XMLParseError { ref e } => write!(f, "XMLReader error: {:?}", e),
-            _ => write!(f, "(Not care)"), // Ignored
-        }
-    }
-}  
-
-#[derive(Debug)]
 pub enum ConfigEvent {
 
     StartPaths,
@@ -119,6 +98,29 @@ pub enum ConfigEvent {
 
     XMLReaderError { e: Error },
 }
+impl Debug for ConfigEvent {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        use self::ConfigEvent::*;
+        match *self {
+            StartPaths => write!(f, "------ Paths Start ------"),
+            StartP { ref inner } => write!(f, "P: {:?}", inner),
+            EndP => write!(f, "P: end"),
+            EndPaths => write!(f, "------ Paths End ------"),
+
+            StartTargets => write!(f, "------ Targets Start ------"),
+            Target { ref name, ref actions } => {
+                try!(writeln!(f, "T: {:?}", name));
+                for action in actions {
+                    try!(writeln!(f, "   {:?}", action));
+                }
+                Ok(())
+            } 
+            EndTargets => write!(f, "------ Targets End ------"),
+
+            XMLReaderError { ref e } => write!(f, "XMLReader error: {:?}", e),
+        }
+    }
+}  
 // #endregion
 
 // #region ConfigParser
@@ -160,20 +162,104 @@ impl ConfigParser {
             .map_err(|e| Error::FailOpenFile { inner_error: e })
     }
 
+    // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
+    // provide only valid StartP and StartTarget: in paths and targets, with proper attributes
+    fn next_full(&mut self) -> Option<ConfigEventFull> {
+
+        fn get_attribute<'a, 'b>(attributes: &'a Vec<OwnedAttribute>, name: &'b str) -> Option<&'a str> {
+            for attribute in attributes {
+                if attribute.name.local_name == name {
+                    return Some(&attribute.value);
+                }
+            }
+            None
+        }
+
+        match self.parser.next() {
+            Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => Some({
+                match &*name.local_name {
+                    "paths" => ConfigEventFull::StartPaths,
+                    "targets" => ConfigEventFull::StartTargets,
+                    "p" => { 
+                        let ret_val = PathNode {
+                            names: match get_attribute(attributes, "value") {
+                                Some(raw_alias) => {
+                                    let borrowed_values = raw_alias.split('|').collect::<Vec<&str>>();
+                                    let mut ret_val = Vec::new();
+                                    for value in borrowed_values {
+                                        ret_val.push(value.to_owned());
+                                    }
+                                    ret_val
+                                },
+                                None => Vec::new()
+                            },
+                            target: match get_attribute(attributes, "target") {
+                                Some(target) => Some(target.to_owned()),
+                                None => None,
+                            } 
+                        };
+                        ConfigEventFull::StartP { inner: ret_val }
+                    },
+                    "target" => {
+                        match get_attribute(attributes, "name") {
+                            Some(name) => ConfigEventFull::StartTarget { name: Some(name.to_owned()) },
+                            None => ConfigEventFull::StartTarget { name: None },
+                        }
+                    },
+                    "pathadd" => {
+                        match get_attribute(attributes, "value") {
+                            Some(value) => ConfigEventFull::PathAdd { value: value.to_owned() },
+                            None => ConfigEventFull::NotCare,
+                        }
+                    },
+                    "scriptexec" => {
+                        match get_attribute(attributes, "path") {
+                            Some(value) => ConfigEventFull::ScriptExecute { value: value.to_owned() },
+                            None => ConfigEventFull::NotCare,
+                        }
+                    },
+                    another_name => ConfigEventFull::StartOther { tag_name: another_name.to_owned() },
+                }
+            }),
+
+            Ok(XmlEvent::EndElement { name }) => Some({
+                match &*name.local_name {
+                    "paths" => ConfigEventFull::EndPaths,
+                    "p" => ConfigEventFull::EndP,
+                    "targets" => ConfigEventFull::EndTargets,
+                    "target" => ConfigEventFull::EndTarget,
+                    _ => ConfigEventFull::NotCare,
+                }
+            }),
+              
+            Ok(XmlEvent::EndDocument) => None,
+            Err(e) => Some(ConfigEventFull::XMLParseError { e: Error::FailParse { inner_error: e } }),
+            Ok(_) => Some(ConfigEventFull::NotCare),
+        }
+    }
+}
+
+// to avoid too complication, only first paths and targets are examined
+// any other things except p and target are low level error, (•̀ ω •́ )y
+// next is for valid, next_internal is full
+
+impl Iterator for ConfigParser {
+    type Item = ConfigEvent;
+
     // Remove invalid pathnode
     // Invalid p: value is not set value deduped and remove empty and then is not empty and not in paths, checked
     // Form target event with all its actions, remove invliad target
-    // Invalid target: name is empty or not set, child is empty, remove invalid child and is empty, to be checked
+    // Invalid target: name is empty or not set, child is empty, remove invalid child and is empty, checked
     // Skip not care, check
     // paths in paths and targets in targets and target in target is parse error: InvalidFormat, check
-    pub fn next_valid(&mut self) -> Option<ConfigEvent> {
+    fn next(&mut self) -> Option<ConfigEvent> {
 
         if self.next_finished {
             return None; // Should stop iteration
         }
 
         loop {
-            let raw_next = self.next();
+            let raw_next = self.next_full();
             // perrorln!("raw next is {:?}, inpaths = {}, intargets = {}", raw_next, self.in_some_paths, self.in_some_targets);
             match raw_next {
                 // All skip
@@ -319,108 +405,19 @@ impl ConfigParser {
     }
 }
 
-// to avoid too complication, only first paths and targets are examined
-// any other things except p and target are low level error, (•̀ ω •́ )y
-// next is for valid, next_internal is full
-
-impl Iterator for ConfigParser {
-    type Item = ConfigEventFull;
-
-    // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
-    // provide only valid StartP and StartTarget: in paths and targets, with proper attributes
-    fn next(&mut self) -> Option<ConfigEventFull> {
-
-        fn get_attribute<'a, 'b>(attributes: &'a Vec<OwnedAttribute>, name: &'b str) -> Option<&'a str> {
-            for attribute in attributes {
-                if attribute.name.local_name == name {
-                    return Some(&attribute.value);
-                }
-            }
-            None
-        }
-
-        match self.parser.next() {
-            Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => Some({
-                match &*name.local_name {
-                    "paths" => ConfigEventFull::StartPaths,
-                    "targets" => ConfigEventFull::StartTargets,
-                    "p" => { 
-                        let ret_val = PathNode {
-                            names: match get_attribute(attributes, "value") {
-                                Some(raw_alias) => {
-                                    let borrowed_values = raw_alias.split('|').collect::<Vec<&str>>();
-                                    let mut ret_val = Vec::new();
-                                    for value in borrowed_values {
-                                        ret_val.push(value.to_owned());
-                                    }
-                                    ret_val
-                                },
-                                None => Vec::new()
-                            },
-                            target: match get_attribute(attributes, "target") {
-                                Some(target) => Some(target.to_owned()),
-                                None => None,
-                            } 
-                        };
-                        ConfigEventFull::StartP { inner: ret_val }
-                    },
-                    "target" => {
-                        match get_attribute(attributes, "name") {
-                            Some(name) => ConfigEventFull::StartTarget { name: Some(name.to_owned()) },
-                            None => ConfigEventFull::StartTarget { name: None },
-                        }
-                    },
-                    "pathadd" => {
-                        match get_attribute(attributes, "value") {
-                            Some(value) => ConfigEventFull::PathAdd { value: value.to_owned() },
-                            None => ConfigEventFull::NotCare,
-                        }
-                    },
-                    "scriptexec" => {
-                        match get_attribute(attributes, "path") {
-                            Some(value) => ConfigEventFull::ScriptExecute { value: value.to_owned() },
-                            None => ConfigEventFull::NotCare,
-                        }
-                    },
-                    another_name => ConfigEventFull::StartOther { tag_name: another_name.to_owned() },
-                }
-            }),
-
-            Ok(XmlEvent::EndElement { name }) => Some({
-                match &*name.local_name {
-                    "paths" => ConfigEventFull::EndPaths,
-                    "p" => ConfigEventFull::EndP,
-                    "targets" => ConfigEventFull::EndTargets,
-                    "target" => ConfigEventFull::EndTarget,
-                    _ => ConfigEventFull::NotCare,
-                }
-            }),
-              
-            Ok(XmlEvent::EndDocument) => None,
-            Err(e) => Some(ConfigEventFull::XMLParseError { e: Error::FailParse { inner_error: e } }),
-            Ok(_) => Some(ConfigEventFull::NotCare),
-        }
-    }
-}
-
-
 #[cfg(test)]
-mod tests {
-    
-    use super::PathNode;
-    use super::ConfigEventFull as ConfigEvent;
-    use super::ConfigParser;
-    use super::ConfigEvent as ConfigEventValid;
-    use super::super::error::Error;
+#[test]
+// #[ignore]
+fn parser_full() {
 
     macro_rules! config_event_next_care {
         ($parser: expr) => ({
-            let ret_val: ConfigEvent;
+            let ret_val: ConfigEventFull;
             loop {
-                let next = $parser.next();
+                let next = $parser.next_full();
                 if let Some(inner) = next {
                     match inner {
-                        ConfigEvent::NotCare => {
+                        ConfigEventFull::NotCare => {
                             continue;
                         }
                         _ => {
@@ -438,7 +435,7 @@ mod tests {
     macro_rules! config_event_is_start_other {
         ($parser: expr, $tag_name: expr) => (
             let next = config_event_next_care!($parser);
-            if let ConfigEvent::StartOther { tag_name } = next {
+            if let ConfigEventFull::StartOther { tag_name } = next {
                 if $tag_name != tag_name {
                     panic!("next start other is not this tag name");
                 } 
@@ -450,7 +447,7 @@ mod tests {
     macro_rules! config_event_is_p {
         ($parser: expr, $names: expr, $target_name: expr, $dummy: expr) => (
             let next = config_event_next_care!($parser);
-            if let ConfigEvent::StartP { inner } = next {
+            if let ConfigEventFull::StartP { inner } = next {
                 assert_eq!(inner, PathNode { names: $names, target: $target_name });
             }
         );
@@ -465,7 +462,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::EndP => (),
+                ConfigEventFull::EndP => (),
                 other => panic!("next is not endp but is {:?}", other),
             }
         )
@@ -474,7 +471,7 @@ mod tests {
         ($parser: expr, $name: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::StartTarget { name } => {
+                ConfigEventFull::StartTarget { name } => {
                     if name != Some($name.to_owned()) {
                         panic!("next is start target but name is {:?}", name);
                     }
@@ -485,7 +482,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::StartTarget { name } => {
+                ConfigEventFull::StartTarget { name } => {
                     if name != None {
                         panic!("next is start target but name is not none");
                     }
@@ -498,7 +495,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::EndTarget => (),
+                ConfigEventFull::EndTarget => (),
                 other => panic!("next is not end target but is {:?}", other),
             }
         )
@@ -507,7 +504,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::StartPaths => (),
+                ConfigEventFull::StartPaths => (),
                 other => panic!("next is not end target but is {:?}", other),
             }
         )
@@ -516,7 +513,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::StartTargets => (),
+                ConfigEventFull::StartTargets => (),
                 other => panic!("next is not end target but is {:?}", other),
             }
         )
@@ -525,7 +522,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::EndPaths => (),
+                ConfigEventFull::EndPaths => (),
                 other => panic!("next is not end target but is {:?}", other),
             }
         )
@@ -534,7 +531,7 @@ mod tests {
         ($parser: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::EndTargets => (),
+                ConfigEventFull::EndTargets => (),
                 other => panic!("next is not end target but is {:?}", other),
             }
         )
@@ -543,7 +540,7 @@ mod tests {
         ($parser: expr, $value: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::PathAdd { value } => {
+                ConfigEventFull::PathAdd { value } => {
                     if value != $value.to_owned() {
                         panic!("next is path add but value is {:?}", value);
                     }
@@ -556,7 +553,7 @@ mod tests {
         ($parser: expr, $path: expr) => (
             let next = config_event_next_care!($parser);
             match next {
-                ConfigEvent::ScriptExecute { value } => {
+                ConfigEventFull::ScriptExecute { value } => {
                     if value != $path.to_owned() {
                         panic!("next is script exec but path is {:?}", value);
                     }
@@ -565,86 +562,104 @@ mod tests {
             }
         )
     }  
-    #[test]
-    // #[ignore]
-    fn parser_full() {
-        let mut parser = match ConfigParser::from(".env_full") {
-            Ok(parser) => parser,
-            Err(e) => panic!("{:?}", e),
-        };
 
-        config_event_is_start_other!(parser, "env");
-        config_event_is_start_other!(parser, "config");
-        config_event_is_start_other!(parser, "dummy");
-        config_event_is_p!(parser, vec!["123".to_owned()]);
-        config_event_is_endp!(parser);
-        config_event_is_target!(parser, "invalid target here");
-        config_event_is_endtarget!(parser);
-        config_event_is_p!(parser, vec!["another outter p".to_owned()]);
-        config_event_is_endp!(parser);
-        config_event_is_paths!(parser);
-            config_event_is_p!(parser, vec!["gcc".to_owned(), "gnuc".to_owned()], "gcc-rubenvb-463");
-                config_event_is_p!(parser, vec!["rubenvb".to_owned()]);
-                    config_event_is_p!(parser, vec!["4.6.3".to_owned(), "463".to_owned()], "gcc-rubenvb-463");
-                    config_event_is_endp!(parser);
-                config_event_is_endp!(parser);
+    let mut parser = match ConfigParser::from(".env_full") {
+        Ok(parser) => parser,
+        Err(e) => panic!("{:?}", e),
+    };
+
+    config_event_is_start_other!(parser, "env");
+    config_event_is_start_other!(parser, "config");
+    config_event_is_start_other!(parser, "dummy");
+    config_event_is_p!(parser, vec!["123".to_owned()]);
+    config_event_is_endp!(parser);
+    config_event_is_target!(parser, "invalid target here");
+    config_event_is_endtarget!(parser);
+    config_event_is_p!(parser, vec!["another outter p".to_owned()]);
+    config_event_is_endp!(parser);
+    config_event_is_paths!(parser);
+        config_event_is_p!(parser, vec!["gcc".to_owned(), "gnuc".to_owned()], "gcc-rubenvb-463");
+            config_event_is_p!(parser, vec!["rubenvb".to_owned()]);
                 config_event_is_p!(parser, vec!["4.6.3".to_owned(), "463".to_owned()], "gcc-rubenvb-463");
                 config_event_is_endp!(parser);
             config_event_is_endp!(parser);
-            config_event_is_p!(parser, vec!["vcpp".to_owned(), "msvc".to_owned()], "msvc-19-amd64");
-                config_event_is_p!(parser, vec!["19".to_owned(), "vs14".to_owned(), "vs2015".to_owned()]);
-                    config_event_is_p!(parser, vec!["x86".to_owned()], "msvc-19-x86");
-                    config_event_is_endp!(parser);
-                    config_event_is_p!(parser, vec!["amd64".to_owned(), "x64".to_owned()], "msvc-19-amd64");
-                    config_event_is_endp!(parser);
-                config_event_is_endp!(parser);
+            config_event_is_p!(parser, vec!["4.6.3".to_owned(), "463".to_owned()], "gcc-rubenvb-463");
+            config_event_is_endp!(parser);
+        config_event_is_endp!(parser);
+        config_event_is_p!(parser, vec!["".to_owned()]);
+            config_event_is_p!(parser, vec!["some value".to_owned()]);
+            config_event_is_endp!(parser);
+        config_event_is_endp!(parser);
+        config_event_is_p!(parser, vec!["vcpp".to_owned(), "msvc".to_owned()], "msvc-19-amd64");
+            config_event_is_p!(parser, vec!["19".to_owned(), "vs14".to_owned(), "vs2015".to_owned()]);
                 config_event_is_p!(parser, vec!["x86".to_owned()], "msvc-19-x86");
                 config_event_is_endp!(parser);
                 config_event_is_p!(parser, vec!["amd64".to_owned(), "x64".to_owned()], "msvc-19-amd64");
                 config_event_is_endp!(parser);
             config_event_is_endp!(parser);
-            config_event_is_p!(parser, vec!["".to_owned()]);
-                config_event_is_p!(parser, vec!["some value".to_owned()]);
-                config_event_is_endp!(parser);
-            config_event_is_endp!(parser);
-            config_event_is_p!(parser, vec!["".to_owned(), "".to_owned()]);
-                config_event_is_p!(parser, vec!["some value2".to_owned()]);
-                config_event_is_endp!(parser);
-            config_event_is_endp!(parser);
             config_event_is_p!(parser, vec![]);
-                config_event_is_p!(parser, vec!["asdasd".to_owned()]);
-                    config_event_is_p!(parser, vec!["asdasd".to_owned()]);
-                    config_event_is_endp!(parser);
-                config_event_is_endp!(parser);
-                config_event_is_p!(parser, vec!["asdasdas".to_owned()]);
+                config_event_is_p!(parser, vec!["valid in invalid in valid".to_owned()]);
                 config_event_is_endp!(parser);
             config_event_is_endp!(parser);
-        config_event_is_endpaths!(parser);
-        config_event_is_targets!(parser);
-            config_event_is_target!(parser, "gcc-rubenvb-463");
-                config_event_is_path_add!(parser, r"C:\Program Files\Haskell Platform\7.10.2-a\mingw\bin");
-            config_event_is_endtarget!(parser);
-            config_event_is_target!(parser);
-                config_event_is_path_add!(parser, "something in invalid");
-            config_event_is_endtarget!(parser);
-            config_event_is_target!(parser, "msvc-19-x86");
-                config_event_is_script_exec!(parser, "...");
-            config_event_is_endtarget!(parser);
-            config_event_is_target!(parser, "valid name with empty");
-            config_event_is_endtarget!(parser);
-            config_event_is_target!(parser, "valid name with seem not empty");
-            config_event_is_endtarget!(parser);
-            config_event_is_target!(parser, "msvc-19-amd64");
-                config_event_is_script_exec!(parser, "script for cl64");
-                config_event_is_path_add!(parser, "path add value for cl64");
-                config_event_is_script_exec!(parser, "another script for cl64");
-            config_event_is_endtarget!(parser);
-        config_event_is_endtargets!(parser);
-    }
+            config_event_is_p!(parser, vec!["x86".to_owned()], "msvc-19-x86");
+            config_event_is_endp!(parser);
+            config_event_is_p!(parser, vec!["amd64".to_owned(), "x64".to_owned()], "msvc-19-amd64");
+            config_event_is_endp!(parser);
+        config_event_is_endp!(parser);
+        config_event_is_p!(parser, vec!["".to_owned(), "".to_owned()]);
+            config_event_is_p!(parser, vec!["some value2".to_owned()]);
+            config_event_is_endp!(parser);
+        config_event_is_endp!(parser);
+        config_event_is_p!(parser, vec![]);
+            config_event_is_p!(parser, vec!["asdasd".to_owned()]);
+                config_event_is_p!(parser, vec!["asdasd".to_owned()]);
+                config_event_is_endp!(parser);
+            config_event_is_endp!(parser);
+            config_event_is_p!(parser, vec!["asdasdas".to_owned()]);
+            config_event_is_endp!(parser);
+        config_event_is_endp!(parser);
+    config_event_is_endpaths!(parser);
+    config_event_is_targets!(parser);
+        config_event_is_target!(parser, "gcc-rubenvb-463");
+            config_event_is_path_add!(parser, r"C:\Program Files\Haskell Platform\7.10.2-a\mingw\bin");
+        config_event_is_endtarget!(parser);
+        config_event_is_target!(parser);
+            config_event_is_path_add!(parser, "something in invalid");
+        config_event_is_endtarget!(parser);
+        config_event_is_target!(parser, "msvc-19-x86");
+            config_event_is_script_exec!(parser, "...");
+        config_event_is_endtarget!(parser);
+        config_event_is_path_add!(parser, "pathadd outside");
+        config_event_is_target!(parser, "valid name with empty");
+        config_event_is_endtarget!(parser);
+        config_event_is_target!(parser, "valid name with seem not empty");
+            config_event_is_script_exec!(parser, "");
+        config_event_is_endtarget!(parser);
+        config_event_is_script_exec!(parser, "scriptexec outside");
+        config_event_is_target!(parser, "msvc-19-amd64");
+            config_event_is_script_exec!(parser, "script for cl64");
+            config_event_is_path_add!(parser, "path add value for cl64");
+            config_event_is_script_exec!(parser, "another script for cl64");
+        config_event_is_endtarget!(parser);
+    config_event_is_endtargets!(parser);
+    config_event_is_p!(parser, vec!["123".to_owned()]);
+    config_event_is_endp!(parser);
+    config_event_is_target!(parser, "invalid target here");
+    config_event_is_endtarget!(parser);
+    config_event_is_p!(parser, vec!["another outter p".to_owned()]);
+    config_event_is_endp!(parser);
+}
+
+#[cfg(test)]
+#[test]
+fn parser_valid() {
+
+    use self::ConfigEvent::*;
+    use super::result::TargetAction::*;
 
     macro_rules! n_start_p {
         ($parser: ident, [$($names:tt)*]) => ({
-            let next = $parser.next_valid();
+            let next = $parser.next();
             if let Some(StartP { inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
@@ -657,7 +672,7 @@ mod tests {
             }
         });
         ($parser: ident, [$($names:tt)*] => $target: expr) => ({
-            let next = $parser.next_valid();
+            let next = $parser.next();
             if let Some(StartP { inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
@@ -670,10 +685,9 @@ mod tests {
             }
         })
     }
-
     macro_rules! n_start_target {
         ($parser: ident, $name: expr, $($actions:tt)+) => (
-            let next = $parser.next_valid();
+            let next = $parser.next();
             if let Some(Target { name, actions }) = next {
                 assert_eq!($name.to_owned(), name);
                 assert_eq!(vec![$($actions)+], actions);
@@ -685,7 +699,7 @@ mod tests {
 
     macro_rules! n_none {
         ($parser: expr, $name: path) => (
-            let next = $parser.next_valid();
+            let next = $parser.next();
             match next {
                 Some($name) => (),
                 _ => panic!("Next is not {} but is {:?}", stringify!($name), next),
@@ -697,7 +711,7 @@ mod tests {
     }    
     macro_rules! n_start_targets {
         ($parser: ident) => (n_none!($parser, StartTargets))
-    }    
+    }
     macro_rules! n_end_paths {
         ($parser: ident) => (n_none!($parser, EndPaths))
     }    
@@ -706,102 +720,93 @@ mod tests {
     }    
     macro_rules! n_end_p {
         ($parser: ident) => (n_none!($parser, EndP))
-    }    
-    macro_rules! n_end_target {
-        ($parser: ident) => (n_none!($parser, EndTarget))
-    }    
+    }
 
-    // skip invalid path, target, pathadd and scriptexec
-    #[test]
-    fn parser_valid() {
-        use super::ConfigEvent::*;
-        use super::super::result::TargetAction::*;
-
-        let mut parser = match ConfigParser::from(".env_full") {
-            Ok(parser) => parser,
-            Err(e) => panic!("{:?}", e),
-        };
-        
-        n_start_paths!(parser);
-            n_start_p!(parser, ["gcc", "gnuc"] => "gcc-rubenvb-463");
-                n_start_p!(parser, ["rubenvb"]);
-                    n_start_p!(parser, ["4.6.3", "463"] => "gcc-rubenvb-463");
-                    n_end_p!(parser);
-                n_end_p!(parser);
+    let mut parser = match ConfigParser::from(".env_full") {
+        Ok(parser) => parser,
+        Err(e) => panic!("{:?}", e),
+    };
+    
+    n_start_paths!(parser);
+        n_start_p!(parser, ["gcc", "gnuc"] => "gcc-rubenvb-463");
+            n_start_p!(parser, ["rubenvb"]);
                 n_start_p!(parser, ["4.6.3", "463"] => "gcc-rubenvb-463");
                 n_end_p!(parser);
             n_end_p!(parser);
-            n_start_p!(parser, ["vcpp", "msvc"] => "msvc-19-amd64");
-                n_start_p!(parser, ["19", "vs14", "vs2015"]);
-                    n_start_p!(parser, ["x86"] => "msvc-19-x86");
-                    n_end_p!(parser);
-                    n_start_p!(parser, ["amd64", "x64"] => "msvc-19-amd64");
-                    n_end_p!(parser);
-                n_end_p!(parser);
+            n_start_p!(parser, ["4.6.3", "463"] => "gcc-rubenvb-463");
+            n_end_p!(parser);
+        n_end_p!(parser);
+        n_start_p!(parser, ["vcpp", "msvc"] => "msvc-19-amd64");
+            n_start_p!(parser, ["19", "vs14", "vs2015"]);
                 n_start_p!(parser, ["x86"] => "msvc-19-x86");
                 n_end_p!(parser);
                 n_start_p!(parser, ["amd64", "x64"] => "msvc-19-amd64");
                 n_end_p!(parser);
             n_end_p!(parser);
-        n_end_paths!(parser);
-        n_start_targets!(parser);
-            n_start_target!(parser, "gcc-rubenvb-463", 
-                PathAdd(r"C:\Program Files\Haskell Platform\7.10.2-a\mingw\bin".to_owned()));
-            n_start_target!(parser, "msvc-19-x86", 
-                ScriptExecute("...".to_owned()));
-            n_start_target!(parser, "msvc-19-amd64",
-                ScriptExecute("script for cl64".to_owned()),
-                PathAdd("path add value for cl64".to_owned()),
-                ScriptExecute("another script for cl64".to_owned()));
-        n_end_targets!(parser);
-            
-        loop {
-            match parser.next_valid() {
-                Some(e) => perrorln!("{:?}", e),
-                None => break,
-            }
+            n_start_p!(parser, ["x86"] => "msvc-19-x86");
+            n_end_p!(parser);
+            n_start_p!(parser, ["amd64", "x64"] => "msvc-19-amd64");
+            n_end_p!(parser);
+        n_end_p!(parser);
+    n_end_paths!(parser);
+    n_start_targets!(parser);
+        n_start_target!(parser, "gcc-rubenvb-463", 
+            PathAdd(r"C:\Program Files\Haskell Platform\7.10.2-a\mingw\bin".to_owned()));
+        n_start_target!(parser, "msvc-19-x86", 
+            ScriptExecute("...".to_owned()));
+        n_start_target!(parser, "msvc-19-amd64",
+            ScriptExecute("script for cl64".to_owned()),
+            PathAdd("path add value for cl64".to_owned()),
+            ScriptExecute("another script for cl64".to_owned()));
+    n_end_targets!(parser);
+        
+    loop {
+        match parser.next() {
+            Some(e) => perrorln!("{:?}", e),
+            None => break,
         }
     }
-    
-    // semantic error on other things in paths and targets and target
-    #[test]
-    fn parser_semantic() {
-        // Should meet invalid format error in these 2 parses
+}
 
-        fn test_case(file: &str) {
-            let mut parser = match ConfigParser::from(file) {
-                Ok(parser) => parser,
-                Err(e) => panic!("{:?}", e),
-            };
+// semantic error on other things in paths and targets and target
+#[cfg(test)]
+#[test]
+fn parser_semantic() {
+    // Should meet invalid format error in these 3 parses
 
-            let mut had_expected_fail = false;
-            loop {
-                match parser.next_valid() {
-                    Some(some_event) => {
-                        match some_event {
-                            ConfigEventValid::XMLReaderError { e } => {
-                                match e {
-                                    Error::InvalidFormat => {
-                                        had_expected_fail = true;
-                                        break;
-                                    }
-                                    other => { perrorln!("other error: {:?}", other) },
+    fn test_case(file: &str) {
+        let mut parser = match ConfigParser::from(file) {
+            Ok(parser) => parser,
+            Err(e) => panic!("{:?}", e),
+        };
+
+        let mut had_expected_fail = false;
+        loop {
+            match parser.next() {
+                Some(some_event) => {
+                    match some_event {
+                        ConfigEvent::XMLReaderError { e } => {
+                            match e {
+                                Error::InvalidFormat => {
+                                    had_expected_fail = true;
+                                    break;
                                 }
+                                _ => () // other => { perrorln!("other error: {:?}", other) },
                             }
-                            other => { perrorln!("other event: {:?}", other); }
                         }
+                        _ => () // other => { perrorln!("other event: {:?}", other); }
                     }
-                    None => { perrorln!("none here"); break; },
                 }
-            }
-            
-            if !had_expected_fail {
-                panic!("did not had expected fail of {}", file);
+                _ => { break; } // None => { perrorln!("none here"); break; },
             }
         }
         
-        test_case(".env_to_invalid_in_paths");
-        test_case(".env_to_invalid_in_targets");
-        test_case(".env_to_invalid_in_target");
+        if !had_expected_fail {
+            panic!("did not had expected fail of {}", file);
+        }
     }
+    
+    test_case(".env_to_invalid_in_paths");
+    test_case(".env_to_invalid_in_targets");
+    test_case(".env_to_invalid_in_target");
 }
