@@ -54,6 +54,10 @@ impl<'a> State<'a> {
 // always return next availables when require list
 // return target actions if have
 // return next availables if not have target
+// Errors
+// Error::FailOpenFile on fail open file
+// Error::FailParse on XMLReader error
+// Error::InvalidFormat 
 pub fn get_target(file_name: &str, 
     path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
 
@@ -195,39 +199,102 @@ pub fn get_target(file_name: &str,
 mod tests {
     use super::get_target;
     use super::ConfigResult;
-    use super::TargetAction;
-    use super::parser::ConfigParser;
+    use super::TargetAction::*;
+    use super::parser::{ ConfigEvent, ConfigParser };
+    use super::error::Error;
 
-    #[test]
-    fn get_target_availables() {
-
-        match get_target(".env", &vec!["msvc", "19"], true) {
-            Ok(ConfigResult::Actions(_)) => unreachable!(),
-            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["x86", "amd64(x64)"]),
-            Err(e) => panic!("{:?}", e), 
-        }
+    macro_rules! test_case { // =? or =>
+        ([$($paths:tt)*], $req: expr, actions: [$($actions:tt)*]) => (
+            match get_target(".env", &vec![$($paths)*], $req) {
+                Ok(ConfigResult::Actions(actions)) => {
+                    assert_eq!(actions, vec![$($actions)*]);
+                }
+                Ok(_) => unreachable!(),
+                Err(e) => panic!("{:?}", e),
+            }
+        );
+        ([$($paths:tt)*], $req: expr, nexts: [$($nexts:tt)*]) => (
+            match get_target(".env", &vec![$($paths)*], $req) {
+                Ok(ConfigResult::AvailablePathNodes(nexts)) => {
+                    assert_eq!(nexts, vec![$($nexts)*]);
+                }
+                Ok(_) => unreachable!(),
+                Err(e) => panic!("{:?}", e),
+            }
+        )
     }
-    
-    #[test]
-    fn get_target_targets() {
-
-        match get_target(".env", &vec!["msvc", "19", "amd64"], false) {
-            Ok(ConfigResult::Actions(actions)) => assert_eq!(actions,
-                [TargetAction::ScriptExecute("script for cl64".to_owned()), 
-                TargetAction::PathAdd("path add value for cl64".to_owned()), 
-                TargetAction::ScriptExecute("another script for cl64".to_owned())]),
-            Ok(ConfigResult::AvailablePathNodes(_)) => unreachable!(),
-            Err(e) => panic!("{:?}", e), 
-        }
-    }
 
     #[test]
-    fn get_target_empty_input() {
+    fn get_targets() {
         
-        match get_target(".env", &vec![], true) {
-            Ok(ConfigResult::Actions(_)) => unreachable!(),
-            Ok(ConfigResult::AvailablePathNodes(nexts)) => assert_eq!(nexts, ["gcc(gnuc)", "vcpp(msvc)", "git", "python(py)"]),
-            Err(e) => panic!("{:?}", e), 
+        test_case!(["msvc", "19"], true, 
+            nexts: ["m32(x86)", "m64(amd64, x64)"]);
+        test_case!([], true,  
+            nexts: ["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
+                ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
+        test_case!(["msvc", "19", "amd64"], false, 
+            actions: [PathAdd(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\ClangC2\bin\amd64".to_owned()),
+                ScriptExecute(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat".to_owned())]);
+    }
+
+    #[test]
+    fn get_target_error() {
+
+        { // File IO error
+            let _ = match ConfigParser::from(".env_some_other") {
+                Ok(_) => panic!("File open error not triggered"),
+                Err(e @ Error::FailOpenFile { .. }) => perrorln!("Meet expected error: {:?}", e),
+                Err(e) => panic!("Unexpected error throwed: {:?}", e),
+            };
+        }
+
+        { // XML Reader Error
+            let parser = ConfigParser::from(".env_xml_error").unwrap();
+
+            let mut meet_expected_error = false;
+            for event in parser {
+                match event {
+                    ConfigEvent::XMLReaderError { e: e @ Error::FailParse { .. } } => { 
+                        meet_expected_error = true;
+                        perrorln!("Meet expected error: {:?}", e); 
+                        break; 
+                    }
+                    _ => (), 
+                }
+            }
+            if !meet_expected_error {
+                panic!("Didn't meet expected error");
+            }
+        } 
+
+        { // Config parser errors
+
+            fn test_case(file_name: &str) {
+                let parser = ConfigParser::from(file_name).unwrap();
+
+                let mut meet_expected_error = false;
+                for event in parser {
+                    match event {
+                        ConfigEvent::XMLReaderError { e: e @ Error::InvalidFormat { .. } } => { 
+                            meet_expected_error = true;
+                            perrorln!("Meet expected error: {:?}", e); 
+                            break; 
+                        }
+                        _ => (), 
+                    }
+                }
+                if !meet_expected_error {
+                    panic!("Didn't meet expected error");
+                }
+            }
+
+            test_case(".env_to_invalid_in_paths");
+            test_case(".env_to_invalid_in_targets");
+            test_case(".env_to_invalid_in_target");
+        }
+
+        { // Path to target errors 
+
         }
     }
 

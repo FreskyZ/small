@@ -8,6 +8,7 @@ pub extern crate xml;
 use std::fs::File;
 use std::fmt::{ Debug, Formatter, self };
 
+use self::xml::common::{ Position };
 use self::xml::reader::{ EventReader, XmlEvent };
 use self::xml::attribute::OwnedAttribute;
 use super::error::Error;
@@ -284,7 +285,12 @@ impl Iterator for ConfigParser {
                     if self.in_some_paths {
                         // Have in some paths, format error and return
                         self.next_finished = true; // Will be finished, other things are not important
-                        return Some(ConfigEvent::XMLReaderError { e: Error::InvalidFormat });
+                        return Some(ConfigEvent::XMLReaderError { 
+                            e: Error::InvalidFormat { 
+                                position: self.parser.position(),
+                                element: "paths".to_owned(),
+                            } 
+                        });
                     }
                     self.in_some_paths = true; 
                     self.current_depth = 0_usize;
@@ -340,7 +346,12 @@ impl Iterator for ConfigParser {
                 Some(ConfigEventFull::StartTargets) => {
                     if self.in_some_targets {
                         self.next_finished = true;
-                        return Some(ConfigEvent::XMLReaderError { e: Error::InvalidFormat });
+                        return Some(ConfigEvent::XMLReaderError {
+                            e: Error::InvalidFormat {
+                                position: self.parser.position(),
+                                element: "targets".to_owned(),
+                            }
+                        });
                     }
                     self.in_some_targets = true;
                     return Some(ConfigEvent::StartTargets); 
@@ -350,7 +361,12 @@ impl Iterator for ConfigParser {
                         // In some target control
                         if self.in_some_target {
                             self.next_finished = true;
-                            return Some(ConfigEvent::XMLReaderError { e: Error::InvalidFormat });
+                            return Some(ConfigEvent::XMLReaderError { 
+                                e: Error::InvalidFormat{
+                                    position: self.parser.position(),
+                                    element: "target".to_owned(),
+                                }
+                            });
                         } 
                         self.in_some_target = true; // Always in some target, even if in invalid target
 
@@ -814,7 +830,7 @@ fn parser_semantic() {
                     match some_event {
                         ConfigEvent::XMLReaderError { e } => {
                             match e {
-                                Error::InvalidFormat => {
+                                Error::InvalidFormat { .. } => {
                                     had_expected_fail = true;
                                     break;
                                 }

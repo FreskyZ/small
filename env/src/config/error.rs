@@ -1,10 +1,16 @@
+
 use std::fmt::{ Debug, Formatter, Result as FormatResult };
 use std::io;
 
+use super::parser::xml::common::{ TextPosition };
+
 pub enum Error {
+    // File IO
     FailOpenFile { inner_error: io::Error },
+
+    // XML Parse
     FailParse { inner_error: super::parser::xml::reader::Error },
-    InvalidFormat,
+    InvalidFormat { position: TextPosition, element: String },
 
     UnexpectedPath,
     PathNodeNameNotSet,
@@ -17,24 +23,28 @@ impl Debug for Error {
     fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
             Error::FailOpenFile{ ref inner_error } => {
-                writeln!(f, "Failed to open config file: {}", inner_error)
+                write!(f, "Failed to open config file: {}", inner_error)
             }
             Error::FailParse { ref inner_error } => {
-                writeln!(f, "Failed to parse config file: {}", inner_error)
+                write!(f, "Failed to parse config file: {}", inner_error)
+            }
+            Error::InvalidFormat { ref position, ref element } => {
+                write!(f, 
+                    "Failed to parse config file: {} unexpected element `{}`", position, element)
             }
             Error::UnexpectedPath => {
-                writeln!(f, "Unexpected path")
+                write!(f, "Unexpected path")
             }
             Error::PathNodeNameNotSet => {
-                writeln!(f, "Path node name not set")
+                write!(f, "Path node name not set")
             }
             Error::TargetNotSet => {
-                writeln!(f, "Target not set")
+                write!(f, "Target not set")
             }
             Error::TargetNotExist { ref target_name } => {
-                writeln!(f, "Target not exist: {}", target_name)
+                write!(f, "Target not exist: {}", target_name)
             }
-            _ => { writeln!(f, "Wait to check other availability") }
+            _ => { write!(f, "Wait to check other availability") }
         }
     }
 }
