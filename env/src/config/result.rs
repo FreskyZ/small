@@ -1,7 +1,7 @@
 
 use std::fmt::{ self, Debug, Formatter };
 
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq, Clone)]
 pub enum TargetAction {
     PathAdd(String),
     ScriptExecute(String),
