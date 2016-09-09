@@ -54,177 +54,177 @@ impl<'a> State<'a> {
     }
 }
 
-pub fn get_target(file_name: &str, 
-    path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
+pub fn get_target(_file_name: &str, 
+    _path: &Vec<&str>, _require_list: bool) -> Result<ConfigResult, Error> {
 
-    let target_name : String;
-    let mut state = State::WaitingPaths;
-    {
-    let parser = try!(ConfigParser::from(file_name));
+    // let target_name : String;
+    // let mut state = State::WaitingPaths;
+    // {
+    // let parser = try!(ConfigParser::from(file_name));
 
-    let mut path_iter = path.into_iter();
-    for event in parser {
-        match event {
-        ConfigEvent::StartPaths => {
-            match state {
-            State::WaitingPaths => {
-                match path_iter.next().map(|p| *p) {
-                Some(next) => {
-                    state = State::new_search_p(0, 0, next);
-                }
-                None => {
-                    state = State::new_record_p(0, 0);
-                }
-                }
-            }
-            _ => (),
-            }
-        },
-        ConfigEvent::StartP { mut inner } => {
-            // perrorln!("{:?}\nstate {:?}", inner, state);
-            match state {
-            State::SearchingPathNode { current_depth, expect_depth, expect_value } => {
-                if current_depth == expect_depth && inner.has(expect_value) {
-                    match path_iter.next().map(|p| *p) {
-                    Some(next) => {
-                        state = State::new_search_p(current_depth + 1, expect_depth + 1, next);
-                    },
-                    None => {
-                        if require_list {
-                            state = State::new_record_p(current_depth + 1, expect_depth + 1);
-                        } else {
-                            match inner.target {
-                            Some(target) => {
-                                target_name = target.to_owned();
-                                state = State::WaitingTargets { target_name: &*target_name };
-                                break;
-                            }
-                            None => {
-                                state = State::new_record_p(current_depth + 1, expect_depth + 1)
-                            }
-                            }
-                        }
-                    }
-                    }
-                }
-                else {
-                    state = State::new_search_p(current_depth + 1, expect_depth, expect_value);
-                }
-            }
-            State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
-                if *current_depth == *expect_depth { 
-                    ret_val.push(inner.to_string());
-                } // else ignore
-                *current_depth += 1;
-            }
-            _ => () // WaitingPaths => <p> not in <paths>, ignore
-            }
-        },
-        ConfigEvent::EndPaths => {
-            match state {
-            State::RecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
-                return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));                                
-            },
-            State::SearchingPathNode { .. } => {
-                return Err(Error::UnexpectedPath);
-            }
-            _ => (),
-            }
-        },
-        ConfigEvent::EndP => {
-            // perrorln!("end p\nstate: {:?}", state);
-            match state {
-            State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
-                if *expect_depth == *current_depth {
-                    // Out of recording area, return
-                    return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));
-                } 
-                *current_depth -= 1;
-            }
-            State::SearchingPathNode { ref mut current_depth, .. } => {
-                *current_depth -= 1;
-            }
-            _ => (),
-            }
-        },
-        ConfigEvent::XMLParseError { e } => {
-            return Err(e);
-        },
-         _ => ()
-        }
-    }
-    }
+    // let mut path_iter = path.into_iter();
+    // for event in parser {
+    //     match event {
+    //     ConfigEvent::StartPaths => {
+    //         match state {
+    //         State::WaitingPaths => {
+    //             match path_iter.next().map(|p| *p) {
+    //             Some(next) => {
+    //                 state = State::new_search_p(0, 0, next);
+    //             }
+    //             None => {
+    //                 state = State::new_record_p(0, 0);
+    //             }
+    //             }
+    //         }
+    //         _ => (),
+    //         }
+    //     },
+    //     ConfigEvent::StartP { mut inner } => {
+    //         // perrorln!("{:?}\nstate {:?}", inner, state);
+    //         match state {
+    //         State::SearchingPathNode { current_depth, expect_depth, expect_value } => {
+    //             if current_depth == expect_depth && inner.has(expect_value) {
+    //                 match path_iter.next().map(|p| *p) {
+    //                 Some(next) => {
+    //                     state = State::new_search_p(current_depth + 1, expect_depth + 1, next);
+    //                 },
+    //                 None => {
+    //                     if require_list {
+    //                         state = State::new_record_p(current_depth + 1, expect_depth + 1);
+    //                     } else {
+    //                         match inner.target {
+    //                         Some(target) => {
+    //                             target_name = target.to_owned();
+    //                             state = State::WaitingTargets { target_name: &*target_name };
+    //                             break;
+    //                         }
+    //                         None => {
+    //                             state = State::new_record_p(current_depth + 1, expect_depth + 1)
+    //                         }
+    //                         }
+    //                     }
+    //                 }
+    //                 }
+    //             }
+    //             else {
+    //                 state = State::new_search_p(current_depth + 1, expect_depth, expect_value);
+    //             }
+    //         }
+    //         State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+    //             if *current_depth == *expect_depth { 
+    //                 ret_val.push(inner.to_string());
+    //             } // else ignore
+    //             *current_depth += 1;
+    //         }
+    //         _ => () // WaitingPaths => <p> not in <paths>, ignore
+    //         }
+    //     },
+    //     ConfigEvent::EndPaths => {
+    //         match state {
+    //         State::RecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
+    //             return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));                                
+    //         },
+    //         State::SearchingPathNode { .. } => {
+    //             return Err(Error::UnexpectedPath);
+    //         }
+    //         _ => (),
+    //         }
+    //     },
+    //     ConfigEvent::EndP => {
+    //         // perrorln!("end p\nstate: {:?}", state);
+    //         match state {
+    //         State::RecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+    //             if *expect_depth == *current_depth {
+    //                 // Out of recording area, return
+    //                 return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));
+    //             } 
+    //             *current_depth -= 1;
+    //         }
+    //         State::SearchingPathNode { ref mut current_depth, .. } => {
+    //             *current_depth -= 1;
+    //         }
+    //         _ => (),
+    //         }
+    //     },
+    //     ConfigEvent::XMLParseError { e } => {
+    //         return Err(e);
+    //     },
+    //      _ => ()
+    //     }
+    // }
+    // }
 
-    {
-    let parser = try!(ConfigParser::from(file_name));
+    // {
+    // let parser = try!(ConfigParser::from(file_name));
 
-    for event in parser {
-        match event {
-        ConfigEvent::StartTargets => {
-            if let State::WaitingTargets { target_name } = state {
-                state = State::SearchingTarget { target_name: target_name };
-            }
-        },
-        ConfigEvent::StartTarget { name } => {
-            if let State::SearchingTarget { target_name } = state {
-                match name {
-                    Some(name) => {
-                        if name == target_name {
-                            state = State::RecordingTargetActions { ret_val: Vec::new() };
-                        }
-                    }
-                    None => {
-                        // Ignore temporary
-                    }
-                }
-            }
-        },
-        ConfigEvent::PathAdd { value } => {
-            if let State::RecordingTargetActions { ref mut ret_val } = state {
-                    ret_val.push(TargetAction::PathAdd(value.to_owned()));
-            }
-        },
-        ConfigEvent::ScriptExecute { value } => {
-            if let State::RecordingTargetActions { ref mut ret_val } = state {
-                ret_val.push(TargetAction::ScriptExecute(value.to_owned()));
-            }
-        },
-        ConfigEvent::EndTargets => {
-            match state {
-            State::WaitingTargets { .. } => {
-                // Err::TargetsNotExist
-                return Err(Error::TargetsNotExist);
-            }
-            State::SearchingTarget { target_name } => {
-                return Err(Error::TargetNotExist { target_name: target_name.to_owned() } );
-            }
-            State::RecordingTargetActions { .. } => {
-                // an entire <targets> in <target>, ignore
-            }
-            _ => (),
-            }
-        },
-        ConfigEvent::EndTarget => {
-            match state {
-            State::WaitingTargets { .. } => {
-                // <target> outside of <targets>, ignore
-            }
-            State::SearchingTarget { .. } => {
-                // normal search match fail, ignore
-            }
-            State::RecordingTargetActions { ret_val } => {
-                return Ok(ConfigResult::Actions(ret_val));
-            }
-            _ => (),
-            }
-        }
-        ConfigEvent::XMLParseError { e } => {
-            return Err(e);
-        }
-         _ => ()
-        };
-    }
-    }
+    // for event in parser {
+    //     match event {
+    //     ConfigEvent::StartTargets => {
+    //         if let State::WaitingTargets { target_name } = state {
+    //             state = State::SearchingTarget { target_name: target_name };
+    //         }
+    //     },
+    //     ConfigEvent::StartTarget { name } => {
+    //         if let State::SearchingTarget { target_name } = state {
+    //             match name {
+    //                 Some(name) => {
+    //                     if name == target_name {
+    //                         state = State::RecordingTargetActions { ret_val: Vec::new() };
+    //                     }
+    //                 }
+    //                 None => {
+    //                     // Ignore temporary
+    //                 }
+    //             }
+    //         }
+    //     },
+    //     ConfigEvent::PathAdd { value } => {
+    //         if let State::RecordingTargetActions { ref mut ret_val } = state {
+    //                 ret_val.push(TargetAction::PathAdd(value.to_owned()));
+    //         }
+    //     },
+    //     ConfigEvent::ScriptExecute { value } => {
+    //         if let State::RecordingTargetActions { ref mut ret_val } = state {
+    //             ret_val.push(TargetAction::ScriptExecute(value.to_owned()));
+    //         }
+    //     },
+    //     ConfigEvent::EndTargets => {
+    //         match state {
+    //         State::WaitingTargets { .. } => {
+    //             // Err::TargetsNotExist
+    //             return Err(Error::TargetsNotExist);
+    //         }
+    //         State::SearchingTarget { target_name } => {
+    //             return Err(Error::TargetNotExist { target_name: target_name.to_owned() } );
+    //         }
+    //         State::RecordingTargetActions { .. } => {
+    //             // an entire <targets> in <target>, ignore
+    //         }
+    //         _ => (),
+    //         }
+    //     },
+    //     ConfigEvent::EndTarget => {
+    //         match state {
+    //         State::WaitingTargets { .. } => {
+    //             // <target> outside of <targets>, ignore
+    //         }
+    //         State::SearchingTarget { .. } => {
+    //             // normal search match fail, ignore
+    //         }
+    //         State::RecordingTargetActions { ret_val } => {
+    //             return Ok(ConfigResult::Actions(ret_val));
+    //         }
+    //         _ => (),
+    //         }
+    //     }
+    //     ConfigEvent::XMLParseError { e } => {
+    //         return Err(e);
+    //     }
+    //      _ => ()
+    //     };
+    // }
+    // }
     unreachable!();
 }
 

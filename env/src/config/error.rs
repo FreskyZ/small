@@ -4,6 +4,8 @@ use std::io;
 pub enum Error {
     FailOpenFile { inner_error: io::Error },
     FailParse { inner_error: super::parser::xml::reader::Error },
+    InvalidFormat,
+
     UnexpectedPath,
     PathNodeNameNotSet,
     TargetsNotExist,

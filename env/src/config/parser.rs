@@ -61,7 +61,7 @@ impl Debug for PathNode {
 // #endregion
 
 // #region ConfigEvent
-pub enum ConfigEvent {
+pub enum ConfigEventFull {
     NotCare,
     XMLParseError { e: Error },
 
@@ -80,9 +80,9 @@ pub enum ConfigEvent {
     EndTarget,
 }
 
-impl Debug for ConfigEvent {
+impl Debug for ConfigEventFull {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        use self::ConfigEvent::*;
+        use self::ConfigEventFull::*;
         match *self {
             StartPaths => write!(f, "------ Paths Start ------"),
             StartTargets => write!(f, "------ Targets Start ------"),
@@ -102,39 +102,148 @@ impl Debug for ConfigEvent {
 }  
 
 #[derive(Debug)]
-pub enum ConfigEventValid {
+pub enum ConfigEvent {
 
     StartPaths,
     StartP { inner: PathNode },
+    EndP,
     EndPaths,
 
     StartTargets,
     StartTarget { name: String },
     PathAdd { value: String },
     ScriptExecute { path: String },
+    EndTarget,
+    EndTargets,
+
+    XMLReaderError { e: Error },
 }
 // #endregion
 
 // #region ConfigParser
 pub struct ConfigParser {
-    parser: EventReader<File>
+    parser: EventReader<File>,
+
+    next_finished: bool,
+    in_some_paths: bool,
+    in_some_targets: bool,
 }
 
 impl ConfigParser {
     pub fn from(file_name: &str) -> Result<ConfigParser, Error> {
         File::open(file_name)
-            .map(|file| ConfigParser { parser: EventReader::new(file) })
+            .map(|file| ConfigParser { 
+                parser: EventReader::new(file), 
+                next_finished: false,
+                in_some_paths: false,
+                in_some_targets: false,
+            })
             .map_err(|e| Error::FailOpenFile { inner_error: e })
     }
 
-    pub fn next_valid(&mut self) -> Option<ConfigEventValid> {
-        None
+    // Remove invalid p and its children
+    // Remove invliad target and its children
+    // Invalid p: value is not set value deduped and remove empty and then is not empty and not in paths, to be checked
+    // Invalid target: name is empty or not set, child is empty, remove invalid child and is empty, to be checked
+    // Skip not care, check
+    // paths in p and targets in target is parse error: InvalidFormat, check
+    pub fn next_valid(&mut self) -> Option<ConfigEvent> {
+
+        if self.next_finished {
+            return None; // Should stop iteration
+        }
+
         // let mut depth = 0;
-        // let mut in_some_paths = false;
-        // let mut in_some_targets = false;
         // let mut in_invalid_path = false;
         // let mut path_become_valid_after_endp_at_depth = 0;
         // let mut in_invalid_target = false;
+
+        loop {
+            let raw_next = self.next();
+            // perrorln!("raw next is {:?}, inpaths = {}, intargets = {}", raw_next, self.in_some_paths, self.in_some_targets);
+            match raw_next {
+                // All skip
+                Some(ConfigEventFull::NotCare) | Some(ConfigEventFull::StartOther { .. }) => { continue; }
+                None => { return None; }
+
+                // paths
+                Some(ConfigEventFull::StartPaths) => { 
+                    if self.in_some_paths {
+                        // Have in some paths, format error and return
+                        self.next_finished = true; // Will be finished, other things are not important
+                        return Some(ConfigEvent::XMLReaderError { e: Error::InvalidFormat });
+                    }
+                    self.in_some_paths = true; 
+                    return Some(ConfigEvent::StartPaths); 
+                }
+                Some(ConfigEventFull::StartP { inner }) => { 
+                    if self.in_some_paths { 
+                        return Some(ConfigEvent::StartP { inner: inner }); 
+                    } else {
+                        continue;
+                    }
+                }
+                Some(ConfigEventFull::EndP) => { 
+                    if self.in_some_paths { 
+                        return Some(ConfigEvent::EndP); 
+                    } else {
+                        continue;
+                    }
+                }
+                Some(ConfigEventFull::EndPaths) => { 
+                    self.in_some_paths = false;
+                    return Some(ConfigEvent::EndPaths); 
+                }
+
+                // targets
+                Some(ConfigEventFull::StartTargets) => {
+                    if self.in_some_targets {
+                        self.next_finished = true;
+                        return Some(ConfigEvent::XMLReaderError { e: Error::InvalidFormat });
+                    }
+                    self.in_some_targets = true;
+                    return Some(ConfigEvent::StartTargets); 
+                }
+                Some(ConfigEventFull::StartTarget { name }) => {
+                    if self.in_some_targets {
+                        match name {
+                            Some(name) => { return Some(ConfigEvent::StartTarget { name: name }); }
+                            None => { return Some(ConfigEvent::StartTarget { name: "(Empty)".to_owned() }); }
+                        }
+                    } else {
+                        continue;
+                    }
+                }
+                Some(ConfigEventFull::PathAdd { value }) => { 
+                    if self.in_some_targets {
+                        return Some(ConfigEvent::PathAdd { value: value }); 
+                    } else {
+                        continue;
+                    }
+                }
+                Some(ConfigEventFull::ScriptExecute { value }) => {
+                    if self.in_some_targets { 
+                        return Some(ConfigEvent::ScriptExecute { path: value });
+                    } else {
+                        continue;
+                    } 
+                }
+                Some(ConfigEventFull::EndTarget) => { 
+                    if self.in_some_targets {
+                        return Some(ConfigEvent::EndTarget); 
+                    } else {
+                        continue;
+                    }
+                }
+                Some(ConfigEventFull::EndTargets) => {
+                    self.in_some_targets = false; 
+                    return Some(ConfigEvent::EndTargets); 
+                }
+
+                // xml error
+                Some(ConfigEventFull::XMLParseError { e }) => { return Some(ConfigEvent::XMLReaderError { e: e }); }
+            }
+        }
     }
 }
 
@@ -143,11 +252,11 @@ impl ConfigParser {
 // next is for valid, next_internal is full
 
 impl Iterator for ConfigParser {
-    type Item = ConfigEvent;
+    type Item = ConfigEventFull;
 
     // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
     // provide only valid StartP and StartTarget: in paths and targets, with proper attributes
-    fn next(&mut self) -> Option<ConfigEvent> {
+    fn next(&mut self) -> Option<ConfigEventFull> {
 
         fn get_attribute<'a, 'b>(attributes: &'a Vec<OwnedAttribute>, name: &'b str) -> Option<&'a str> {
             for attribute in attributes {
@@ -161,8 +270,8 @@ impl Iterator for ConfigParser {
         match self.parser.next() {
             Ok(XmlEvent::StartElement { ref name, ref attributes, .. }) => Some({
                 match &*name.local_name {
-                    "paths" => ConfigEvent::StartPaths,
-                    "targets" => ConfigEvent::StartTargets,
+                    "paths" => ConfigEventFull::StartPaths,
+                    "targets" => ConfigEventFull::StartTargets,
                     "p" => { 
                         let ret_val = PathNode {
                             names: match get_attribute(attributes, "value") {
@@ -184,44 +293,44 @@ impl Iterator for ConfigParser {
                         // if ret_val.is_empty() {
                         //     ConfigEvent::NotCare
                         // } else {
-                            ConfigEvent::StartP { inner: ret_val }
+                            ConfigEventFull::StartP { inner: ret_val }
                         // }
                     },
                     "target" => {
                         match get_attribute(attributes, "name") {
-                            Some(name) => ConfigEvent::StartTarget { name: Some(name.to_owned()) },
-                            None => ConfigEvent::StartTarget { name: None },
+                            Some(name) => ConfigEventFull::StartTarget { name: Some(name.to_owned()) },
+                            None => ConfigEventFull::StartTarget { name: None },
                         }
                     },
                     "pathadd" => {
                         match get_attribute(attributes, "value") {
-                            Some(value) => ConfigEvent::PathAdd { value: value.to_owned() },
-                            None => ConfigEvent::NotCare,
+                            Some(value) => ConfigEventFull::PathAdd { value: value.to_owned() },
+                            None => ConfigEventFull::NotCare,
                         }
                     },
                     "scriptexec" => {
                         match get_attribute(attributes, "path") {
-                            Some(value) => ConfigEvent::ScriptExecute { value: value.to_owned() },
-                            None => ConfigEvent::NotCare,
+                            Some(value) => ConfigEventFull::ScriptExecute { value: value.to_owned() },
+                            None => ConfigEventFull::NotCare,
                         }
                     },
-                    another_name => ConfigEvent::StartOther { tag_name: another_name.to_owned() },
+                    another_name => ConfigEventFull::StartOther { tag_name: another_name.to_owned() },
                 }
             }),
 
             Ok(XmlEvent::EndElement { name }) => Some({
                 match &*name.local_name {
-                    "paths" => ConfigEvent::EndPaths,
-                    "p" => ConfigEvent::EndP,
-                    "targets" => ConfigEvent::EndTargets,
-                    "target" => ConfigEvent::EndTarget,
-                    _ => ConfigEvent::NotCare,
+                    "paths" => ConfigEventFull::EndPaths,
+                    "p" => ConfigEventFull::EndP,
+                    "targets" => ConfigEventFull::EndTargets,
+                    "target" => ConfigEventFull::EndTarget,
+                    _ => ConfigEventFull::NotCare,
                 }
             }),
               
             Ok(XmlEvent::EndDocument) => None,
-            Err(e) => Some(ConfigEvent::XMLParseError { e: Error::FailParse { inner_error: e } }),
-            Ok(_) => Some(ConfigEvent::NotCare),
+            Err(e) => Some(ConfigEventFull::XMLParseError { e: Error::FailParse { inner_error: e } }),
+            Ok(_) => Some(ConfigEventFull::NotCare),
         }
     }
 }
@@ -231,8 +340,10 @@ impl Iterator for ConfigParser {
 mod tests {
     
     use super::PathNode;
-    use super::ConfigEvent;
+    use super::ConfigEventFull as ConfigEvent;
     use super::ConfigParser;
+    use super::ConfigEvent as ConfigEventValid;
+    use super::super::error::Error;
 
     macro_rules! config_event_next_care {
         ($parser: expr) => ({
@@ -256,7 +367,6 @@ mod tests {
             ret_val
         })
     }
-
     macro_rules! config_event_is_start_other {
         ($parser: expr, $tag_name: expr) => (
             let next = config_event_next_care!($parser);
@@ -464,16 +574,51 @@ mod tests {
             config_event_is_endtargets!(parser);
     }
 
+
+    macro_rules! n_start_p {
+        () => ()
+    }
+    macro_rules! n_start_target {
+        () => ()
+    }
+    macro_rules! n_start_paths {
+        ($parser: expr) => ({
+            let next = $parser.next_valid();
+            match next {
+                Some(ConfigEventValid::StartPaths) => (),
+                _ => panic!("Next is not StartPaths but is {:?}", next),
+            }
+        })
+    }    
+    macro_rules! n_start_targets {
+        () => ()
+    }    
+    macro_rules! n_end_paths {
+        () => ()
+    }    
+    macro_rules! n_end_targets {
+        () => ()
+    }    
+    macro_rules! n_path_add {
+        () => ()
+    }
+    macro_rules! n_script_exec {
+        () => ()
+    }
+
     // skip invalid path, target, pathadd and scriptexec
     #[test]
     fn parser_valid() {
-        let mut parser = match ConfigParser::from(".env") {
+        let mut parser = match ConfigParser::from(".env_full") {
             Ok(parser) => parser,
             Err(e) => panic!("{:?}", e),
         };
+
+        n_start_paths!(parser);
+
         loop {
             match parser.next_valid() {
-                Some(e) => perrorln!("Event: {:?}", e),
+                Some(e) => perrorln!("{:?}", e),
                 None => break,
             }
         }
@@ -482,6 +627,41 @@ mod tests {
     // semantic error on other things in paths and targets
     #[test]
     fn parser_semantic() {
+        // Should meet invalid format error in these 2 parses
 
+        fn test_case(file: &str) {
+            let mut parser = match ConfigParser::from(file) {
+                Ok(parser) => parser,
+                Err(e) => panic!("{:?}", e),
+            };
+
+            let mut had_expected_fail = false;
+            loop {
+                match parser.next_valid() {
+                    Some(some_event) => {
+                        match some_event {
+                            ConfigEventValid::XMLReaderError { e } => {
+                                match e {
+                                    Error::InvalidFormat => {
+                                        had_expected_fail = true;
+                                        break;
+                                    }
+                                    other => { perrorln!("other error: {:?}", other) },
+                                }
+                            }
+                            other => { perrorln!("other event: {:?}", other); }
+                        }
+                    }
+                    None => { perrorln!("none here"); break; },
+                }
+            }
+            
+            if !had_expected_fail {
+                panic!("did not had expected fail of {}", file);
+            }
+        }
+        
+        test_case(".env_to_invalid_in_paths");
+        test_case(".env_to_invalid_in_targets");
     }
 }
