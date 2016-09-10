@@ -7,6 +7,7 @@ pub extern crate xml;
 
 use std::fs::File;
 use std::fmt::{ Debug, Formatter, self };
+use std::io::{ Seek, SeekFrom };
 
 use self::xml::common::{ Position, TextPosition };
 use self::xml::reader::{ EventReader, XmlEvent };
@@ -23,8 +24,13 @@ pub struct PathNode {
 }
 
 impl PathNode {
-    pub fn has(&mut self, val: &str) -> bool {
-        self.names.iter().find(|&name| name == val).is_some()
+    pub fn has(&self, val: &str) -> bool {
+        for i in 0..self.names.len() {
+            if self.names[i] == val {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn is_empty(&self) -> bool {
@@ -49,10 +55,13 @@ impl PathNode {
     }
 }
 
+const INDENT: [&'static str; 7] 
+    = ["", "   ", "      ", "         ", "            ", "               ", "                    "];
 impl Debug for PathNode {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let not_set = "(Not set)".to_owned();
-        write!(f, "{:?} => {:?}", 
+        write!(f, "{}P: {:?} => {:?}",
+            INDENT[self.depth], 
             self.names, {
                 match &self.target {
                     &Some(ref value) => value,
@@ -102,14 +111,12 @@ pub enum ConfigEvent {
     XMLReaderError { e: Error },
 }
 
-const INDENT: [&'static str; 7] 
-    = ["", "   ", "      ", "         ", "            ", "               ", "                    "];
 impl Debug for ConfigEvent {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         use self::ConfigEvent::*;
         match *self {
             StartPaths => write!(f, "------ Paths Start ------"),
-            StartP { ref inner } => write!(f, "{}P: {:?}", INDENT[inner.depth], inner),
+            StartP { ref inner } => write!(f, "{:?}", inner),
             EndP { ref depth } => write!(f, "{}P: end", INDENT[*depth]),
             EndPaths => write!(f, "------ Paths End ------"),
 
@@ -170,6 +177,25 @@ impl ConfigParser {
 
     pub fn position(&self) -> TextPosition {
         self.parser.position()
+    }
+
+    pub fn reset(mut self) -> Result<Self, Error> {
+        let _ = try!(self.parser.source_mut().seek(SeekFrom::Start(0))
+            .map_err(|e| Error::FailResetFile { e: e }));
+        
+        self.parser = EventReader::new(self.parser.into_inner());
+        self.next_finished = false;
+        self.in_some_paths = false;
+        self.in_some_targets = false;
+        self.current_depth = 0_usize;
+        self.in_invalid_path = false;
+        self.path_become_valid_after_endp_after_depth = 0_usize;
+        self.in_some_target = false;
+        self.in_invalid_target = false;
+        self.target_name_buffer = String::new();
+        self.target_action_buffer = Vec::new();
+
+        Ok(self)
     }
 
     // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
@@ -859,4 +885,69 @@ fn parser_semantic() {
     test_case(".env_to_invalid_in_paths");
     test_case(".env_to_invalid_in_targets");
     test_case(".env_to_invalid_in_target");
+}
+
+#[cfg(all(test, somethingverycomplicated))]
+#[test]
+fn parser_feasibility() {
+    // Try reuse File as Reader
+
+    use std::io::{ Seek, SeekFrom };
+
+    fn indent(size: usize) -> String {
+        const INDENT: &'static str = "    ";
+        (0..size).map(|_| INDENT)
+                .fold(String::with_capacity(size*INDENT.len()), |r, s| r + s)
+    }
+
+    let file = File::open(".env_full").unwrap();
+
+    let mut parser = EventReader::new(file);
+    let mut depth = 0;
+    loop {
+        match parser.next() {
+            Ok(XmlEvent::StartElement { name, .. }) => {
+                perrorln!("{}+{}", indent(depth), name);
+                depth += 1;
+            }
+            Ok(XmlEvent::EndElement { name }) => {
+                depth -= 1;
+                perrorln!("{}-{}", indent(depth), name);
+            }
+            Err(e) => {
+                perrorln!("Error: {}", e);
+                break;
+            }
+            Ok(XmlEvent::EndDocument) => {
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    let mut source = parser.into_inner();
+    let _ = source.seek(SeekFrom::Start(0));
+    parser = EventReader::new(source);
+
+    let mut depth = 0;
+    loop {
+        match parser.next() {
+            Ok(XmlEvent::StartElement { name, .. }) => {
+                perrorln!("{}+{}", indent(depth), name);
+                depth += 1;
+            }
+            Ok(XmlEvent::EndElement { name }) => {
+                depth -= 1;
+                perrorln!("{}-{}", indent(depth), name);
+            }
+            Err(e) => {
+                perrorln!("Error: {}", e);
+                break;
+            }
+            Ok(XmlEvent::EndDocument) => {
+                break;
+            }
+            _ => {}
+        }
+    }
 }

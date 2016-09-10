@@ -7,6 +7,7 @@ use super::parser::xml::common::{ TextPosition };
 pub enum Error {
     // File IO
     FailOpenFile { e: io::Error },
+    FailResetFile { e: io::Error },
 
     // XML Parse
     FailParse { e: super::parser::xml::reader::Error },
@@ -38,15 +39,18 @@ pub enum Error {
     ProcessNotSpawned { e: io::Error },
 
     // Other
-    UnexpectedInternalEroor,
+    UnexpectedInternalError,
 }
 
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
 
-            Error::FailOpenFile{ ref e } => {
+            Error::FailOpenFile { ref e } => {
                 write!(f, "Failed to open config file: {}", e)
+            }
+            Error::FailResetFile { ref e } => {
+                write!(f, "Failed to reset config file object: {}", e)
             }
 
             Error::FailParse { ref e } => {
@@ -95,7 +99,7 @@ impl Debug for Error {
                 write!(f, "Process not spawned: {}", e)
             }
 
-            Error::UnexpectedInternalEroor => {
+            Error::UnexpectedInternalError => {
                 write!(f, "Unexpected internal error")
             }
         }
