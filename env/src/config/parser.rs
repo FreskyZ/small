@@ -17,6 +17,7 @@ use super::result::TargetAction;
 // #region PathNode
 #[derive(PartialEq, Eq)]
 pub struct PathNode {
+    pub depth: usize,
     names: Vec<String>,
     pub target: Option<String>
 }
@@ -87,7 +88,7 @@ enum ConfigEventFull {
 pub enum ConfigEvent {
 
     StartPaths,
-    StartP { depth: usize, inner: PathNode },
+    StartP { inner: PathNode },
     EndP { depth: usize },
     EndPaths,
 
@@ -108,7 +109,7 @@ impl Debug for ConfigEvent {
         use self::ConfigEvent::*;
         match *self {
             StartPaths => write!(f, "------ Paths Start ------"),
-            StartP { ref depth, ref inner } => write!(f, "{}P: {:?}", INDENT[*depth], inner),
+            StartP { ref inner } => write!(f, "{}P: {:?}", INDENT[inner.depth], inner),
             EndP { ref depth } => write!(f, "{}P: end", INDENT[*depth]),
             EndPaths => write!(f, "------ Paths End ------"),
 
@@ -205,7 +206,8 @@ impl ConfigParser {
                             target: match get_attribute(attributes, "target") {
                                 Some(target) => Some(target.to_owned()),
                                 None => None,
-                            } 
+                            }, 
+                            depth: 0_usize,
                         };
                         ConfigEventFull::StartP { inner: ret_val }
                     },
@@ -321,7 +323,8 @@ impl Iterator for ConfigParser {
                         continue;
                     } 
                     // Valid path in valid path
-                    return Some(ConfigEvent::StartP { depth: self.current_depth - 1, inner: ret_val });
+                    ret_val.depth = self.current_depth - 1;
+                    return Some(ConfigEvent::StartP { inner: ret_val });
                 }
                 Some(ConfigEventFull::EndP) => { 
                     if !self.in_some_paths {
@@ -488,7 +491,7 @@ fn parser_full() {
         ($parser: expr, $names: expr, $target_name: expr, $dummy: expr) => (
             let next = config_event_next_care!($parser);
             if let ConfigEventFull::StartP { inner } = next {
-                assert_eq!(inner, PathNode { names: $names, target: $target_name });
+                assert_eq!(inner, PathNode { depth: 0, names: $names, target: $target_name });
             }
         );
         ($parser: expr, $names: expr, $target_name: expr) => (
@@ -698,28 +701,28 @@ fn parser_valid() {
     use super::result::TargetAction::*;
 
     macro_rules! n_start_p {
-        ($parser: ident, [$($names:tt)*]) => ({
+        ($parser: ident, $depth: expr, [$($names:tt)*]) => ({
             let next = $parser.next();
-            if let Some(StartP { depth: _depth, inner }) = next {
+            if let Some(StartP { inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
                 for name in borrowed_names {
                     owned_names.push(name.to_owned());
                 }
-                assert_eq!(PathNode { names: owned_names, target: None }, inner);
+                assert_eq!(PathNode { depth: $depth, names: owned_names, target: None }, inner);
             } else {
                 panic!("next is not StartP but is {:?}", next);
             }
         });
-        ($parser: ident, [$($names:tt)*] => $target: expr) => ({
+        ($parser: ident, $depth: expr, [$($names:tt)*] => $target: expr) => ({
             let next = $parser.next();
-            if let Some(StartP { depth: _depth, inner }) = next {
+            if let Some(StartP { inner }) = next {
                 let borrowed_names = vec![$($names)*];
                 let mut owned_names = Vec::new();
                 for name in borrowed_names {
                     owned_names.push(name.to_owned());
                 }
-                assert_eq!(PathNode { names: owned_names, target: Some($target.to_owned()) }, inner);
+                assert_eq!(PathNode { depth: $depth, names: owned_names, target: Some($target.to_owned()) }, inner);
             } else {
                 panic!("next is not StartP but is {:?}", next);
             }
@@ -775,24 +778,24 @@ fn parser_valid() {
     };
     
     n_start_paths!(parser);
-        n_start_p!(parser, ["gcc", "gnuc"] => "gcc-rubenvb-463");
-            n_start_p!(parser, ["rubenvb"]);
-                n_start_p!(parser, ["4.6.3", "463"] => "gcc-rubenvb-463");
+        n_start_p!(parser, 0, ["gcc", "gnuc"] => "gcc-rubenvb-463");
+            n_start_p!(parser, 1, ["rubenvb"]);
+                n_start_p!(parser, 2, ["4.6.3", "463"] => "gcc-rubenvb-463");
                 n_end_p!(parser);
             n_end_p!(parser);
-            n_start_p!(parser, ["4.6.3", "463"] => "gcc-rubenvb-463");
+            n_start_p!(parser, 1, ["4.6.3", "463"] => "gcc-rubenvb-463");
             n_end_p!(parser);
         n_end_p!(parser);
-        n_start_p!(parser, ["vcpp", "msvc"] => "msvc-19-amd64");
-            n_start_p!(parser, ["19", "vs14", "vs2015"]);
-                n_start_p!(parser, ["x86"] => "msvc-19-x86");
+        n_start_p!(parser, 0, ["vcpp", "msvc"] => "msvc-19-amd64");
+            n_start_p!(parser, 1, ["19", "vs14", "vs2015"]);
+                n_start_p!(parser, 2, ["x86"] => "msvc-19-x86");
                 n_end_p!(parser);
-                n_start_p!(parser, ["amd64", "x64"] => "msvc-19-amd64");
+                n_start_p!(parser, 2, ["amd64", "x64"] => "msvc-19-amd64");
                 n_end_p!(parser);
             n_end_p!(parser);
-            n_start_p!(parser, ["x86"] => "msvc-19-x86");
+            n_start_p!(parser, 1, ["x86"] => "msvc-19-x86");
             n_end_p!(parser);
-            n_start_p!(parser, ["amd64", "x64"] => "msvc-19-amd64");
+            n_start_p!(parser, 1, ["amd64", "x64"] => "msvc-19-amd64");
             n_end_p!(parser);
         n_end_p!(parser);
     n_end_paths!(parser);

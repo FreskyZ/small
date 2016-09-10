@@ -36,6 +36,9 @@ pub enum Error {
 
     // Apply
     ProcessNotSpawned { e: io::Error },
+
+    // Other
+    UnexpectedInternalEroor,
 }
 
 impl Debug for Error {
@@ -75,7 +78,7 @@ impl Debug for Error {
                 if nodes_available.len() == 0 {
                     try!(write!(f, ", this node contains no child with no target set, consider remove or reconfigure it"));
                 } else {
-                    try!(writeln!(f, ", consider add target or continue the path with: "));
+                    try!(writeln!(f, ", consider set target or continue the path with: "));
                     for node in nodes_available {
                         try!(writeln!(f, "    {}", node));
                     }
@@ -90,6 +93,10 @@ impl Debug for Error {
 
             Error::ProcessNotSpawned { ref e } => {
                 write!(f, "Process not spawned: {}", e)
+            }
+
+            Error::UnexpectedInternalEroor => {
+                write!(f, "Unexpected internal error")
             }
         }
     }
