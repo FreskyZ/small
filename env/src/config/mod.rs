@@ -3,14 +3,11 @@ mod error;
 mod result;
 mod parser;
 
-pub use self::error::Error;
-pub use self::parser::{ ConfigEvent, ConfigParser };
-pub use self::result::{ TargetAction, ConfigResult };
+use self::parser::{ ConfigEvent, ConfigParser };
+use self::parser::xml::common::TextPosition;
 
-// TODO: Big change State
-// TODO: Big change Error
-// TODO: Result applier
-// TODO: Commandline Interface
+pub use self::error::Error;
+pub use self::result::{ TargetAction, ConfigResult };
 
 #[derive(Debug)]
 enum State<'a> {
@@ -23,13 +20,20 @@ enum State<'a> {
     RecordingAvailables {
         current_depth: usize,
         expect_depth: usize, 
-        ret_val: Vec<String>
+        ret_val: Vec<String>,
+    },
+    ErrorRecordingAvailables {
+        current_depth: usize,
+        expect_depth: usize,
+        ret_val: Vec<String>,
     },
     WaitingTargets {
         target_name: &'a str,
+        target_config_pos: TextPosition,
     },
     SearchingTarget {
         target_name: &'a str,
+        target_config_pos: TextPosition,
     },
 }
 
@@ -49,6 +53,14 @@ impl<'a> State<'a> {
             ret_val: Vec::new()
         }
     }
+
+    fn new_error_record_p(current: usize, expect: usize) -> State<'a> {
+        State::ErrorRecordingAvailables {
+            current_depth: current,
+            expect_depth: expect,
+            ret_val: Vec::new()
+        }
+    }
 }
 
 // always return next availables when require list
@@ -58,13 +70,33 @@ impl<'a> State<'a> {
 // Error::FailOpenFile on fail open file
 // Error::FailParse on XMLReader error
 // Error::InvalidFormat 
-pub fn get_target(file_name: &str, 
-    path: &Vec<&str>, require_list: bool) -> Result<ConfigResult, Error> {
+pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Result<ConfigResult, Error> {
 
     let target_name : String;
-    let mut state = State::WaitingPaths;
-    
     let mut parser = try!(ConfigParser::from(file_name));
+
+    let path = &{
+        if full_path.is_empty() {
+            Vec::<&str>::new()
+        } else {
+            let splitted = full_path.split('/').collect::<Vec<&str>>();
+                
+            let mut valid = true;
+            for i in 0..splitted.len() {
+                if splitted[i] == "" {
+                    valid = false;
+                }
+            }
+
+            if valid {
+                splitted
+            } else {
+                return Err(Error::InvalidPath { path: full_path.to_owned() });
+            }
+        }
+    };
+    
+    let mut state = State::WaitingPaths;
     let mut path_iter = path.into_iter();
 
     loop {
@@ -100,11 +132,14 @@ pub fn get_target(file_name: &str,
                                         match inner.target {
                                             Some(target) => {
                                                 target_name = target.to_owned();
-                                                state = State::WaitingTargets { target_name: &*target_name };
+                                                state = State::WaitingTargets { 
+                                                    target_name: &*target_name,
+                                                    target_config_pos: parser.position(), 
+                                                };
                                                 break;
                                             }
                                             None => {
-                                                state = State::new_record_p(current_depth + 1, expect_depth + 1)
+                                                state = State::new_error_record_p(current_depth + 1, expect_depth + 1)
                                             }
                                         }
                                     }
@@ -121,6 +156,12 @@ pub fn get_target(file_name: &str,
                         } // else ignore
                         *current_depth += 1;
                     }
+                    State::ErrorRecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+                        if *current_depth == *expect_depth { 
+                            ret_val.push(inner.to_string());
+                        } // else ignore
+                        *current_depth += 1;
+                    }
                     _ => () // WaitingPaths => <p> not in <paths>, ignore
                 }
             },
@@ -129,8 +170,11 @@ pub fn get_target(file_name: &str,
                     State::RecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
                         return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));                                
                     },
+                    State::ErrorRecordingAvailables { current_depth: ref _1, expect_depth: ref _2, ref mut ret_val } => {
+                        return Err(Error::TargetNotSet{ path: "Dummy".to_owned(), nodes_available: ret_val.clone(), path_node_pos: parser.position() });                                
+                    },
                     State::SearchingPathNode { .. } => {
-                        return Err(Error::UnexpectedPath);
+                        return Err(Error::PathNodeNotFound { path: "1".to_owned(), correct_part: "2".to_owned(), incorrect_node: "3".to_owned(), is_invalid: false, nodes_available: Vec::new() });
                     }
                     _ => (),
                 }
@@ -142,6 +186,13 @@ pub fn get_target(file_name: &str,
                         if *expect_depth == *current_depth {
                             // Out of recording area, return
                             return Ok(ConfigResult::AvailablePathNodes(ret_val.clone()));
+                        } 
+                        *current_depth -= 1;
+                    }                    
+                    State::ErrorRecordingAvailables { ref mut current_depth, ref expect_depth, ref mut ret_val } => {
+                        if *expect_depth == *current_depth {
+                            // Out of recording area, return
+                            return Err(Error::TargetNotSet{ path: "Dummy".to_owned(), nodes_available: ret_val.clone(), path_node_pos: parser.position() });   
                         } 
                         *current_depth -= 1;
                     }
@@ -162,12 +213,12 @@ pub fn get_target(file_name: &str,
     loop {
         match parser.next() {
             Some(ConfigEvent::StartTargets) => {
-                if let State::WaitingTargets { target_name } = state {
-                    state = State::SearchingTarget { target_name: target_name };
+                if let State::WaitingTargets { target_name, target_config_pos } = state {
+                    state = State::SearchingTarget { target_name: target_name, target_config_pos: target_config_pos };
                 }
             },
             Some(ConfigEvent::Target { name, actions }) => {
-                if let State::SearchingTarget { target_name } = state {
+                if let State::SearchingTarget { target_name, .. } = state {
                     if name == target_name {
                         return Ok(ConfigResult::Actions(actions));
                     }
@@ -175,12 +226,11 @@ pub fn get_target(file_name: &str,
             },
             Some(ConfigEvent::EndTargets) => {
                 match state {
-                    State::WaitingTargets { .. } => {
-                        // Err::TargetsNotExist
-                        return Err(Error::TargetsNotExist);
+                    State::WaitingTargets { target_name, target_config_pos } => {
+                        return Err(Error::TargetNotExist { path: "Dummy".to_owned(), target_name: target_name.to_owned(), target_config_pos: target_config_pos });
                     }
-                    State::SearchingTarget { target_name } => {
-                        return Err(Error::TargetNotExist { target_name: target_name.to_owned() } );
+                    State::SearchingTarget { target_name, target_config_pos } => {
+                        return Err(Error::TargetNotExist { path: "Dummy".to_owned(), target_name: target_name.to_owned(), target_config_pos: target_config_pos });
                     }
                     _ => (),
                 }
@@ -203,36 +253,38 @@ mod tests {
     use super::parser::{ ConfigEvent, ConfigParser };
     use super::error::Error;
 
-    macro_rules! test_case { // =? or =>
-        ([$($paths:tt)*], $req: expr, actions: [$($actions:tt)*]) => (
-            match get_target(".env", &vec![$($paths)*], $req) {
-                Ok(ConfigResult::Actions(actions)) => {
-                    assert_eq!(actions, vec![$($actions)*]);
-                }
-                Ok(_) => unreachable!(),
-                Err(e) => panic!("{:?}", e),
-            }
-        );
-        ([$($paths:tt)*], $req: expr, nexts: [$($nexts:tt)*]) => (
-            match get_target(".env", &vec![$($paths)*], $req) {
-                Ok(ConfigResult::AvailablePathNodes(nexts)) => {
-                    assert_eq!(nexts, vec![$($nexts)*]);
-                }
-                Ok(_) => unreachable!(),
-                Err(e) => panic!("{:?}", e),
-            }
-        )
-    }
 
     #[test]
     fn get_targets() {
         
-        test_case!(["msvc", "19"], true, 
+        macro_rules! test_case { // =? or =>
+            ($full_path: expr, $req: expr, actions: [$($actions:tt)*]) => (
+                match get_target(".env", $full_path, $req) {
+                    Ok(ConfigResult::Actions(actions)) => {
+                        assert_eq!(actions, vec![$($actions)*]);
+                    }
+                    Ok(_) => unreachable!(),
+                    Err(e) => panic!("{:?}", e),
+                }
+            );
+            
+            ($full_path: expr, $req: expr, nexts: [$($nexts:tt)*]) => (
+                match get_target(".env", $full_path, $req) {
+                    Ok(ConfigResult::AvailablePathNodes(nexts)) => {
+                        assert_eq!(nexts, vec![$($nexts)*]);
+                    }
+                    Ok(_) => unreachable!(),
+                    Err(e) => panic!("{:?}", e),
+                }
+            )
+        }
+
+        test_case!("msvc/19", true, 
             nexts: ["m32(x86)", "m64(amd64, x64)"]);
-        test_case!([], true,  
+        test_case!("", true,
             nexts: ["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
                 ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
-        test_case!(["msvc", "19", "amd64"], false, 
+        test_case!("msvc/19/amd64", false, 
             actions: [PathAdd(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\ClangC2\bin\amd64".to_owned()),
                 ScriptExecute(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat".to_owned())]);
     }
@@ -295,6 +347,21 @@ mod tests {
 
         { // Path to target errors 
 
+            macro_rules! test_case {
+                ($path: expr, $req_list: expr) => (
+                    match get_target(".env_for_get_target_error", $path, $req_list) {
+                        Ok(_) => panic!("Unexpectedly succeed"),
+                        Err(e) => perrorln!("Meet expected error: {}", e),
+                    }
+                )
+            }
+
+            test_case!("abc//asd", false);
+            test_case!("balabala", false);
+            test_case!("python/450", false);
+            test_case!("rust/1.11/MSVC", false);
+            test_case!("rust", false);
+            test_case!("py/2", false);
         }
     }
 

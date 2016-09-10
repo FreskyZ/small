@@ -135,7 +135,7 @@ fn main() {
 
     let mut configs = Vec::new();
     for path in paths {
-        match get_target(".env", &path.split('/').collect::<Vec<&str>>(), has_list) {
+        match get_target(".env", &*path, has_list) {
             Ok(result) => configs.push(result),
             Err(e) => perror!("Error parsing `{}`: {:?}", path, e),
         }

@@ -8,7 +8,7 @@ pub extern crate xml;
 use std::fs::File;
 use std::fmt::{ Debug, Formatter, self };
 
-use self::xml::common::{ Position };
+use self::xml::common::{ Position, TextPosition };
 use self::xml::reader::{ EventReader, XmlEvent };
 use self::xml::attribute::OwnedAttribute;
 use super::error::Error;
@@ -164,7 +164,11 @@ impl ConfigParser {
                 target_name_buffer: String::new(),
                 target_action_buffer: Vec::new(),
             })
-            .map_err(|e| Error::FailOpenFile { inner_error: e })
+            .map_err(|e| Error::FailOpenFile { e: e })
+    }
+
+    pub fn position(&self) -> TextPosition {
+        self.parser.position()
     }
 
     // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
@@ -247,7 +251,7 @@ impl ConfigParser {
             }),
               
             Ok(XmlEvent::EndDocument) => None,
-            Err(e) => Some(ConfigEventFull::XMLParseError { e: Error::FailParse { inner_error: e } }),
+            Err(e) => Some(ConfigEventFull::XMLParseError { e: Error::FailParse { e: e } }),
             Ok(_) => Some(ConfigEventFull::NotCare),
         }
     }
