@@ -2,18 +2,15 @@
 //!
 //! Provide config event based on a XML reader
 
-// https://github.com/netvl/xml-rs
-pub extern crate xml;
-
 use std::fs::File;
 use std::fmt::{ Debug, Formatter, self };
 use std::io::{ BufReader };
 
-use self::xml::common::{ Position, TextPosition };
-use self::xml::reader::{ EventReader, XmlEvent };
-use self::xml::attribute::OwnedAttribute;
-use super::error::Error;
-use super::result::TargetAction;
+use xml::common::{ Position, TextPosition };
+use xml::reader::{ EventReader, XmlEvent };
+use xml::attribute::OwnedAttribute;
+use error::Error;
+use config::result::TargetAction;
 
 // #region PathNode
 #[derive(PartialEq, Eq)]

@@ -2,7 +2,8 @@
 use std::fmt::{ Debug, Display, Formatter, Result as FormatResult };
 use std::io;
 
-use super::parser::xml::common::{ TextPosition };
+use xml;
+use xml::common::TextPosition;
 
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
@@ -11,7 +12,7 @@ pub enum Error {
     FailOpenFile { e: io::Error },
 
     // XML Parse
-    FailParse { e: super::parser::xml::reader::Error },
+    FailParse { e: xml::reader::Error },
     InvalidFormat { 
         position: TextPosition, 
         element: String },

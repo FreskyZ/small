@@ -1,12 +1,11 @@
 
-mod error;
 mod result;
 mod parser;
 
 use self::parser::{ PathNode, ConfigEvent, ConfigParser };
-use self::parser::xml::common::TextPosition;
+use xml::common::TextPosition;
 
-pub use self::error::Error;
+pub use error::Error;
 pub use self::result::{ TargetAction, ConfigResult };
 
 #[derive(Debug)]
@@ -374,8 +373,8 @@ mod tests {
     use super::ConfigResult;
     use super::TargetAction::*;
     use super::parser::{ ConfigEvent, ConfigParser };
-    use super::error::Error;
-    use super::parser::xml::common::{ TextPosition };
+    use error::Error;
+    use xml::common::{ TextPosition };
 
     #[test]
     fn get_targets() {

@@ -1,7 +1,7 @@
 
 use std::fmt::{ self, Debug, Formatter };
 
-use super::error::Error;
+use error::Error;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum TargetAction {
@@ -93,7 +93,7 @@ mod tests {
     #[test]
     pub fn result_combine() {
 
-        use super::super::error::Error;
+        use error::Error;
 
         use super::ConfigResult;
         use super::ConfigResult::*;

@@ -1,33 +1,37 @@
 
-use std::env::{ args, Args, var as env_var };
-use std::process::{ Command };
+extern crate xml;
+
+use std::env::Args;
 
 #[macro_use]
 mod macros;
-mod config;
 
-use config::{ Config, TargetAction, ConfigResult };
+mod config;
+mod applier;
+mod input;
+mod error;
+
+use config::TargetAction;
 
 const USAGE_STRING : &'static str = 
 "Usage: 
 
-    env [Option] [path/to/target]* 
+    env path/to/target [path/to/another/target]
+    env Options
+
+    Open new command prompt and add path or other environment variables or
+    execute a certain script. Paths and Targets are pre configured in same
+    directory file `.env`
 
 Options:
 
-    <path/to/target>    Path to target in the config file
-                            multiple paths supported
-    --list, -l          List available next path nodes for these paths, 
-                            empty means root
-    --version, -v       Print version and quit
-    --help, -h          Print this help string
-    --config, -c        Open config file with default text editor
-    --print-config, -p  Print current valid configs
+    --list:<path>, -l<path>     List available next path nodes for these 
+                                    paths, empty means root
+    --target:<path>, -t<path>   List target actions for the paths
+    --version, -v               Print version and quit
+    --help, -h                  Print this help string
+    --config, -c                Open config file with default text editor
 
-    Open new command prompt and apply the target actions include add path 
-    and other environment variables and execute a certain script
-
-    Paths and Targets are pre configured in same directory file `.env`
 ";
 
 fn print_usage() {
@@ -54,7 +58,8 @@ fn check_special_ops(arg: &str) -> Option<SpecialOptions> {
 }
 
 // process 3 other options and return things to input into config
-pub fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
+fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
+    use std::process::Command;
 
     let mut specs = Vec::new();
     let mut configs = Vec::new();
@@ -104,6 +109,8 @@ pub fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
 }
 
 fn apply_actions(actions: Vec<TargetAction>) {
+    use std::process::Command;
+    use std::env::var as env_var;
 
     let mut cmd = Command::new("cmd");
     let _ = cmd.arg("/K");
@@ -144,6 +151,9 @@ fn apply_actions(actions: Vec<TargetAction>) {
 }
 
 fn main() {
+    use std::env::args;
+    use config::Config;
+    use config::ConfigResult;
 
     let args = args();
     // print_usage();
@@ -180,13 +190,12 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    // use super::process_input;
-
-    use std::env::{ var as env_var };
 
     #[test]
+    #[ignore]
     fn applying() {
-        perrorln!("PATH is {:?}", env_var("PATH").unwrap() + "SOMETHING AT TAILLLLLLLLL");
-        perrorln!("SOMEOTHER is {:?}", env_var("SOMEOTHER"));
+        // use std::env::var as env_var;
+        // perrorln!("PATH is {:?}", env_var("PATH").unwrap() + "SOMETHING AT TAILLLLLLLLL");
+        // perrorln!("SOMEOTHER is {:?}", env_var("SOMEOTHER"));
     }
 }
