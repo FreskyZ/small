@@ -15,6 +15,9 @@ enum State<'a> {
     SearchingPathNode {
         expect_depth: usize,    
         expect_value: &'a str,
+        correct_part: String,
+        last_depth_has_target: bool,
+        current_depth_availables: Vec<String>,
     },
     RecordingAvailables {
         expect_depth: usize, 
@@ -45,7 +48,9 @@ impl<'a> State<'a> {
         match self {
             State::WaitingPaths => {
                 if split_path.len() > 0 {
-                    State::SearchingPathNode::<'a> { expect_depth: 0, expect_value: split_path[0] }
+                    State::SearchingPathNode::<'a> { 
+                        expect_depth: 0, expect_value: split_path[0], 
+                        current_depth_availables: Vec::new(), correct_part: String::new(), last_depth_has_target: false }
                 } else {
                     State::RecordingAvailables { expect_depth: 0, ret_val: Vec::new() }
                 }
@@ -56,12 +61,16 @@ impl<'a> State<'a> {
 
     fn start_p(self, inner: PathNode, split_path: &'a Vec<&str>, require_list: bool, parser_position: TextPosition) -> Self {
          match self {
-            State::SearchingPathNode { expect_depth, expect_value } => {
+            State::SearchingPathNode { expect_depth, expect_value, mut current_depth_availables, correct_part, last_depth_has_target } => {
                 if inner.depth == expect_depth && inner.has(expect_value) {
+                    // Find a match
                     if split_path.len() > inner.depth + 1 {
                         return State::SearchingPathNode { 
                             expect_depth: expect_depth + 1, 
                             expect_value: split_path[inner.depth + 1], 
+                            current_depth_availables: Vec::new(),
+                            correct_part: correct_part + expect_value + "/",
+                            last_depth_has_target: inner.target.is_some(),
                         };
                     } else {
                         if require_list {
@@ -86,8 +95,19 @@ impl<'a> State<'a> {
                             }
                         }
                     }
+                } else {
+                    // Not match
+                    if inner.depth == expect_depth {
+                        current_depth_availables.push(inner.to_string());
+                    }
+                    State::SearchingPathNode { 
+                        expect_depth: expect_depth, 
+                        expect_value: expect_value, 
+                        current_depth_availables: current_depth_availables,
+                        correct_part: correct_part,
+                        last_depth_has_target: last_depth_has_target,
+                    }
                 }
-                State::SearchingPathNode { expect_depth: expect_depth, expect_value: expect_value }
             }
             State::RecordingAvailables { expect_depth, mut ret_val } => {
                 if inner.depth == expect_depth { 
@@ -124,8 +144,24 @@ impl<'a> State<'a> {
                 return MaybeReturn::State(
                     State::ErrorRecordingAvailables { expect_depth: expect_depth, ret_val: ret_val });
             }
-            // State::SearchingPathNode { .. } => {
-            // }
+            State::SearchingPathNode { expect_depth, expect_value, current_depth_availables, correct_part, last_depth_has_target } => {
+                if depth + 1 == expect_depth { // Not found
+                    return MaybeReturn::Return(Err(Error::PathNodeNotFound { 
+                        path: full_path.to_owned(), 
+                        correct_part: if correct_part.is_empty() { "(root)".to_owned() } else { correct_part }, 
+                        incorrect_node: expect_value.to_owned(), 
+                        is_invalid: !last_depth_has_target && current_depth_availables.is_empty(), 
+                        nodes_available: current_depth_availables,
+                    }));
+                }
+                MaybeReturn::State(State::SearchingPathNode {
+                    expect_depth: expect_depth, 
+                    expect_value: expect_value, 
+                    current_depth_availables: current_depth_availables,
+                    correct_part: correct_part,
+                    last_depth_has_target: last_depth_has_target,
+                })   
+            }
             _ => MaybeReturn::State(self),
         }
     }
@@ -142,13 +178,13 @@ impl<'a> State<'a> {
                     path_node_pos: parser_position,
                 }));                                
             },
-            State::SearchingPathNode { expect_depth: ref _1, expect_value: ref _2 } => {
+            State::SearchingPathNode { expect_depth: _1, expect_value, current_depth_availables, correct_part, last_depth_has_target } => {
                 return MaybeReturn::Return(Err(Error::PathNodeNotFound { 
                     path: full_path.to_owned(), 
-                    correct_part: "2".to_owned(), 
-                    incorrect_node: "3".to_owned(), 
-                    is_invalid: false, 
-                    nodes_available: Vec::new() 
+                    correct_part: if correct_part.is_empty() { "(root)".to_owned() } else { correct_part }, 
+                    incorrect_node: expect_value.to_owned(), 
+                    is_invalid: !last_depth_has_target && current_depth_availables.is_empty(), 
+                    nodes_available: current_depth_availables,
                 }));
             }
             _ => MaybeReturn::State(self),
@@ -234,22 +270,22 @@ pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Resul
         match parser.next() {
             // Path
             Some(ConfigEvent::StartPaths) => {
-                //perrorln!("StartPaths");
+                // perrorln!("StartPaths");
                 state = state.start_paths(&split_path);
             },
             Some(ConfigEvent::StartP { inner }) => {
-                //perrorln!("{:?}\n{}state {:?}", inner, INDENT[inner.depth], state);
+                // perrorln!("{:?}\n{}state {:?}\n", inner, INDENT[inner.depth], state);
                 state = state.start_p(inner, &split_path, require_list, parser.position());
             },
             Some(ConfigEvent::EndP { depth }) => {
-                //perrorln!("{}EndP\n{}state: {:?}", INDENT[current_depth], INDENT[current_depth], state);
+                // perrorln!("{}EndP\n{}state: {:?}\n", INDENT[depth], INDENT[depth], state);
                 match state.end_p(depth, full_path, parser.position()) {
                     MaybeReturn::State(new_state) => { state = new_state; }
                     MaybeReturn::Return(ret_val) => { return ret_val; }
                 }
             },
             Some(ConfigEvent::EndPaths) => {
-                //perrorln!("EndPaths");
+                // perrorln!("EndPaths");
                 match state.end_paths(full_path, parser.position()) {
                     MaybeReturn::State(new_state) => { state = new_state; }
                     MaybeReturn::Return(ret_val) => { return ret_val; }
@@ -279,6 +315,27 @@ pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Resul
         }
     }
 }
+
+// pub struct Config {
+//     pub file_name: String, 
+//     pub require_list: bool,
+//     parser: ConfigParser,
+// }
+
+// impl Config {
+//     pub fn new(file_name: &str, require_list: bool) -> Result<Config, Error> {
+//         let parser = try!(ConfigParser::from(file_name));
+//         Ok(Config { file_name: file_name.to_owned(), require_list: require_list, parser: parser})
+//     }
+
+//     pub fn input(&mut self, full_path: &str) -> Result<ConfigResult, Error> {
+//         get_target(parser, full_path, require_list)
+//     }
+
+//     pub fn batch(&mut self, paths: Vec<&str>) -> Vec<Result<Config, Error> {
+
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -329,7 +386,8 @@ mod tests {
 
     #[test]
     fn get_target_error() {
-
+        // For copy/paste: false true
+        
         if true { // File IO error
             let _ = match ConfigParser::from(".env_some_other") {
                 Ok(_) => panic!("File open error not triggered"),
@@ -436,13 +494,19 @@ mod tests {
 
                 macro_rules! test_case {
                     ($full_path: expr, $correct: expr, $wrong: expr, $invalid: expr, $available: expr) => ({
-                        match get_target(file_name, "python/450", false) {
+                        match get_target(file_name, $full_path, false) {
                             Err(Error::PathNodeNotFound { path, correct_part, incorrect_node, is_invalid, nodes_available }) => {
                                 assert_eq!(path, $full_path);
                                 assert_eq!(correct_part, $correct);
                                 assert_eq!(incorrect_node, $wrong);
                                 assert_eq!(is_invalid, $invalid);
                                 assert_eq!(nodes_available, $available);
+                                // perrorln!("Meet expected error: {}", Error::PathNodeNotFound { 
+                                //     path: path, 
+                                //     correct_part: correct_part, 
+                                //     incorrect_node: incorrect_node, 
+                                //     is_invalid: is_invalid, 
+                                //     nodes_available: nodes_available });
                             }
                             Err(e) => panic!("Unexpected other error: {}", e),
                             Ok(_) => panic!("Unexpectedly succeed"),
@@ -452,7 +516,7 @@ mod tests {
 
                 test_case!("python/450", "python/", "450", false, vec!["3(3.4, 3.4.4)", "3.3(3.3.2)", "2(2.7, 2.7.8)", "x86", "amd64(x64)"]);
                 test_case!("balabala", "(root)", "balabala", false, vec!["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
-                    ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
+                     ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
                 test_case!("rust/1.11/MSVC/12345", "rust/1.11/MSVC/", "12345", true, Vec::<String>::new());
             }
         }
