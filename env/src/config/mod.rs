@@ -258,14 +258,13 @@ fn split_path(full_path: &str) -> Result<Vec<&str>, Error> {
     }
 }
 
-const INDENT: [&'static str; 7] 
-    = ["", "   ", "      ", "         ", "            ", "               ", "                    "];
-pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Result<ConfigResult, Error> {
+// const INDENT: [&'static str; 7] 
+//     = ["", "   ", "      ", "         ", "            ", "               ", "                    "];
+fn get_target(parser: &mut ConfigParser, full_path: &str, require_list: bool) -> Result<ConfigResult, Error> {
 
     let split_path = try!(split_path(full_path));
-    let mut parser = try!(ConfigParser::from(file_name));
-
     let mut state = State::WaitingPaths;
+
     loop {
         match parser.next() {
             // Path
@@ -275,18 +274,18 @@ pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Resul
             },
             Some(ConfigEvent::StartP { inner }) => {
                 // perrorln!("{:?}\n{}state {:?}\n", inner, INDENT[inner.depth], state);
-                state = state.start_p(inner, &split_path, require_list, parser.position());
+                state = state.start_p(inner, &split_path, require_list, parser.stream_pos());
             },
             Some(ConfigEvent::EndP { depth }) => {
                 // perrorln!("{}EndP\n{}state: {:?}\n", INDENT[depth], INDENT[depth], state);
-                match state.end_p(depth, full_path, parser.position()) {
+                match state.end_p(depth, full_path, parser.stream_pos()) {
                     MaybeReturn::State(new_state) => { state = new_state; }
                     MaybeReturn::Return(ret_val) => { return ret_val; }
                 }
             },
             Some(ConfigEvent::EndPaths) => {
                 // perrorln!("EndPaths");
-                match state.end_paths(full_path, parser.position()) {
+                match state.end_paths(full_path, parser.stream_pos()) {
                     MaybeReturn::State(new_state) => { state = new_state; }
                     MaybeReturn::Return(ret_val) => { return ret_val; }
                 }
@@ -311,75 +310,111 @@ pub fn get_target(file_name: &str, full_path: &str, require_list: bool) -> Resul
 
             // Other
             Some(ConfigEvent::XMLReaderError { e }) => return Err(e),
-            None => return Err(Error::UnexpectedInternalError), // If all correct, will not goto end document
+            None => return Err(Error::UnexpectedInternalError_ReachUnexpectedInternalState), // If all correct, will not goto end document
         }
     }
 }
 
-// pub struct Config {
-//     pub file_name: String, 
-//     pub require_list: bool,
-//     parser: ConfigParser,
-// }
+pub struct Config {
+    file_name: String, 
+    pub require_list: bool,
+    parser: ConfigParser,
+}
 
-// impl Config {
-//     pub fn new(file_name: &str, require_list: bool) -> Result<Config, Error> {
-//         let parser = try!(ConfigParser::from(file_name));
-//         Ok(Config { file_name: file_name.to_owned(), require_list: require_list, parser: parser})
-//     }
+impl Config {
+    pub fn new(file_name: &str, require_list: bool) -> Result<Config, Error> {
+        let parser = try!(ConfigParser::from(file_name));
+        Ok(Config { 
+            file_name: file_name.to_owned(), 
+            require_list: require_list, 
+            parser: parser
+        })
+    }
 
-//     pub fn input(&mut self, full_path: &str) -> Result<ConfigResult, Error> {
-//         get_target(parser, full_path, require_list)
-//     }
+    #[allow(dead_code)]
+    pub fn file_name(&self) -> &str {
+        &*self.file_name
+    }
 
-//     pub fn batch(&mut self, paths: Vec<&str>) -> Vec<Result<Config, Error> {
+    pub fn input(&mut self, full_path: &str) -> Result<ConfigResult, Error> {
+        self.parser = try!(ConfigParser::from(&*self.file_name));
+        get_target(&mut self.parser, full_path, self.require_list)
+    }
 
-//     }
-// }
+    // batch process input and combine results, they should be same subtype of ConfigResult
+    pub fn batch(&mut self, paths: Vec<String>) -> (ConfigResult, Vec<Error>) {
+        let mut results = Vec::new();
+        let mut errors = Vec::new();
+
+        for path in paths {
+            match self.input(&*path) {
+                Ok(result) => results.push(result),
+                Err(error) => errors.push(error),
+            }
+        }
+
+        if results.is_empty() {
+            return (ConfigResult::Actions(Vec::new()), errors);
+        }
+        
+        match ConfigResult::combine(results) {
+            Ok(result) => (result, errors),
+            Err(e) => {
+                errors.push(e);
+                (ConfigResult::Actions(Vec::new()), errors)
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
 
-    #![allow(unused_imports)]
-
-    use super::get_target;
+    use super::Config;
     use super::ConfigResult;
     use super::TargetAction::*;
     use super::parser::{ ConfigEvent, ConfigParser };
     use super::error::Error;
-    use super::parser::xml::common::{ Position, TextPosition };
+    use super::parser::xml::common::{ TextPosition };
 
     #[test]
     fn get_targets() {
         
         macro_rules! test_case {
-            ($full_path: expr, $req: expr, actions: [$($actions:tt)*]) => (
-                match get_target(".env", $full_path, $req) {
+            ($config: expr, $full_path: expr, $req: expr, actions: [$($actions:tt)*]) => ({
+                $config.require_list = $req;
+                match $config.input($full_path) {
                     Ok(ConfigResult::Actions(actions)) => {
                         assert_eq!(actions, vec![$($actions)*]);
                     }
                     Ok(_) => unreachable!(),
                     Err(e) => panic!("{:?}", e),
                 }
-            );
+            });
             
-            ($full_path: expr, $req: expr, nexts: [$($nexts:tt)*]) => (
-                match get_target(".env", $full_path, $req) {
+            ($config: expr, $full_path: expr, $req: expr, nexts: [$($nexts:tt)*]) => ({
+                $config.require_list = $req;
+                match $config.input($full_path) {
                     Ok(ConfigResult::AvailablePathNodes(nexts)) => {
                         assert_eq!(nexts, vec![$($nexts)*]);
                     }
                     Ok(_) => unreachable!(),
                     Err(e) => panic!("{:?}", e),
                 }
-            )
+            })
         }
 
-        test_case!("msvc/19", true, 
+        let mut config = match Config::new("tests/.env", true) {
+            Ok(config) => config,
+            Err(e) => panic!("Config construct error: {}", e),
+        };
+
+        test_case!(config, "msvc/19", true,
             nexts: ["m32(x86)", "m64(amd64, x64)"]);
-        test_case!("", true,
+        test_case!(config, "", true,
             nexts: ["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
                 ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
-        test_case!("msvc/19/amd64", false, 
+        test_case!(config, "msvc/19/amd64", false, 
             actions: [PathAdd(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\ClangC2\bin\amd64".to_owned()),
                 ScriptExecute(r"C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin\amd64\vcvars64.bat".to_owned())]);
     }
@@ -389,7 +424,7 @@ mod tests {
         // For copy/paste: false true
         
         if true { // File IO error
-            let _ = match ConfigParser::from(".env_some_other") {
+            let _ = match ConfigParser::from("tests/.env_some_other") {
                 Ok(_) => panic!("File open error not triggered"),
                 Err(Error::FailOpenFile { e }) => assert_eq!(e.raw_os_error().unwrap(), 2), 
                 Err(e) => panic!("Unexpected error throwed: {:?}", e),
@@ -397,7 +432,7 @@ mod tests {
         }
 
         if true { // XML Reader Error
-            let parser = ConfigParser::from(".env_xml_error").unwrap();
+            let parser = ConfigParser::from("tests/.env_xml_error").unwrap();
 
             let mut meet_expected_error = false;
             for event in parser {
@@ -439,17 +474,21 @@ mod tests {
                 })
             }
 
-            test_case!(".env_to_invalid_in_paths", 24, 5, "paths");
-            test_case!(".env_to_invalid_in_targets", 38, 5, "targets");
-            test_case!(".env_to_invalid_in_target", 42, 7, "target");
+            test_case!("tests/.env_to_invalid_in_paths", 24, 5, "paths");
+            test_case!("tests/.env_to_invalid_in_targets", 38, 5, "targets");
+            test_case!("tests/.env_to_invalid_in_target", 42, 7, "target");
         }
 
         if true { // Path to target errors 
 
-            let file_name = ".env_for_get_target_error";
+            let file_name = "tests/.env_for_get_target_error";
+            let mut config = match Config::new(file_name, false) {
+                Ok(config) => config,
+                Err(e) => panic!("Unexpected config error: {}", e),
+            };
 
             if true { // Invalid path
-                match get_target(file_name, "abc//asd", false) {
+                match config.input("abc//asd") {
                     Err(Error::InvalidPath { path }) => assert_eq!(path, "abc//asd"),
                     Err(e) => panic!("Unexpect other error: {}", e),
                     Ok(_) => panic!("Unexpectedly succeed"),
@@ -457,7 +496,7 @@ mod tests {
             }
 
             if true { // Target not set and no child
-                match get_target(file_name, "rust/1.11/MSVC", false) {
+                match config.input("rust/1.11/MSVC") {
                     Err(Error::TargetNotSet { path, path_node_pos, nodes_available }) => {
                         assert_eq!(path,  "rust/1.11/MSVC");
                         assert_eq!(path_node_pos, TextPosition { row: 51, column: 8 });
@@ -467,7 +506,7 @@ mod tests {
                     Ok(_) => panic!("Unexpectedly succeed"),
                 }
 
-                match get_target(file_name, "rust", false) {
+                match config.input("rust") {
                     Err(Error::TargetNotSet { path, path_node_pos, nodes_available }) => {
                         assert_eq!(path,  "rust");
                         assert_eq!(path_node_pos, TextPosition { row: 53, column: 4 });
@@ -479,7 +518,7 @@ mod tests {
             }
 
             if true { // Target not exist
-                match get_target(file_name, "py/2", false) {
+                match config.input("py/2") {
                     Err(Error::TargetNotExist { path, target_name, target_config_pos }) => {
                         assert_eq!(path,  "py/2");
                         assert_eq!(target_name, "python-278-amd64");
@@ -493,8 +532,8 @@ mod tests {
             if true { // Path node not found
 
                 macro_rules! test_case {
-                    ($full_path: expr, $correct: expr, $wrong: expr, $invalid: expr, $available: expr) => ({
-                        match get_target(file_name, $full_path, false) {
+                    ($config: expr, $full_path: expr, $correct: expr, $wrong: expr, $invalid: expr, $available: expr) => ({
+                        match $config.input($full_path) {
                             Err(Error::PathNodeNotFound { path, correct_part, incorrect_node, is_invalid, nodes_available }) => {
                                 assert_eq!(path, $full_path);
                                 assert_eq!(correct_part, $correct);
@@ -514,10 +553,10 @@ mod tests {
                     })
                 }
 
-                test_case!("python/450", "python/", "450", false, vec!["3(3.4, 3.4.4)", "3.3(3.3.2)", "2(2.7, 2.7.8)", "x86", "amd64(x64)"]);
-                test_case!("balabala", "(root)", "balabala", false, vec!["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
+                test_case!(config, "python/450", "python/", "450", false, vec!["3(3.4, 3.4.4)", "3.3(3.3.2)", "2(2.7, 2.7.8)", "x86", "amd64(x64)"]);
+                test_case!(config, "balabala", "(root)", "balabala", false, vec!["gcc(gnuc)", "git", "haskell(hs)", "java", "lua", "nasm", 
                      ".net(dotnet, netfx, netframework)", "vcpp(msvc)", "python(py)", "rust"]);
-                test_case!("rust/1.11/MSVC/12345", "rust/1.11/MSVC/", "12345", true, Vec::<String>::new());
+                test_case!(config, "rust/1.11/MSVC/12345", "rust/1.11/MSVC/", "12345", true, Vec::<String>::new());
             }
         }
     }
@@ -526,7 +565,7 @@ mod tests {
     #[test]
     fn get_target_f() {
         
-        let mut parser = ConfigParser::from(".env").unwrap();
+        let mut parser = ConfigParser::from("tests/.env").unwrap();
 
         loop {
             match parser.next() {
@@ -535,10 +574,10 @@ mod tests {
             }
         }
 
-        parser = match parser.reset() {
-            Ok(new_parser) => new_parser,
-            Err(e) => { perrorln!("reset error: {:?}", e); return; }
-        };
+        // parser = match parser.reset() {
+        //     Ok(new_parser) => new_parser,
+        //     Err(e) => { perrorln!("reset error: {:?}", e); return; }
+        // };
         
         loop {
             match parser.next() {

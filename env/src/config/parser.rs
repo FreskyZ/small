@@ -7,7 +7,7 @@ pub extern crate xml;
 
 use std::fs::File;
 use std::fmt::{ Debug, Formatter, self };
-use std::io::{ Seek, SeekFrom };
+use std::io::{ BufReader };
 
 use self::xml::common::{ Position, TextPosition };
 use self::xml::reader::{ EventReader, XmlEvent };
@@ -138,7 +138,7 @@ impl Debug for ConfigEvent {
 
 // #region ConfigParser
 pub struct ConfigParser {
-    parser: EventReader<File>,
+    parser: EventReader<BufReader<File>>,
 
     next_finished: bool,
 
@@ -160,7 +160,7 @@ impl ConfigParser {
     pub fn from(file_name: &str) -> Result<ConfigParser, Error> {
         File::open(file_name)
             .map(|file| ConfigParser { 
-                parser: EventReader::new(file), 
+                parser: EventReader::new(BufReader::new(file)), 
                 next_finished: false,
                 in_some_paths: false,
                 in_some_targets: false,
@@ -175,27 +175,8 @@ impl ConfigParser {
             .map_err(|e| Error::FailOpenFile { e: e })
     }
 
-    pub fn position(&self) -> TextPosition {
+    pub fn stream_pos(&self) -> TextPosition {
         self.parser.position()
-    }
-
-    pub fn reset(mut self) -> Result<Self, Error> {
-        let _ = try!(self.parser.source_mut().seek(SeekFrom::Start(0))
-            .map_err(|e| Error::FailResetFile { e: e }));
-        
-        self.parser = EventReader::new(self.parser.into_inner());
-        self.next_finished = false;
-        self.in_some_paths = false;
-        self.in_some_targets = false;
-        self.current_depth = 0_usize;
-        self.in_invalid_path = false;
-        self.path_become_valid_after_endp_after_depth = 0_usize;
-        self.in_some_target = false;
-        self.in_invalid_target = false;
-        self.target_name_buffer = String::new();
-        self.target_action_buffer = Vec::new();
-
-        Ok(self)
     }
 
     // Wrap XMLReaderEvent to ConfigEvent, remove invalid nodes
@@ -632,7 +613,7 @@ fn parser_full() {
         )
     }  
 
-    let mut parser = match ConfigParser::from(".env_full") {
+    let mut parser = match ConfigParser::from("tests/.env_full") {
         Ok(parser) => parser,
         Err(e) => panic!("{:?}", e),
     };
@@ -798,7 +779,7 @@ fn parser_valid() {
         ($parser: ident) => (n_none!($parser, EndTargets))
     }    
 
-    let mut parser = match ConfigParser::from(".env_full") {
+    let mut parser = match ConfigParser::from("tests/.env_full") {
         Ok(parser) => parser,
         Err(e) => panic!("{:?}", e),
     };
@@ -882,9 +863,9 @@ fn parser_semantic() {
         }
     }
     
-    test_case(".env_to_invalid_in_paths");
-    test_case(".env_to_invalid_in_targets");
-    test_case(".env_to_invalid_in_target");
+    test_case("tests/.env_to_invalid_in_paths");
+    test_case("tests/.env_to_invalid_in_targets");
+    test_case("tests/.env_to_invalid_in_target");
 }
 
 #[cfg(all(test, somethingverycomplicated))]
@@ -900,7 +881,7 @@ fn parser_feasibility() {
                 .fold(String::with_capacity(size*INDENT.len()), |r, s| r + s)
     }
 
-    let file = File::open(".env_full").unwrap();
+    let file = File::open("tests/.env_full").unwrap();
 
     let mut parser = EventReader::new(file);
     let mut depth = 0;

@@ -1,23 +1,12 @@
 
-#![allow(dead_code)]
-
-use std::env::{ args, Args };
+use std::env::{ args, Args, var as env_var };
 use std::process::{ Command };
-
-// Usage:
-//      env /python/msvc16/amd64 /git/27
-//      env /python --list  # or `-l` list only available for one path
-//          # subpath for `/python`: 2.7(27, 2), msvc16, amd64 
-// Option:
-//      --version | -v  # any case, quit immediately
-//      --setup | -s   # open config file for setup
-//      --help | -h | any other, for help string, quit immediately
 
 #[macro_use]
 mod macros;
 mod config;
 
-use config::{ get_target, ConfigResult };
+use config::{ Config, TargetAction, ConfigResult };
 
 const USAGE_STRING : &'static str = 
 "Usage: 
@@ -46,7 +35,7 @@ fn print_usage() {
 }
 
 #[derive(Debug)]
-pub enum SpecialOptions {
+enum SpecialOptions {
     Version,
     Help,
     List,
@@ -114,8 +103,44 @@ pub fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
     Some((configs, has_list))
 }
 
-fn apply_result(_results: Vec<ConfigResult>) {
-    
+fn apply_actions(actions: Vec<TargetAction>) {
+
+    let mut cmd = Command::new("cmd");
+    let _ = cmd.arg("/K");
+
+    let mut scripts = Vec::new();
+    let mut new_path = env_var("PATH").unwrap_or("".to_owned());
+
+    for action in actions {
+        match action {
+            TargetAction::PathAdd(value) => {
+                new_path = value + ";" + &*new_path;
+            }
+            TargetAction::VariableAdd(var, value) => {
+                match env_var(var.clone()) {
+                    Ok(origin_path) => {
+                        cmd.env(var, value + ";" + &*origin_path);
+                    }
+                    Err(_) => {
+                        cmd.env(var, value);
+                    } 
+                }
+            }
+            TargetAction::ScriptExecute(path) => {
+                scripts.push(path);
+            }
+        }
+    }
+
+    cmd.env("PATH", new_path);
+
+    match cmd.spawn() {
+        Ok(mut child) => match child.wait() {
+            Ok(_) => (), // println!("Child exit with status: {:?}", result),
+            Err(e) => println!("Child wait error: {:?}", e),
+        },
+        Err(e) => perrorln!("Process spawn error: {:?}", e),
+    }
 }
 
 fn main() {
@@ -131,27 +156,37 @@ fn main() {
         paths.push("".to_owned());
     } 
 
-    println!("paths: {:?}, has_list: {}", paths, has_list);
+    //println!("paths: {:?}, has_list: {}", paths, has_list);
 
-    let mut configs = Vec::new();
-    for path in paths {
-        match get_target(".env", &*path, has_list) {
-            Ok(result) => configs.push(result),
-            Err(e) => perror!("Error parsing `{}`: {:?}", path, e),
-        }
+    let mut config = match Config::new(".env", has_list) {
+        Ok(config) => config,
+        Err(e) => { println!("Error: {}", e); return; }
+    };
+    let (result, errors) = config.batch(paths);
+    for error in errors {
+        perrorln!("Error: {}", error);
     }
 
-    println!("Results: {:?}", configs);
-    apply_result(configs);
+    match result {
+        nexts @ ConfigResult::AvailablePathNodes(..) => {
+            println!("nexts: {:?}", nexts);
+        }
+        ConfigResult::Actions(actions) => {
+            // println!("action: {:?}", actions);
+            apply_actions(actions);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     // use super::process_input;
 
-    #[test]
-    #[ignore]
-    fn preprocess() {
+    use std::env::{ var as env_var };
 
+    #[test]
+    fn applying() {
+        perrorln!("PATH is {:?}", env_var("PATH").unwrap() + "SOMETHING AT TAILLLLLLLLL");
+        perrorln!("SOMEOTHER is {:?}", env_var("SOMEOTHER"));
     }
 }

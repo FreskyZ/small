@@ -4,10 +4,11 @@ use std::io;
 
 use super::parser::xml::common::{ TextPosition };
 
+#[allow(non_camel_case_types)]
+#[allow(dead_code)]
 pub enum Error {
     // File IO
     FailOpenFile { e: io::Error },
-    FailResetFile { e: io::Error },
 
     // XML Parse
     FailParse { e: super::parser::xml::reader::Error },
@@ -39,7 +40,8 @@ pub enum Error {
     ProcessNotSpawned { e: io::Error },
 
     // Other
-    UnexpectedInternalError,
+    UnexpectedInternalError_ReachUnexpectedInternalState,
+    UnexpectedInternalError_GetUnexpectedResult,
 }
 
 impl Debug for Error {
@@ -48,9 +50,6 @@ impl Debug for Error {
 
             Error::FailOpenFile { ref e } => {
                 write!(f, "Failed to open config file: {}", e)
-            }
-            Error::FailResetFile { ref e } => {
-                write!(f, "Failed to reset config file object: {}", e)
             }
 
             Error::FailParse { ref e } => {
@@ -99,8 +98,11 @@ impl Debug for Error {
                 write!(f, "Process not spawned: {}", e)
             }
 
-            Error::UnexpectedInternalError => {
-                write!(f, "Unexpected internal error")
+            Error::UnexpectedInternalError_ReachUnexpectedInternalState => {
+                write!(f, "Unexpected internal error: reach unexpected internal state")
+            }
+            Error::UnexpectedInternalError_GetUnexpectedResult => {
+                write!(f, "Unexpected internal error: get unexpected result")
             }
         }
     }
@@ -112,7 +114,7 @@ impl Display for Error {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, someverycomplex))]
 #[test]
 fn error_f() {
     perrorln!("123456\n789\u{8}\u{8}a");
