@@ -8,6 +8,9 @@ use xml::common::TextPosition;
 #[allow(non_camel_case_types)]
 #[allow(dead_code)]
 pub enum Error {
+    // Arg parse
+    InvalidArgument { arg: String },
+
     // File IO
     FailOpenFile { e: io::Error },
 
@@ -43,11 +46,16 @@ pub enum Error {
     // Other
     UnexpectedInternalError_ReachUnexpectedInternalState,
     UnexpectedInternalError_GetUnexpectedResult,
+    UnexpectedInternalError_AvailableNextsCannotCombine,
 }
 
 impl Debug for Error {
     fn fmt(&self, f: &mut Formatter) -> FormatResult {
         match *self {
+
+            Error::InvalidArgument { ref arg } => {
+                write!(f, "Invalid argument: {}", arg)
+            }
 
             Error::FailOpenFile { ref e } => {
                 write!(f, "Failed to open config file: {}", e)
@@ -104,6 +112,9 @@ impl Debug for Error {
             }
             Error::UnexpectedInternalError_GetUnexpectedResult => {
                 write!(f, "Unexpected internal error: get unexpected result")
+            }
+            Error::UnexpectedInternalError_AvailableNextsCannotCombine => {
+                write!(f, "Unexpected internal error: available nexts cannot combine")
             }
         }
     }

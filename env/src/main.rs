@@ -1,7 +1,8 @@
 
-extern crate xml;
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
-use std::env::Args;
+extern crate xml;
 
 #[macro_use]
 mod macros;
@@ -12,6 +13,7 @@ mod input;
 mod error;
 
 use config::TargetAction;
+use error::Error;
 
 const USAGE_STRING : &'static str = 
 "Usage: 
@@ -31,171 +33,69 @@ Options:
     --version, -v               Print version and quit
     --help, -h                  Print this help string
     --config, -c                Open config file with default text editor
-
 ";
+const VERSION_STRING : &'static str = "FreskyZ's Environment Setter 0.1.0";
+const CONFIG_FILE_NAME: &'static str = ".env";
 
 fn print_usage() {
    println!("{}", USAGE_STRING);
 }
-
-#[derive(Debug)]
-enum SpecialOptions {
-    Version,
-    Help,
-    List,
-    OpenConfig,
+fn print_version() {
+    println!("{}", VERSION_STRING);
 }
-
-fn check_special_ops(arg: &str) -> Option<SpecialOptions> {
-    let arg = arg.to_lowercase();
-    match &*arg {
-        "--version" | "-v" => Some(SpecialOptions::Version),
-        "--help" | "-h" => Some(SpecialOptions::Help),
-        "--list" | "-l" => Some(SpecialOptions::List),
-        "--config" | "-c" => Some(SpecialOptions::OpenConfig),
-        _ => None, 
-    }
-}
-
-// process 3 other options and return things to input into config
-fn process_input(args: Args) -> Option<(Vec<String>, bool)> {
+fn open_config() {
     use std::process::Command;
 
-    let mut specs = Vec::new();
-    let mut configs = Vec::new();
-
-    if args.len() == 1 {
-        print_usage();
-        return None;
-    }
-
-    for arg in args.skip(1) {
-        match check_special_ops(&*arg) {
-            Some(op) => specs.push(op),
-            None => configs.push(arg),
-        }
-    }
-
-    if specs.len() > 1 {
-        perrorln!("Error: Wrong use of options");
-        print_usage();
-        return None;
-    }
-
-    let mut has_list = false;
-    if specs.len() == 1 && configs.len() == 0 {
-        match specs[0] {
-            SpecialOptions::Help => {
-                print_usage();
-                return None;
-            }
-            SpecialOptions::OpenConfig => {
-                let _ = Command::new("cmd").arg("/C").arg("start").arg(".env").spawn();
-                // let _ = Command::new("vim").arg(".env").spawn();
-                return None;
-            }
-            SpecialOptions::Version => {
-                println!("fsz-env v0.1.0");
-                return None;
-            }
-            _ => (),
-        }
-    }
-    if specs.len() == 1 {
-        has_list = true;
-    }
-
-    Some((configs, has_list))
+    let _ = Command::new("cmd").arg("/C").arg("start").arg(CONFIG_FILE_NAME).spawn();
+    // let _ = Command::new("vim").arg(".env").spawn();
 }
 
-fn apply_actions(actions: Vec<TargetAction>) {
-    use std::process::Command;
-    use std::env::var as env_var;
+// Retrieve and display info
+fn get_info(path: &str, require_list: bool) -> Result<(), Error> {
+    use config::Config;
+    use config::ConfigResult;
 
-    let mut cmd = Command::new("cmd");
-    let _ = cmd.arg("/K");
-
-    let mut scripts = Vec::new();
-    let mut new_path = env_var("PATH").unwrap_or("".to_owned());
-
-    for action in actions {
-        match action {
-            TargetAction::PathAdd(value) => {
-                new_path = value + ";" + &*new_path;
-            }
-            TargetAction::VariableAdd(var, value) => {
-                match env_var(var.clone()) {
-                    Ok(origin_path) => {
-                        cmd.env(var, value + ";" + &*origin_path);
-                    }
-                    Err(_) => {
-                        cmd.env(var, value);
-                    } 
-                }
-            }
-            TargetAction::ScriptExecute(path) => {
-                scripts.push(path);
-            }
-        }
+    let config = Config::new(CONFIG_FILE_NAME);
+    match try!(config.input(path, require_list)) {
+        result @ ConfigResult::Actions(_) => print!("Target actions for {}: {}", path, result),
+        result @ ConfigResult::AvailablePathNodes(_) => print!("Available next nodes for {} are: {}", path, result),
     }
 
-    cmd.env("PATH", new_path);
+    Ok(())
+}
 
-    match cmd.spawn() {
-        Ok(mut child) => match child.wait() {
-            Ok(_) => (), // println!("Child exit with status: {:?}", result),
-            Err(e) => println!("Child wait error: {:?}", e),
-        },
-        Err(e) => perrorln!("Process spawn error: {:?}", e),
+fn batch_apply_actions(paths: Vec<String>) -> Result<(), Error> {
+    use config::Config;
+    use applier::apply;
+
+    let config = Config::new(CONFIG_FILE_NAME);
+    let (result, errors) = config.batch(paths);
+
+    for error in errors {
+        perrorln!("Error: {:?}", error);
+    }
+
+    apply(result)
+}
+
+// Use this function to better error handle
+fn main_with_error() -> Result<(), Error> {
+    use std::env;
+    use input::InputType;
+
+    match try!(InputType::get(env::args())) {
+        InputType::Help => Ok(print_usage()),
+        InputType::Version => Ok(print_version()),
+        InputType::OpenConfig => Ok(open_config()),
+        InputType::GetInfo { path, require_list } => get_info(&*path, require_list),
+        InputType::Paths { paths } => batch_apply_actions(paths),
     }
 }
 
 fn main() {
-    use std::env::args;
-    use config::Config;
-    use config::ConfigResult;
 
-    let args = args();
-    // print_usage();
-
-    let (mut paths, has_list) = match process_input(args) {
-        Some((paths, has_list)) => (paths, has_list),
-        None => return,
-    };
-    if paths.is_empty() {
-        paths.push("".to_owned());
-    } 
-
-    //println!("paths: {:?}, has_list: {}", paths, has_list);
-
-    let mut config = match Config::new(".env", has_list) {
-        Ok(config) => config,
-        Err(e) => { println!("Error: {}", e); return; }
-    };
-    let (result, errors) = config.batch(paths);
-    for error in errors {
-        perrorln!("Error: {}", error);
-    }
-
-    match result {
-        nexts @ ConfigResult::AvailablePathNodes(..) => {
-            println!("nexts: {:?}", nexts);
-        }
-        ConfigResult::Actions(actions) => {
-            // println!("action: {:?}", actions);
-            apply_actions(actions);
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-
-    #[test]
-    #[ignore]
-    fn applying() {
-        // use std::env::var as env_var;
-        // perrorln!("PATH is {:?}", env_var("PATH").unwrap() + "SOMETHING AT TAILLLLLLLLL");
-        // perrorln!("SOMEOTHER is {:?}", env_var("SOMEOTHER"));
+    match main_with_error() {
+        Ok(_) => (),
+        Err(e) => println!("Error: {}", e),
     }
 }

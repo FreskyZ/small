@@ -5,8 +5,11 @@ mod parser;
 use self::parser::{ PathNode, ConfigEvent, ConfigParser };
 use xml::common::TextPosition;
 
+use std::collections::HashMap;
 pub use error::Error;
 pub use self::result::{ TargetAction, ConfigResult };
+pub use config::result::MergedVarAdd;
+pub use config::result::MergedResult;
 
 #[derive(Debug)]
 enum State<'a> {
@@ -316,51 +319,36 @@ fn get_target(parser: &mut ConfigParser, full_path: &str, require_list: bool) ->
 
 pub struct Config {
     file_name: String, 
-    pub require_list: bool,
-    parser: ConfigParser,
 }
 
 impl Config {
-    pub fn new(file_name: &str, require_list: bool) -> Result<Config, Error> {
-        let parser = try!(ConfigParser::from(file_name));
-        Ok(Config { 
-            file_name: file_name.to_owned(), 
-            require_list: require_list, 
-            parser: parser
-        })
+    pub fn new(file_name: &str) -> Config {
+        Config { file_name: file_name.to_owned(), }
     }
 
-    #[allow(dead_code)]
-    pub fn file_name(&self) -> &str {
-        &*self.file_name
-    }
-
-    pub fn input(&mut self, full_path: &str) -> Result<ConfigResult, Error> {
-        self.parser = try!(ConfigParser::from(&*self.file_name));
-        get_target(&mut self.parser, full_path, self.require_list)
+    pub fn input(&self, full_path: &str, require_list: bool) -> Result<ConfigResult, Error> {
+        let mut parser = try!(ConfigParser::from(&*self.file_name));
+        get_target(&mut parser, full_path, require_list)
     }
 
     // batch process input and combine results, they should be same subtype of ConfigResult
-    pub fn batch(&mut self, paths: Vec<String>) -> (ConfigResult, Vec<Error>) {
+    // combine target actions, combine to map<var, [value]>
+    pub fn batch(&self, paths: Vec<String>) -> (MergedResult, Vec<Error>) {
         let mut results = Vec::new();
-        let mut errors = Vec::new();
+        let mut errors = Vec::new();    
 
         for path in paths {
-            match self.input(&*path) {
+            match self.input(&*path, false) {
                 Ok(result) => results.push(result),
                 Err(error) => errors.push(error),
             }
         }
 
-        if results.is_empty() {
-            return (ConfigResult::Actions(Vec::new()), errors);
-        }
-        
-        match ConfigResult::combine(results) {
+        match ConfigResult::merge(results) {
             Ok(result) => (result, errors),
             Err(e) => {
                 errors.push(e);
-                (ConfigResult::Actions(Vec::new()), errors)
+                (MergedResult::new(), errors)
             }
         }
     }
@@ -381,8 +369,7 @@ mod tests {
         
         macro_rules! test_case {
             ($config: expr, $full_path: expr, $req: expr, actions: [$($actions:tt)*]) => ({
-                $config.require_list = $req;
-                match $config.input($full_path) {
+                match $config.input($full_path, $req) {
                     Ok(ConfigResult::Actions(actions)) => {
                         assert_eq!(actions, vec![$($actions)*]);
                     }
@@ -392,8 +379,7 @@ mod tests {
             });
             
             ($config: expr, $full_path: expr, $req: expr, nexts: [$($nexts:tt)*]) => ({
-                $config.require_list = $req;
-                match $config.input($full_path) {
+                match $config.input($full_path, $req) {
                     Ok(ConfigResult::AvailablePathNodes(nexts)) => {
                         assert_eq!(nexts, vec![$($nexts)*]);
                     }
@@ -403,10 +389,7 @@ mod tests {
             })
         }
 
-        let mut config = match Config::new("tests/.env", true) {
-            Ok(config) => config,
-            Err(e) => panic!("Config construct error: {}", e),
-        };
+        let config = Config::new("tests/.env");
 
         test_case!(config, "msvc/19", true,
             nexts: ["m32(x86)", "m64(amd64, x64)"]);
@@ -481,13 +464,10 @@ mod tests {
         if true { // Path to target errors 
 
             let file_name = "tests/.env_for_get_target_error";
-            let mut config = match Config::new(file_name, false) {
-                Ok(config) => config,
-                Err(e) => panic!("Unexpected config error: {}", e),
-            };
+            let config = Config::new(file_name);
 
             if true { // Invalid path
-                match config.input("abc//asd") {
+                match config.input("abc//asd", false) {
                     Err(Error::InvalidPath { path }) => assert_eq!(path, "abc//asd"),
                     Err(e) => panic!("Unexpect other error: {}", e),
                     Ok(_) => panic!("Unexpectedly succeed"),
@@ -495,7 +475,7 @@ mod tests {
             }
 
             if true { // Target not set and no child
-                match config.input("rust/1.11/MSVC") {
+                match config.input("rust/1.11/MSVC", false) {
                     Err(Error::TargetNotSet { path, path_node_pos, nodes_available }) => {
                         assert_eq!(path,  "rust/1.11/MSVC");
                         assert_eq!(path_node_pos, TextPosition { row: 51, column: 8 });
@@ -505,7 +485,7 @@ mod tests {
                     Ok(_) => panic!("Unexpectedly succeed"),
                 }
 
-                match config.input("rust") {
+                match config.input("rust", false) {
                     Err(Error::TargetNotSet { path, path_node_pos, nodes_available }) => {
                         assert_eq!(path,  "rust");
                         assert_eq!(path_node_pos, TextPosition { row: 53, column: 4 });
@@ -517,7 +497,7 @@ mod tests {
             }
 
             if true { // Target not exist
-                match config.input("py/2") {
+                match config.input("py/2", false) {
                     Err(Error::TargetNotExist { path, target_name, target_config_pos }) => {
                         assert_eq!(path,  "py/2");
                         assert_eq!(target_name, "python-278-amd64");
@@ -532,7 +512,7 @@ mod tests {
 
                 macro_rules! test_case {
                     ($config: expr, $full_path: expr, $correct: expr, $wrong: expr, $invalid: expr, $available: expr) => ({
-                        match $config.input($full_path) {
+                        match $config.input($full_path, false) {
                             Err(Error::PathNodeNotFound { path, correct_part, incorrect_node, is_invalid, nodes_available }) => {
                                 assert_eq!(path, $full_path);
                                 assert_eq!(correct_part, $correct);
