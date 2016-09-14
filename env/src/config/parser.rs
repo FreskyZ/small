@@ -169,7 +169,7 @@ impl ConfigParser {
                 target_name_buffer: String::new(),
                 target_action_buffer: Vec::new(),
             })
-            .map_err(|e| Error::FailOpenFile { e: e })
+            .map_err(|e| Error::FailOpenFile { file_name: file_name.to_owned(), e: e })
     }
 
     pub fn stream_pos(&self) -> TextPosition {

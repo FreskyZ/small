@@ -1,6 +1,7 @@
 
 use std::fmt::{ Debug, Display, Formatter, Result as FormatResult };
 use std::io;
+use std::env;
 
 use xml;
 use xml::common::TextPosition;
@@ -12,7 +13,7 @@ pub enum Error {
     InvalidArgument { arg: String },
 
     // File IO
-    FailOpenFile { e: io::Error },
+    FailOpenFile { file_name: String, e: io::Error },
 
     // XML Parse
     FailParse { e: xml::reader::Error },
@@ -41,7 +42,10 @@ pub enum Error {
     }, // also remind empty action target is abandoned
 
     // Apply
-    ProcessNotSpawned { e: io::Error },
+    EnvironmentVariableSystemCallError { e: env::VarError },
+    EnvironmentVariableOperationError { e: env::JoinPathsError },
+    TemporaryFileOperationError { e: io::Error },
+    ProcessError { e: io::Error },
 
     // Other
     UnexpectedInternalError_ReachUnexpectedInternalState,
@@ -57,8 +61,8 @@ impl Debug for Error {
                 write!(f, "Invalid argument: {}", arg)
             }
 
-            Error::FailOpenFile { ref e } => {
-                write!(f, "Failed to open config file: {}", e)
+            Error::FailOpenFile { ref file_name, ref e } => {
+                write!(f, "Failed to open config file `{}`: {}", file_name, e)
             }
 
             Error::FailParse { ref e } => {
@@ -103,7 +107,16 @@ impl Debug for Error {
                     path, target_name, target_config_pos)
             }
 
-            Error::ProcessNotSpawned { ref e } => {
+            Error::EnvironmentVariableSystemCallError { ref e } => {
+                write!(f, "Environment variable system call error: {}", e)
+            }
+            Error::EnvironmentVariableOperationError { ref e } => {
+                write!(f, "Environment variable operation error: {}", e)
+            }
+            Error::TemporaryFileOperationError { ref e } => {
+                write!(f, "Temporary file operation error: {}", e)
+            }
+            Error::ProcessError { ref e } => {
                 write!(f, "Process not spawned: {}", e)
             }
 

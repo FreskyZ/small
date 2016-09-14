@@ -2,14 +2,13 @@
 mod result;
 mod parser;
 
-use self::parser::{ PathNode, ConfigEvent, ConfigParser };
 use xml::common::TextPosition;
 
-use std::collections::HashMap;
-pub use error::Error;
-pub use self::result::{ TargetAction, ConfigResult };
+use config::parser::{ PathNode, ConfigEvent, ConfigParser };
+pub use config::result::{ TargetAction, ConfigResult };
 pub use config::result::MergedVarAdd;
 pub use config::result::MergedResult;
+pub use error::Error;
 
 #[derive(Debug)]
 enum State<'a> {
@@ -322,8 +321,8 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn new(file_name: &str) -> Config {
-        Config { file_name: file_name.to_owned(), }
+    pub fn new(file_name: String) -> Config {
+        Config { file_name: file_name, }
     }
 
     pub fn input(&self, full_path: &str, require_list: bool) -> Result<ConfigResult, Error> {
@@ -389,7 +388,7 @@ mod tests {
             })
         }
 
-        let config = Config::new("tests/.env");
+        let config = Config::new("tests/.env".to_owned());
 
         test_case!(config, "msvc/19", true,
             nexts: ["m32(x86)", "m64(amd64, x64)"]);
@@ -408,7 +407,7 @@ mod tests {
         if true { // File IO error
             let _ = match ConfigParser::from("tests/.env_some_other") {
                 Ok(_) => panic!("File open error not triggered"),
-                Err(Error::FailOpenFile { e }) => assert_eq!(e.raw_os_error().unwrap(), 2), 
+                Err(Error::FailOpenFile { file_name: _1, e }) => assert_eq!(e.raw_os_error().unwrap(), 2), 
                 Err(e) => panic!("Unexpected error throwed: {:?}", e),
             };
         }
@@ -464,7 +463,7 @@ mod tests {
         if true { // Path to target errors 
 
             let file_name = "tests/.env_for_get_target_error";
-            let config = Config::new(file_name);
+            let config = Config::new(file_name.to_owned());
 
             if true { // Invalid path
                 match config.input("abc//asd", false) {
