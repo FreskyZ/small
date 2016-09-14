@@ -1,6 +1,6 @@
 [package]
 name = "fsz-env"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["FreskyZ <fresky7@outlook.com>"]
 description = "Dynamic environment variable control for Windows, for PATH decoupling and multi version control"
 

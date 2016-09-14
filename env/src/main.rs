@@ -30,7 +30,7 @@ Options:
     --help, -h                  Print this help string
     --config, -c                Open config file with default text editor
 ";
-const VERSION_STRING : &'static str = "FreskyZ's Environment Setter 0.1.0";
+const VERSION_STRING : &'static str = "FreskyZ's Environment Setter 0.1.1";
 const CONFIG_FILE_NAME: &'static str = ".env";
 
 // Dirty things, do not open it
@@ -72,7 +72,7 @@ fn config_file_name() -> String {
 // InputType distributer
 use error::Error;
 fn print_usage() {
-   println!("{}", USAGE_STRING);
+   println!("{}\n{}", VERSION_STRING, USAGE_STRING);
 }
 fn print_version() {
     println!("{}", VERSION_STRING);
@@ -126,7 +126,6 @@ fn main_with_error() -> Result<(), Error> {
     }
 }
 
-// Change something at branch
 fn main() {
     
     match main_with_error() {
