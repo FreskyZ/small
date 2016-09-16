@@ -1,0 +1,6 @@
+1. Try clear outdate temp files, 2016-09-19T14:00:00, Open
+    Temp files seems not cleared, for unknown reason
+    So, when startup, get temp files in the directory, check time if after 
+    some time, e.g. one day, delete them
+
+Moved to Repos\fenv, plan to change executable name to `fenv`, which is "Fresky's Environment Variable Helper"
