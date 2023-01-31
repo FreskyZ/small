@@ -20,17 +20,15 @@ from urllib.parse import urlparse
 PLAYER = '/mnt/c/Program Files/DAUM/PotPlayer/PotPlayerMini64.exe'
 # danmaku2ass install location, convert danmaku xml to ass subtitle
 DANMAKU_CONVERTER = '/usr/local/bin/danmaku2ass'
+# danmaku customize display
+DANMAKU_FONTFACE = 'Microsoft Yahei'
+DANMAKU_FONTSIZE = 14
+DANMAKU_NORMAL_DURATION = 12 # normal danmaku's duration to move right to left
+DANMAKU_ALPHA = 0.7
+# v is really short name, may think up of some other
+PROGRAM_NAME = 'v'
 
-# TODO: 
-# 1. remove use of you-get and change to simple text processing
-#    and simple large file download library (I'm not insterested in implementing progress bar)
-# 2. use danmaku2ass as library or implement by myself or use a video player with danmaku support
-# 3. use shutil instead of os.system(mv)
-# 4. find more resolution option of video, 480p is really kind of small,
-#    while 1080p is kind of large in file size, 720p should be ok
-# 5. try implement play while downloading
-
-if len(sys.argv) != 2:
+if len(sys.argv) != 2 and (sys.argv[1] != 'dry' or len(sys.argv) != 3): 
     print(f'Usage: {sys.argv[0]} https://www.bilibili.com/video/BVxxxxxxxx')
     exit(0)
 
@@ -39,85 +37,72 @@ def validate(condition: bool, message: str):
         print(f'v error: {message}')
         exit(1)
 
-url = urlparse(sys.argv[1])
-url = url._replace(query = '')
-validate(url.scheme == 'https', 'invalid url, expect https, does bilibili currently support non https?')
-validate(url.netloc in ('www.bilibili.com', 'bilibili.com'), 'invalid url, unknown website')
-validate(url.path.startswith('/video/'), 'invalid url, not video url')
+dry = sys.argv[1] == 'dry'
+bvid = 'BV'
+video_url = sys.argv[2] if dry else sys.argv[1]
 
-# this is before fetch data by myself and that video data already contains both avid and bvid and cid
-def bv2av(bvid: str):
-    ''' input should not include 'BV', result does not include 'av' '''
-    validate(len(bvid) == 10, 'invalid bvid')
-    avid = 0
-    for i, j in enumerate([11, 10, 3, 8, 4, 6]):
-        avid += 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'.find(bvid[j]) * 58 ** i
-    return f'{(avid - 8728348608) ^ 177451812}'
-# avid = bv2av(url.path[9:])
-# print(f'v: av{avid}')
+if video_url.startswith('BV'):
+    bvid = video_url
+    video_url = f'https://www.bilibili.com/video/{bvid}'
+else:
+    url = urlparse(video_url)
+    # remove useless query, remove trailing / in path
+    url = url._replace(query = '', path=url.path[:-1] if url.path.endswith('/') else url.path)
+    validate(url.scheme == 'https', 'invalid url, expect https, does bilibili currently support non https?')
+    validate(url.netloc in ('www.bilibili.com', 'bilibili.com'), 'invalid url, unknown website')
+    validate(url.path.startswith('/video/'), 'invalid url, not video url')
+    validate(url.path.startswith('/video/BV'), 'invalid url, require BV because I\'m lazy to convert av to bv')
+    validate(len(url.path) == 19, 'invalid url, invalid bvid')
+    bvid = url.path[7:]
+    video_url = url.geturl()
+
+# these magic constants comes with WTFPL, so I'm lazy to find original source
+avid = 0
+for i, j in enumerate([11, 10, 3, 8, 4, 6]):
+    avid += 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'.find(bvid[j]) * 58 ** i
+avid = f'{(avid - 8728348608) ^ 177451812}'
 
 session = requests.Session()
-response = session.get(url.geturl())
-validate(response.status_code == 200, f'failed to open {url.geturl()}: {response.status_code}')
-validate(response.text.startswith('<!DOCTYPE html>'), f'failed to open {url.geturl()}: {response.text}')
+response = session.get(f'https://api.bilibili.com/x/web-interface/view?aid={avid}')
+validate(response.status_code == 200, f'failed to load video info: {response.status_code}')
 
-# TODO: change to https://api.bilibili.com/x/web-interface/view?aid={avid}
-initial_state_position = response.text.find('__INITIAL_STATE__=')
-validate(initial_state_position >= 0, f'failed to open {url.geturl()}: not find __INITIAL_STATE__')
-# json start from right of assignment
-initial_state_position += 18
-# json.loads does not support ignore extra data
-initial_state = None
-try:
-    initial_state = json.loads(response.text[initial_state_position:])
-except json.decoder.JSONDecodeError as ex:
-    if ex.msg != 'Extra data':
-        raise
-    initial_state = json.loads(response.text[initial_state_position:initial_state_position + ex.pos])
+videoinfo = json.loads(response.text)
+validate(videoinfo['code'] == 0, f'failed to load video info: {videoinfo["message"]}')
 
-play_info_position = response.text.find('__playinfo__=')
-validate(initial_state_position >= 0, f'failed to open {url.geturl()}: not find __playinfo__')
-play_info_position += 13
-play_info = None
-try:
-    play_info = json.loads(response.text[play_info_position:])
-except json.decoder.JSONDecodeError as ex:
-    if ex.msg != 'Extra data':
-        raise
-    play_info = json.loads(response.text[play_info_position:play_info_position + ex.pos])
-# play info has bilibili api common wrapper (code, message, data, etc.)
-play_info = play_info['data']
-
-avid = str(initial_state['aid'])
-bvid: str = initial_state['bvid']
-cid = str(initial_state['videoData']['cid'])
-video_title: str = initial_state['videoData']['title']
-video_cover: str = initial_state['videoData']['pic']
-video_publish = datetime.fromtimestamp(initial_state['videoData']['pubdate'])
-video_description: str = initial_state['videoData']['desc'] # desc_v2 seems no use
-video_stat_view: int = initial_state['videoData']['stat']['view']
-video_stat_like: int = initial_state['videoData']['stat']['like']
-video_stat_coin: int = initial_state['videoData']['stat']['coin']
-video_stat_favorite: int = initial_state['videoData']['stat']['favorite']
-video_stat_danmaku: int = initial_state['videoData']['stat']['danmaku']
-video_stat_reply: int = initial_state['videoData']['stat']['reply']
-video_up_name: str = initial_state['upData']['name']
-video_up_userid: int = initial_state['upData']['mid']
+videoinfo = videoinfo['data'] # remove common api wrapper
+cid = str(videoinfo['cid'])
+video_title: str = videoinfo['title']
+video_cover: str = videoinfo['pic']
+video_publish = datetime.fromtimestamp(videoinfo['pubdate'])
+video_description: str = videoinfo['desc'] # desc_v2 seems no use
+video_stat_view: int = videoinfo['stat']['view']
+video_stat_like: int = videoinfo['stat']['like']
+video_stat_coin: int = videoinfo['stat']['coin']
+video_stat_favorite: int = videoinfo['stat']['favorite']
+video_stat_danmaku: int = videoinfo['stat']['danmaku']
+video_stat_reply: int = videoinfo['stat']['reply']
+video_up_name: str = videoinfo['owner']['name']
+video_up_userid: int = videoinfo['owner']['mid']
 
 # result directory
 directory = f'av{avid}'
-if not os.path.exists(directory):
+if not dry and not os.path.exists(directory):
     os.mkdir(directory)
 
-print(f'v: id: av{avid}/{bvid} ({cid})')
-print(f'v: title: {video_title}')
-print(f'v: publish time: {video_publish.strftime("%Y-%m-%d %H:%M:%S %z")}')
-print(f'v: uploader: {video_up_name} (https://space.bilibili.com/{video_up_userid})')
-print(f'v: stat: 👀 {video_stat_view} 👍 {video_stat_like} ⚪ {video_stat_coin} ❤️ {video_stat_favorite} danmaku {video_stat_danmaku} reply {video_stat_reply}')
-print(f'v: video desc:\n{video_description}')
+print(f'{PROGRAM_NAME}: av{avid}/{bvid} ({cid})')
+print(f'{PROGRAM_NAME}: {video_title}')
+print(f'{PROGRAM_NAME}: {video_publish.strftime("%Y-%m-%d %H:%M:%S %z")}')
+print(f'{PROGRAM_NAME}: {video_up_name} (https://space.bilibili.com/{video_up_userid})')
+print(f'{PROGRAM_NAME}: 👀 {video_stat_view:,} 👍 {video_stat_like:,} ⚪ {video_stat_coin:,} ❤️ {video_stat_favorite:,} danmaku {video_stat_danmaku:,} reply {video_stat_reply:,}')
+print(video_description)
+
+# write title to file, or else no other place to store that
+if not dry and not os.path.exists(f'{directory}/title.txt'):
+    with open(f'{directory}/title.txt', 'w') as f:
+        f.write(video_title)
 
 # download cover
-if not os.path.exists(f'{directory}/cover.jpg'):
+if not dry and not os.path.exists(f'{directory}/cover.jpg'):
     response = session.get(video_cover)
     validate(response.status_code == 200, f'failed to download video cover: {response.status_code}')
     validate(response.headers['Content-Type'] == 'image/jpeg', f'failed to download video cover: unknown content type {response.headers["Content-Type"]}')
@@ -125,77 +110,122 @@ if not os.path.exists(f'{directory}/cover.jpg'):
         f.write(response.content)
 
 # download danmaku
-if not os.path.exists(f'{directory}/danmaku.xml'):
+if not dry and not os.path.exists(f'{directory}/danmaku.xml'):
     response = session.get(f'https://comment.bilibili.com/{cid}.xml')
     validate(response.status_code == 200, f'failed to download danmaku: {response.status_code}')
     validate(response.headers['Content-Type'] == 'text/xml', f'failed to download danmaku: unknown content type {response.headers["Content-Type"]}')
     with open(f'{directory}/danmaku.xml', 'wb') as f:
         f.write(response.content)
 
-# response = requests.get(f'https://api.bilibili.com/x/player/playurl?avid={avid}&qn=0&type=&otype=json&fnver=0&fnval=16&fourk=1')
+# height needed for convert danmaku to subtitle's stage size
+video_height: int = -1
+# in seconds, this in theory is not needed later, but other info that prepared are already here, so put it here also for no duplicate print
+video_duration: int = 0
+# in bytes, filesize and source needed for actual download, convert subtitle before that to allow for play while downloading
+video_filesize: int = 0
+# # amazingly python typings are default strict
+video_source: str | None = None
+# prepare for download video
+if not os.path.exists(f'{directory}/video.mp4'):
+    # do not write cookie in tracked source code
+    COOKIE = None
+    with open('COOKIE', 'r') as f:
+        COOKIE = f.read()
 
-exit(0)
+    # prefer 64 (720p),
+    # it automatically downgrades if specifed quality not exist, it's ok because 1080p(qn=80) filesize is really large
+    response = session.get(f'https://api.bilibili.com/x/player/playurl?cid={cid}&avid={avid}&qn=64', headers={ 'Cookie': COOKIE })
+    validate(response.status_code == 200, f'failed to load play info: {response.status_code}')
+    playinfo = json.loads(response.text)
+    validate(playinfo['code'] == 0, f'failed to load play info: {playinfo["message"]}')
+    playinfo = playinfo['data'] # remove common api result wrapper
 
-
-print(f'% you-get --json {url}')
-info = json.loads(subprocess.check_output(['you-get', '--json', url]))
-# single quote is hard to process in shell, you-get already changed them to underline
-# also brackets
-# but danmaku file forget to replace single quote
-title = info['title'].replace('\'', '_').replace('[', '(').replace(']', ')')
-# print(f'title: {title}')
-danmaku_title = info['title'].replace('[', '(').replace(']', ')')
-video_title = info['title'].replace('\'', '_').replace('[', '(').replace(']', ')')
-if not os.path.exists(avid):
-    os.mkdir(avid)
-
-# only this 480p resolution available, use this
-format = 'dash-flv480'
-if format not in info['streams']:
-    print('expect 480p mp4 available')
-    exit(1)
-if len(info['streams'][format]['src']) != 2:
-    print('unexpect source url count, not 2 parts')
-    exit(1)
-
-def exec(command):
-    print(f'% {command}')
-    code = os.system(command)
-    if code:
-        print(f'command {command} failed with code {code}')
-        exit(code)
-
-# the download process, -o: output directory
-exec(f'you-get -F {format} -o {avid} {url}')
-
-# this is manual merge mp4 video and audio part
-# but you-get actually does this if ffmpeg is installed (which was not when I wrote this)
-if os.path.exists(f'{avid}/{video_title}[00].mp4'):
-    # rename original video file
-    exec(f'mv "{avid}/{video_title}[00].mp4" {avid}/videoonly.mp4')
-    exec(f'mv "{avid}/{video_title}[01].mp4" {avid}/audioonly.mp4')
-    # merge mp4 video and audio
-    # `-c:v copy`: copy video encoding
-    # `-c:a aac`: audio encoding aac
-    # `-map 0:0`: copy input video 0 stream 0 to target video stream 0
-    # `-map 1:0`: copy input video 1 stream 0 to target video stream 1
-    exec(f'ffmpeg -i {avid}/videoonly.mp4 -i {avid}/audioonly.mp4 -c:v copy -c:a aac -map 0:0 -map 1:0 video.mp4')
+    qn = playinfo['quality']
+    video_height = 720 if qn == 64 else 480 if qn == 32 else 360 if qn == 16 else -1
+    # [0]: durl seems supports multi-p, but currently this feature is becomes rarer used
+    # in milliseconds, but millisecond is not important here, so discard to use second
+    video_duration: int = playinfo['durl'][0]['length'] // 1000
+    video_filesize = playinfo['durl'][0]['size']
+    video_source = playinfo['durl'][0]['url']
 else:
-    # rename original video file
-    exec(f'mv "{avid}/{video_title}.mp4" {avid}/video.mp4')
-# rename original danmaku file
-exec(f'mv "{avid}/{danmaku_title}.cmt.xml" {avid}/danmaku.xml')
+    # if file exists, display file info
+    # does not need check dry, this operation does not write file
+    ffprobe_output = subprocess.check_output('ffprobe av563849468/video.mp4 -show_streams -select_streams v:0 -of json -v quiet'.split(' '))
+    streaminfo = json.loads(ffprobe_output)['streams'][0]
+
+    video_height: int = streaminfo['height']
+    video_duration = int(float(streaminfo['duration'])) # already in seconds, remove decimal part
+
+print(f'{PROGRAM_NAME}: quality: {video_height}p')
+print(f'{PROGRAM_NAME}: duration: {video_duration // 60}:{video_duration % 60}')
+
+danmaku_count: int = 0
 # convert xml danmaku to ass danmaku
-# -fs 12: font size 12
-# -dm 10: normal danmaku move speed 10 (as duration for moving from right to left)
-# -a 0.6: display alpha
-exec(f'{DANMAKU_CONVERTER} {avid}/danmaku.xml -s840x480 -fn "Microsoft Yahei" -fs 14 -dm 12 -a 0.7 -o {avid}/video.ass')
-# count danmaku, configparser does not support duplicate option, but count for substring occurance is enough
-danmaku_count = 0
-with open(f'{avid}/video.ass', 'r') as f:
-    danmaku_count = f.read().count('Dialogue:')
-# play video, should auto select subtitle
-# this will immediately return when process created, and if not wait, this script process will not wait for that video player process to end
-# redirect stdout and stderr because potplayer is logging to them
-print(f'% playing {avid}/video.mp4 ({danmaku_count} danmaku)')
-subprocess.Popen([PLAYER, f'{avid}/video.mp4'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+if os.path.exists(f'{directory}/danmaku.xml'):
+    if not os.path.exists(f'{directory}/video.ass'):
+        # this default to output to stdout, so can capture and count for danmaku
+        result = subprocess.check_output([
+            DANMAKU_CONVERTER,
+            f'{directory}/danmaku.xml',
+            '-s',
+            # default to 360p, if video height has error, only renders danmaku in small area
+            '1280x720' if video_height == 720 else '858x480' if video_height == 480 else '480x360',
+            '-fn',
+            f'"{DANMAKU_FONTFACE}"',
+            '-fs',
+            str(DANMAKU_FONTSIZE),
+            '-dm',
+            str(DANMAKU_NORMAL_DURATION),
+            '-a',
+            str(DANMAKU_ALPHA),
+        ]).decode('utf-8')
+        # count danmaku, configparser does not support duplicate option, but count for substring occurance is enough
+        danmaku_count = result.count('Dialogue:')
+        if not dry:
+            with open(f'{directory}/video.ass', 'w') as f:
+                f.write(result)
+        # this else is really strange: danmaku.xml exists, video.ass not exist and specified dry
+    else:
+        # get danmaku count
+        with open(f'{directory}/video.ass', 'r') as f:
+            danmaku_count = f.read().count('Dialogue:')
+
+def invoke_player():
+    # play video, should auto select subtitle
+    # this will immediately return when process created, not wait exit
+    # redirect stdout and stderr because potplayer is logging to them
+    print(f'{PROGRAM_NAME}: playing {directory}/video.mp4 ({danmaku_count} danmaku)')
+    subprocess.Popen([PLAYER, f'{directory}/video.mp4'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+if video_source is None:
+    if os.path.exists(f'{directory}/video.mp4'):
+        # directory start play if video is downloaded
+        invoke_player()
+elif not dry:
+    # actual download video
+    print(f'{PROGRAM_NAME}: filesize: {video_filesize/1048576:.2f}mb')
+
+    # my network speed is 10mbps level, refresh for about 10 times per second
+    display_range = 200_000
+    current_filesize = 0
+    next_display_filesize = display_range
+    response = session.get(video_source, stream=True, headers={
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.13; rv:56.0) Gecko/20100101 Firefox/56.0',
+        # the pause and resume part should not be difficult,
+        # but I'm lazy and I'm not downloading large files (1080p is not preferred) so manual delete and retry should be ok
+        'Range': 'bytes=0-',
+        'Referer': video_url,
+        'Origin': 'https://www.bilibili.com',
+        'Connection': 'keep-alive',
+    })
+    with open(f'{directory}/video.mp4', 'wb') as video_file:
+        invoke_player()
+        print(f'{PROGRAM_NAME}: downloading 0.00% (0/{video_filesize} bytes)', end='\r', flush=True)
+        # use 4k as chunk size seems kind of small, but at least don't use filesize/100, in case filesize has error
+        for data in response.iter_content(chunk_size=4096):
+            video_file.write(data)
+            current_filesize += len(data)
+            if current_filesize > next_display_filesize:
+                next_display_filesize = current_filesize + display_range
+                print(f'{PROGRAM_NAME}: downloading {current_filesize * 100 / video_filesize:.2f}% ({current_filesize}/{video_filesize} bytes)', end='\r', flush=True)
+        print(f'{PROGRAM_NAME}: downloading 100.00% ({video_filesize}/{video_filesize} bytes)', flush=True)
