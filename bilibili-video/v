@@ -1,5 +1,7 @@
 #!python3.10
-import json, os, re, subprocess, sys
+import json, os, requests, subprocess, sys
+from datetime import datetime
+from urllib.parse import urlparse
 
 # yet another bilibili video downloader, making use of the famous you-get downloader.
 #
@@ -19,21 +21,6 @@ PLAYER = '/mnt/c/Program Files/DAUM/PotPlayer/PotPlayerMini64.exe'
 # danmaku2ass install location, convert danmaku xml to ass subtitle
 DANMAKU_CONVERTER = '/usr/local/bin/danmaku2ass'
 
-# help message, although -h or --help is not available
-HELP = f'''download bilibili video and open with local video player
-
-Usage: {sys.argv[0]} [OPTIONS] [URL]
-
-Options:
-  i     get video info, not actually downloading
-
-URL is in form of
-  https://www.bilibili.com/video/BVxxxxxxxx
-which comes from copy link in web page.
-
-rewatch video in folder with avid name in current directory
-'''
-
 # TODO: 
 # 1. remove use of you-get and change to simple text processing
 #    and simple large file download library (I'm not insterested in implementing progress bar)
@@ -43,36 +30,112 @@ rewatch video in folder with avid name in current directory
 #    while 1080p is kind of large in file size, 720p should be ok
 # 5. try implement play while downloading
 
-if not sys.argv[1:] or (sys.argv[1] == 'i' and not sys.argv[2:]):
-    print(HELP)
+if len(sys.argv) != 2:
+    print(f'Usage: {sys.argv[0]} https://www.bilibili.com/video/BVxxxxxxxx')
     exit(0)
 
-if sys.argv[1] == 'i':
-    url = sys.argv[2]
-    os.system(f'you-get -i {url}')
-    exit(0)
+def validate(condition: bool, message: str):
+    if not condition:
+        print(f'v error: {message}')
+        exit(1)
 
-url = sys.argv[1]
-url = url.split('?')[0] # query parameter in bilibili webpage in pure garbage from technical view
-match = re.match(r'https://www\.bilibili\.com/video/(\w+)', url)
-if not match:
-    print('unrecognized url')
-    exit(1)
+url = urlparse(sys.argv[1])
+url = url._replace(query = '')
+validate(url.scheme == 'https', 'invalid url, expect https, does bilibili currently support non https?')
+validate(url.netloc in ('www.bilibili.com', 'bilibili.com'), 'invalid url, unknown website')
+validate(url.path.startswith('/video/'), 'invalid url, not video url')
 
-# these magic constants are distributed with WTFPL so I'm lazy to include source url
-LOOKUP = 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'
-REVLOOKUP = {}
-for i, c in enumerate(LOOKUP):
-    REVLOOKUP[c] = i
+# this is before fetch data by myself and that video data already contains both avid and bvid and cid
+def bv2av(bvid: str):
+    ''' input should not include 'BV', result does not include 'av' '''
+    validate(len(bvid) == 10, 'invalid bvid')
+    avid = 0
+    for i, j in enumerate([11, 10, 3, 8, 4, 6]):
+        avid += 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'.find(bvid[j]) * 58 ** i
+    return f'{(avid - 8728348608) ^ 177451812}'
+# avid = bv2av(url.path[9:])
+# print(f'v: av{avid}')
 
-bvid = match[1]
-# print(f'id: {id}')
-avid = 0
-for i, j in enumerate([11, 10, 3, 8, 4, 6]):
-    avid += REVLOOKUP[bvid[j]] * 58 ** i
-avid = f'av{(avid - 8728348608) ^ 177451812}'
-# this is not shell command, but use this format for alignment
-print(f'% {avid}')
+session = requests.Session()
+response = session.get(url.geturl())
+validate(response.status_code == 200, f'failed to open {url.geturl()}: {response.status_code}')
+validate(response.text.startswith('<!DOCTYPE html>'), f'failed to open {url.geturl()}: {response.text}')
+
+# TODO: change to https://api.bilibili.com/x/web-interface/view?aid={avid}
+initial_state_position = response.text.find('__INITIAL_STATE__=')
+validate(initial_state_position >= 0, f'failed to open {url.geturl()}: not find __INITIAL_STATE__')
+# json start from right of assignment
+initial_state_position += 18
+# json.loads does not support ignore extra data
+initial_state = None
+try:
+    initial_state = json.loads(response.text[initial_state_position:])
+except json.decoder.JSONDecodeError as ex:
+    if ex.msg != 'Extra data':
+        raise
+    initial_state = json.loads(response.text[initial_state_position:initial_state_position + ex.pos])
+
+play_info_position = response.text.find('__playinfo__=')
+validate(initial_state_position >= 0, f'failed to open {url.geturl()}: not find __playinfo__')
+play_info_position += 13
+play_info = None
+try:
+    play_info = json.loads(response.text[play_info_position:])
+except json.decoder.JSONDecodeError as ex:
+    if ex.msg != 'Extra data':
+        raise
+    play_info = json.loads(response.text[play_info_position:play_info_position + ex.pos])
+# play info has bilibili api common wrapper (code, message, data, etc.)
+play_info = play_info['data']
+
+avid = str(initial_state['aid'])
+bvid: str = initial_state['bvid']
+cid = str(initial_state['videoData']['cid'])
+video_title: str = initial_state['videoData']['title']
+video_cover: str = initial_state['videoData']['pic']
+video_publish = datetime.fromtimestamp(initial_state['videoData']['pubdate'])
+video_description: str = initial_state['videoData']['desc'] # desc_v2 seems no use
+video_stat_view: int = initial_state['videoData']['stat']['view']
+video_stat_like: int = initial_state['videoData']['stat']['like']
+video_stat_coin: int = initial_state['videoData']['stat']['coin']
+video_stat_favorite: int = initial_state['videoData']['stat']['favorite']
+video_stat_danmaku: int = initial_state['videoData']['stat']['danmaku']
+video_stat_reply: int = initial_state['videoData']['stat']['reply']
+video_up_name: str = initial_state['upData']['name']
+video_up_userid: int = initial_state['upData']['mid']
+
+# result directory
+directory = f'av{avid}'
+if not os.path.exists(directory):
+    os.mkdir(directory)
+
+print(f'v: id: av{avid}/{bvid} ({cid})')
+print(f'v: title: {video_title}')
+print(f'v: publish time: {video_publish.strftime("%Y-%m-%d %H:%M:%S %z")}')
+print(f'v: uploader: {video_up_name} (https://space.bilibili.com/{video_up_userid})')
+print(f'v: stat: 👀 {video_stat_view} 👍 {video_stat_like} ⚪ {video_stat_coin} ❤️ {video_stat_favorite} danmaku {video_stat_danmaku} reply {video_stat_reply}')
+print(f'v: video desc:\n{video_description}')
+
+# download cover
+if not os.path.exists(f'{directory}/cover.jpg'):
+    response = session.get(video_cover)
+    validate(response.status_code == 200, f'failed to download video cover: {response.status_code}')
+    validate(response.headers['Content-Type'] == 'image/jpeg', f'failed to download video cover: unknown content type {response.headers["Content-Type"]}')
+    with open(f'{directory}/cover.jpg', 'wb') as f:
+        f.write(response.content)
+
+# download danmaku
+if not os.path.exists(f'{directory}/danmaku.xml'):
+    response = session.get(f'https://comment.bilibili.com/{cid}.xml')
+    validate(response.status_code == 200, f'failed to download danmaku: {response.status_code}')
+    validate(response.headers['Content-Type'] == 'text/xml', f'failed to download danmaku: unknown content type {response.headers["Content-Type"]}')
+    with open(f'{directory}/danmaku.xml', 'wb') as f:
+        f.write(response.content)
+
+# response = requests.get(f'https://api.bilibili.com/x/player/playurl?avid={avid}&qn=0&type=&otype=json&fnver=0&fnval=16&fourk=1')
+
+exit(0)
+
 
 print(f'% you-get --json {url}')
 info = json.loads(subprocess.check_output(['you-get', '--json', url]))
