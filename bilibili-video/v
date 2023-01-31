@@ -1,0 +1,138 @@
+#!python3.10
+import json, os, re, subprocess, sys
+
+# yet another bilibili video downloader, making use of the famous you-get downloader.
+#
+# video version of bilibili live stream replacer (yabai)[https://github.com/FreskyZ/yabai],
+# they also share similar functionality and design principle to open result with local video player.
+#
+# this project is motivated from the stupid bug that I cannot watch bilibili video in browser on pc,
+# the web page just become dead at a particular time after page content is loaded,
+# not like common bug that everything goes wrong if serious bug happens in web page development process,
+# it seems to die before video element actually starts to play, even F12 cannot open (or if you open in advance,
+# nothing special prints), and the whole browser become slow to respond until tab is closed several seconds
+# after close button is closed, I assume either bilibili or edge makes this bug, or even both of them, because
+# both of them looks like will make this kind of error according to their recent years or months of behavior.
+
+# video player, I'm calling windows video player from wsl
+PLAYER = '/mnt/c/Program Files/DAUM/PotPlayer/PotPlayerMini64.exe'
+# danmaku2ass install location, convert danmaku xml to ass subtitle
+DANMAKU_CONVERTER = '/usr/local/bin/danmaku2ass'
+
+# help message, although -h or --help is not available
+HELP = f'''download bilibili video and open with local video player
+
+Usage: {sys.argv[0]} [OPTIONS] [URL]
+
+Options:
+  i     get video info, not actually downloading
+
+URL is in form of
+  https://www.bilibili.com/video/BVxxxxxxxx
+which comes from copy link in web page.
+
+rewatch video in folder with avid name in current directory
+'''
+
+# TODO: 
+# 1. remove use of you-get and change to simple text processing
+#    and simple large file download library (I'm not insterested in implementing progress bar)
+# 2. use danmaku2ass as library or implement by myself or use a video player with danmaku support
+# 3. use shutil instead of os.system(mv)
+# 4. find more resolution option of video, 480p is really kind of small,
+#    while 1080p is kind of large in file size, 720p should be ok
+# 5. try implement play while downloading
+
+if not sys.argv[1:] or (sys.argv[1] == 'i' and not sys.argv[2:]):
+    print(HELP)
+    exit(0)
+
+if sys.argv[1] == 'i':
+    url = sys.argv[2]
+    os.system(f'you-get -i {url}')
+    exit(0)
+
+url = sys.argv[1]
+url = url.split('?')[0] # query parameter in bilibili webpage in pure garbage from technical view
+match = re.match(r'https://www\.bilibili\.com/video/(\w+)', url)
+if not match:
+    print('unrecognized url')
+    exit(1)
+
+# these magic constants are distributed with WTFPL so I'm lazy to include source url
+LOOKUP = 'fZodR9XQDSUm21yCkr6zBqiveYah8bt4xsWpHnJE7jL5VG3guMTKNPAwcF'
+REVLOOKUP = {}
+for i, c in enumerate(LOOKUP):
+    REVLOOKUP[c] = i
+
+bvid = match[1]
+# print(f'id: {id}')
+avid = 0
+for i, j in enumerate([11, 10, 3, 8, 4, 6]):
+    avid += REVLOOKUP[bvid[j]] * 58 ** i
+avid = f'av{(avid - 8728348608) ^ 177451812}'
+# this is not shell command, but use this format for alignment
+print(f'% {avid}')
+
+print(f'% you-get --json {url}')
+info = json.loads(subprocess.check_output(['you-get', '--json', url]))
+# single quote is hard to process in shell, you-get already changed them to underline
+# also brackets
+# but danmaku file forget to replace single quote
+title = info['title'].replace('\'', '_').replace('[', '(').replace(']', ')')
+# print(f'title: {title}')
+danmaku_title = info['title'].replace('[', '(').replace(']', ')')
+video_title = info['title'].replace('\'', '_').replace('[', '(').replace(']', ')')
+if not os.path.exists(avid):
+    os.mkdir(avid)
+
+# only this 480p resolution available, use this
+format = 'dash-flv480'
+if format not in info['streams']:
+    print('expect 480p mp4 available')
+    exit(1)
+if len(info['streams'][format]['src']) != 2:
+    print('unexpect source url count, not 2 parts')
+    exit(1)
+
+def exec(command):
+    print(f'% {command}')
+    code = os.system(command)
+    if code:
+        print(f'command {command} failed with code {code}')
+        exit(code)
+
+# the download process, -o: output directory
+exec(f'you-get -F {format} -o {avid} {url}')
+
+# this is manual merge mp4 video and audio part
+# but you-get actually does this if ffmpeg is installed (which was not when I wrote this)
+if os.path.exists(f'{avid}/{video_title}[00].mp4'):
+    # rename original video file
+    exec(f'mv "{avid}/{video_title}[00].mp4" {avid}/videoonly.mp4')
+    exec(f'mv "{avid}/{video_title}[01].mp4" {avid}/audioonly.mp4')
+    # merge mp4 video and audio
+    # `-c:v copy`: copy video encoding
+    # `-c:a aac`: audio encoding aac
+    # `-map 0:0`: copy input video 0 stream 0 to target video stream 0
+    # `-map 1:0`: copy input video 1 stream 0 to target video stream 1
+    exec(f'ffmpeg -i {avid}/videoonly.mp4 -i {avid}/audioonly.mp4 -c:v copy -c:a aac -map 0:0 -map 1:0 video.mp4')
+else:
+    # rename original video file
+    exec(f'mv "{avid}/{video_title}.mp4" {avid}/video.mp4')
+# rename original danmaku file
+exec(f'mv "{avid}/{danmaku_title}.cmt.xml" {avid}/danmaku.xml')
+# convert xml danmaku to ass danmaku
+# -fs 12: font size 12
+# -dm 10: normal danmaku move speed 10 (as duration for moving from right to left)
+# -a 0.6: display alpha
+exec(f'{DANMAKU_CONVERTER} {avid}/danmaku.xml -s840x480 -fn "Microsoft Yahei" -fs 14 -dm 12 -a 0.7 -o {avid}/video.ass')
+# count danmaku, configparser does not support duplicate option, but count for substring occurance is enough
+danmaku_count = 0
+with open(f'{avid}/video.ass', 'r') as f:
+    danmaku_count = f.read().count('Dialogue:')
+# play video, should auto select subtitle
+# this will immediately return when process created, and if not wait, this script process will not wait for that video player process to end
+# redirect stdout and stderr because potplayer is logging to them
+print(f'% playing {avid}/video.mp4 ({danmaku_count} danmaku)')
+subprocess.Popen([PLAYER, f'{avid}/video.mp4'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
