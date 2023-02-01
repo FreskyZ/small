@@ -1,5 +1,5 @@
 #!python3.10
-import json, os, requests, subprocess, sys
+import argparse, json, os, requests, subprocess, time
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -28,19 +28,25 @@ DANMAKU_ALPHA = 0.7
 # v is really short name, may think up of some other
 PROGRAM_NAME = 'v'
 
-if len(sys.argv) != 2 and (sys.argv[1] != 'dry' or len(sys.argv) != 3): 
-    print(f'Usage: {sys.argv[0]} https://www.bilibili.com/video/BVxxxxxxxx')
-    exit(0)
+# TODO
+# 1. change from danmaku2ass to my list style command line danmaku renderer in one version of yabai 
+
+parser = argparse.ArgumentParser(
+    prog=PROGRAM_NAME,
+    description='yet another bilibili video downloader')
+parser.add_argument('url', metavar='URL', help='video url or bvid')
+parser.add_argument('-d', '--dry', action='store_true', help='dry run, does not write any file (does not affect previously written file)')
+parser.add_argument('-u', '--ultra', action='store_true', help='prefer 1080p ultra high resolution')
+parser.add_argument('-n', '--no-play', action='store_true', help='do no start playing')
+args = parser.parse_args()
 
 def validate(condition: bool, message: str):
     if not condition:
         print(f'v error: {message}')
         exit(1)
 
-dry = sys.argv[1] == 'dry'
 bvid = 'BV'
-video_url = sys.argv[2] if dry else sys.argv[1]
-
+video_url = args.url
 if video_url.startswith('BV'):
     bvid = video_url
     video_url = f'https://www.bilibili.com/video/{bvid}'
@@ -48,10 +54,11 @@ else:
     url = urlparse(video_url)
     # remove useless query, remove trailing / in path
     url = url._replace(query = '', path=url.path[:-1] if url.path.endswith('/') else url.path)
-    validate(url.scheme == 'https', 'invalid url, expect https, does bilibili currently support non https?')
+    validate(not url.netloc.startswith('av'), 'invalid url, require BV because I\'m lazy to convert av to bv')
+    validate(not url.scheme or url.scheme == 'https', 'invalid url, expect https, does bilibili currently support non https?')
     validate(url.netloc in ('www.bilibili.com', 'bilibili.com'), 'invalid url, unknown website')
     validate(url.path.startswith('/video/'), 'invalid url, not video url')
-    validate(url.path.startswith('/video/BV'), 'invalid url, require BV because I\'m lazy to convert av to bv')
+    validate(url.path.startswith('/video/BV'), f'invalid url, require BV because I\'m lazy to convert av to bv')
     validate(len(url.path) == 19, 'invalid url, invalid bvid')
     bvid = url.path[7:]
     video_url = url.geturl()
@@ -86,7 +93,7 @@ video_up_userid: int = videoinfo['owner']['mid']
 
 # result directory
 directory = f'av{avid}'
-if not dry and not os.path.exists(directory):
+if not args.dry and not os.path.exists(directory):
     os.mkdir(directory)
 
 print(f'{PROGRAM_NAME}: av{avid}/{bvid} ({cid})')
@@ -97,12 +104,12 @@ print(f'{PROGRAM_NAME}: 👀 {video_stat_view:,} 👍 {video_stat_like:,} ⚪ {v
 print(video_description)
 
 # write title to file, or else no other place to store that
-if not dry and not os.path.exists(f'{directory}/title.txt'):
+if not args.dry and not os.path.exists(f'{directory}/title.txt'):
     with open(f'{directory}/title.txt', 'w') as f:
         f.write(video_title)
 
 # download cover
-if not dry and not os.path.exists(f'{directory}/cover.jpg'):
+if not args.dry and not os.path.exists(f'{directory}/cover.jpg'):
     response = session.get(video_cover)
     validate(response.status_code == 200, f'failed to download video cover: {response.status_code}')
     validate(response.headers['Content-Type'] == 'image/jpeg', f'failed to download video cover: unknown content type {response.headers["Content-Type"]}')
@@ -110,7 +117,7 @@ if not dry and not os.path.exists(f'{directory}/cover.jpg'):
         f.write(response.content)
 
 # download danmaku
-if not dry and not os.path.exists(f'{directory}/danmaku.xml'):
+if not args.dry and not os.path.exists(f'{directory}/danmaku.xml'):
     response = session.get(f'https://comment.bilibili.com/{cid}.xml')
     validate(response.status_code == 200, f'failed to download danmaku: {response.status_code}')
     validate(response.headers['Content-Type'] == 'text/xml', f'failed to download danmaku: unknown content type {response.headers["Content-Type"]}')
@@ -134,14 +141,14 @@ if not os.path.exists(f'{directory}/video.mp4'):
 
     # prefer 64 (720p),
     # it automatically downgrades if specifed quality not exist, it's ok because 1080p(qn=80) filesize is really large
-    response = session.get(f'https://api.bilibili.com/x/player/playurl?cid={cid}&avid={avid}&qn=64', headers={ 'Cookie': COOKIE })
+    response = session.get(f'https://api.bilibili.com/x/player/playurl?cid={cid}&avid={avid}&qn={80 if args.ultra else 64}', headers={ 'Cookie': COOKIE })
     validate(response.status_code == 200, f'failed to load play info: {response.status_code}')
     playinfo = json.loads(response.text)
     validate(playinfo['code'] == 0, f'failed to load play info: {playinfo["message"]}')
     playinfo = playinfo['data'] # remove common api result wrapper
 
     qn = playinfo['quality']
-    video_height = 720 if qn == 64 else 480 if qn == 32 else 360 if qn == 16 else -1
+    video_height = 1080 if qn == 80 else 720 if qn == 64 else 480 if qn == 32 else 360 if qn == 16 else -1
     # [0]: durl seems supports multi-p, but currently this feature is becomes rarer used
     # in milliseconds, but millisecond is not important here, so discard to use second
     video_duration: int = playinfo['durl'][0]['length'] // 1000
@@ -150,14 +157,14 @@ if not os.path.exists(f'{directory}/video.mp4'):
 else:
     # if file exists, display file info
     # does not need check dry, this operation does not write file
-    ffprobe_output = subprocess.check_output('ffprobe av563849468/video.mp4 -show_streams -select_streams v:0 -of json -v quiet'.split(' '))
+    ffprobe_output = subprocess.check_output(f'ffprobe -i {directory}/video.mp4 -show_streams -select_streams v:0 -of json -v quiet'.split(' '))
     streaminfo = json.loads(ffprobe_output)['streams'][0]
 
     video_height: int = streaminfo['height']
     video_duration = int(float(streaminfo['duration'])) # already in seconds, remove decimal part
 
 print(f'{PROGRAM_NAME}: quality: {video_height}p')
-print(f'{PROGRAM_NAME}: duration: {video_duration // 60}:{video_duration % 60}')
+print(f'{PROGRAM_NAME}: duration: {video_duration // 60}:{video_duration % 60:02}')
 
 danmaku_count: int = 0
 # convert xml danmaku to ass danmaku
@@ -169,11 +176,13 @@ if os.path.exists(f'{directory}/danmaku.xml'):
             f'{directory}/danmaku.xml',
             '-s',
             # default to 360p, if video height has error, only renders danmaku in small area
-            '1280x720' if video_height == 720 else '858x480' if video_height == 480 else '480x360',
+            # bilibili is lying about video size, 1080p download gets 1920x960 video file
+            '1920x1080' if video_height == 1080 else '1920x960' if video_height == 960 else '1280x720' if video_height == 720 else '858x480' if video_height == 480 else '480x360',
             '-fn',
             f'"{DANMAKU_FONTFACE}"',
             '-fs',
-            str(DANMAKU_FONTSIZE),
+            # it is hard to decide actual fontsize, this for now
+            str(int(DANMAKU_FONTSIZE if video_height == 360 else DANMAKU_FONTSIZE * 1.5)),
             '-dm',
             str(DANMAKU_NORMAL_DURATION),
             '-a',
@@ -181,7 +190,7 @@ if os.path.exists(f'{directory}/danmaku.xml'):
         ]).decode('utf-8')
         # count danmaku, configparser does not support duplicate option, but count for substring occurance is enough
         danmaku_count = result.count('Dialogue:')
-        if not dry:
+        if not args.dry:
             with open(f'{directory}/video.ass', 'w') as f:
                 f.write(result)
         # this else is really strange: danmaku.xml exists, video.ass not exist and specified dry
@@ -191,17 +200,18 @@ if os.path.exists(f'{directory}/danmaku.xml'):
             danmaku_count = f.read().count('Dialogue:')
 
 def invoke_player():
-    # play video, should auto select subtitle
-    # this will immediately return when process created, not wait exit
-    # redirect stdout and stderr because potplayer is logging to them
-    print(f'{PROGRAM_NAME}: playing {directory}/video.mp4 ({danmaku_count} danmaku)')
-    subprocess.Popen([PLAYER, f'{directory}/video.mp4'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not args.no_play:
+        # play video, should auto select subtitle
+        # this will immediately return when process created, not wait exit
+        # redirect stdout and stderr because potplayer is logging to them
+        print(f'{PROGRAM_NAME}: playing {directory}/video.mp4 ({danmaku_count} danmaku)')
+        subprocess.Popen([PLAYER, f'{directory}/video.mp4'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 if video_source is None:
     if os.path.exists(f'{directory}/video.mp4'):
         # directory start play if video is downloaded
         invoke_player()
-elif not dry:
+elif not args.dry:
     # actual download video
     print(f'{PROGRAM_NAME}: filesize: {video_filesize/1048576:.2f}mb')
 
@@ -220,6 +230,7 @@ elif not dry:
     })
     with open(f'{directory}/video.mp4', 'wb') as video_file:
         invoke_player()
+        start_time = time.perf_counter()
         print(f'{PROGRAM_NAME}: downloading 0.00% (0/{video_filesize} bytes)', end='\r', flush=True)
         # use 4k as chunk size seems kind of small, but at least don't use filesize/100, in case filesize has error
         for data in response.iter_content(chunk_size=4096):
@@ -228,4 +239,5 @@ elif not dry:
             if current_filesize > next_display_filesize:
                 next_display_filesize = current_filesize + display_range
                 print(f'{PROGRAM_NAME}: downloading {current_filesize * 100 / video_filesize:.2f}% ({current_filesize}/{video_filesize} bytes)', end='\r', flush=True)
-        print(f'{PROGRAM_NAME}: downloading 100.00% ({video_filesize}/{video_filesize} bytes)', flush=True)
+        end_time = time.perf_counter()
+        print(f'{PROGRAM_NAME}: download 100.00% ({video_filesize}/{video_filesize} bytes) in {end_time - start_time:.2f}s', flush=True)
