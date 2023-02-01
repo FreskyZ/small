@@ -1,0 +1,16 @@
+{
+    "NormalKey_inline": "Normal String Value",
+    "AbnormalObject_noinline": {
+        "Name1_array_inline": [1, 2, 3],
+        "Name2_String_inline": "String inline string",
+        "Name3_array_noinline": 
+            [ 1, "123", 3, "456789 very long string to make it not inline"],
+        "Name4_array_innner_noinline": 
+        [
+            "12312321341",
+            123423412312,
+            "Very long array inner to make it not inline ~~~~~~~~~~~"
+        ]
+    },
+    "NormalKey2_inline": 42E32
+}
