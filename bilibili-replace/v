@@ -229,7 +229,8 @@ elif not args.dry:
         'Connection': 'keep-alive',
     })
     with open(f'{directory}/video.mp4', 'wb') as video_file:
-        invoke_player()
+        # potplayer currently does not handle partial mp4 file correctly
+        # invoke_player()
         start_time = time.perf_counter()
         print(f'{PROGRAM_NAME}: downloading 0.00% (0/{video_filesize} bytes)', end='\r', flush=True)
         # use 4k as chunk size seems kind of small, but at least don't use filesize/100, in case filesize has error
@@ -241,3 +242,5 @@ elif not args.dry:
                 print(f'{PROGRAM_NAME}: downloading {current_filesize * 100 / video_filesize:.2f}% ({current_filesize}/{video_filesize} bytes)', end='\r', flush=True)
         end_time = time.perf_counter()
         print(f'{PROGRAM_NAME}: download 100.00% ({video_filesize}/{video_filesize} bytes) in {end_time - start_time:.2f}s', flush=True)
+        invoke_player()
+
