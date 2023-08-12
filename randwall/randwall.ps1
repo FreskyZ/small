@@ -11,7 +11,22 @@ function randwall {
         [Parameter(Position = 0)][string]$sort = "random"
     )
     $header = @{ 'Referer' = 'https://weibo.com' }
-    $response = iwr https://iw233.cn/api.php?sort=$sort -Headers $header
+    try {
+        $response = iwr https://iw233.cn/api.php?sort=$sort -Headers $header
+    } catch {
+        write-host "error:" $_.exception.message
+        try {
+            $response = iwr https://dev.iw233.cn/api.php?sort=$sort -Headers $header
+        } catch {
+            write-host "error:" $_.exception.message
+            try {
+                $response = iwr https://api.iw233.cn/api.php?sort=$sort -Headers $header
+            } catch {
+                write-host "error:" $_.exception.message
+                return
+            }
+        }
+    }
     $filename = [system.datetime]::now.tostring('yyMMdd-HHmmss') + '.jpg'
     Set-Content $filename -value $response.content -AsByteStream
     $filesize = $response.content.length / 1000
@@ -24,5 +39,6 @@ function randwall {
     $filepath = (resolve-path $filename).path
     $image = new-object system.drawing.bitmap $filepath
     [string]::format("{0} {1}x{2} {3}", $filename, $image.width, $image.height, $filesize)
+    $image.dispose()
     Start-Process $filename
 }
