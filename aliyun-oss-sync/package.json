@@ -1,0 +1,13 @@
+{
+  "name": "aliyun-oss-sync",
+  "version": "1.0.0",
+  "main": "index.mjs",
+  "type": "module",
+  "scripts": {
+  },
+  "author": "",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "ali-oss": "^6.18.1"
+  }
+}
