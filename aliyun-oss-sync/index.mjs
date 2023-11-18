@@ -47,7 +47,9 @@ if (newObjects.length > 0) {
         await fs.mkdir(path.join(process.env['AOS_TARGET_DIR'], dir), { recursive: true });
     }
     await Promise.all(newObjects.map(async o => {
-        const localPath = path.join(process.env['AOS_TARGET_DIR'], o.name);
+        // encodeURI: this is fine (github.com/freskyz/fine) file handling bug to forget decode uri,
+        // but it's a lot harder to reestablish that develop environment for that for now, so put it here
+        const localPath = path.join(process.env['AOS_TARGET_DIR'], encodeURI(o.name));
         await client.get(o.name, localPath);
         console.log(`aos: downloaded ${o.name} => ${localPath} ${o.size/1000} kb`);
     }));
