@@ -1,6 +1,6 @@
 
 div.board {
-    display: grid;
+    display: inline-grid;
     width: 366px;
     height: 366px;
     margin-left: calc(50vw - 183px);
@@ -99,4 +99,31 @@ div.value {
     font-weight: bold;
     color: #303030;
     cursor: default;
+}
+
+div.panel {
+    display: inline-grid;
+    grid-template-rows: repeat(10, 28px);
+    grid-template-columns: 40px 40px;
+    grid-auto-flow: column;
+    gap: 8px;
+    margin-top: 8px;
+    margin-left: 4px;
+}
+
+button {
+    font-size: 14px;
+}
+
+button.toggle.pen>span:first-child {
+    visibility: visible;
+}
+button.toggle.pen>span:last-child {
+    visibility: hidden;
+}
+button.toggle.pencil>span:first-child {
+    visibility: hidden;
+}
+button.toggle.pencil>span:last-child {
+    visibility: visible;
 }
