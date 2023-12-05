@@ -1,17 +1,21 @@
 
+div.container {
+    display: grid;
+    margin-left: calc(50vw - 224px);
+    margin-top: calc(50vh - 234px);
+    grid-template-rows: 368px 60px;
+    grid-template-columns: 369px 72px;
+    gap: 8px;
+}
+
 div.board {
     display: inline-grid;
     width: 366px;
     height: 366px;
-    margin-left: calc(50vw - 183px);
-    margin-top: calc(50vh - 183px);
     border: 1px solid #606060;
     border-radius: 4px;
     grid-template-rows: 122px 122px 122px;
     grid-template-columns: 122px 122px 122px;
-}
-div.hint {
-    margin-left: calc(50vw - 100px);
 }
 
 div.block {
@@ -103,27 +107,59 @@ div.value {
 
 div.panel {
     display: inline-grid;
-    grid-template-rows: repeat(10, 28px);
-    grid-template-columns: 40px 40px;
+    grid-area: 1/2/1/2;
+    grid-template-rows: repeat(10, 32px);
+    grid-template-columns: 32px 32px;
     grid-auto-flow: column;
-    gap: 8px;
-    margin-top: 8px;
-    margin-left: 4px;
+    gap: 4px;
+    margin-top: 6px;
 }
 
 button {
-    font-size: 14px;
+    font-size: 16px;
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border-width: 1.5px;
+}
+button:not(.number) {
+    padding: 5px 4px;
 }
 
-button.toggle.pen>span:first-child {
-    visibility: visible;
+button.toggle.pen {
+    color: white;
+    background-color: lightskyblue;
+}
+button.toggle>span:last-child {
+    position: relative;
+    top: -20px;
 }
 button.toggle.pen>span:last-child {
-    visibility: hidden;
+    visibility: visible;
 }
-button.toggle.pencil>span:first-child {
+button.toggle.pen>span:first-child {
     visibility: hidden;
 }
 button.toggle.pencil>span:last-child {
+    visibility: hidden;
+}
+button.toggle.pencil>span:first-child {
     visibility: visible;
+}
+
+button.number {
+    padding-top: 2px;
+}
+button.number.active {
+    color: white;
+    background-color: lightblue;
+}
+
+div.reasons {
+    grid-area: 2/1/2/3;
+    max-height: 100px;
+    overflow-y: auto;
+}
+div.reason {
+    font-size: 10px;
 }
