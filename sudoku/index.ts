@@ -1,5 +1,6 @@
 // tsc index.ts --target es6 --lib dom,es2020
 // npx terser --ecma 2020 --compress --mangle --output index.min.js -- index.js
+// deployment note: change index.css and index.js in index.html to public path
 
 // range(1, 10), this is used frequently
 const seq = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -53,15 +54,26 @@ interface PanelElement {
     importButton: HTMLButtonElement,
     // button.clear
     clear: HTMLButtonElement,
+    // button.dark
+    dark: HTMLButtonElement,
     // button.number.number-1, index start from 1, 0 is dummy
     // click to same-value this number if this number is not on board
     numbers: HTMLButtonElement[],
     // no save/load, that's auto
     // no check, only a success modal when complete
 }
+interface ModalElement {
+    self: HTMLDivElement,
+    title: HTMLDivElement,
+    text: HTMLDivElement,
+    fileInput: HTMLInputElement,
+    cancel: HTMLButtonElement,
+    ok: HTMLButtonElement,
+}
 interface UIElement {
     panel: PanelElement,
     reasons: HTMLDivElement,
+    modal: ModalElement,
     // index start from 1, 0 is dummy
     blocks: BlockElement[],
 }
@@ -107,6 +119,7 @@ function makeui(): UIElement {
     const exportButton = document.querySelector('button.export') as HTMLButtonElement;
     const importButton = document.querySelector('button.import') as HTMLButtonElement;
     const clear = document.querySelector('button.clear') as HTMLButtonElement;
+    const dark = document.querySelector('button.dark') as HTMLButtonElement;
 
     const panel = document.querySelector('div.panel') as HTMLDivElement;
     const numbers = [null as unknown as HTMLButtonElement].concat(seq.map(numberIndex => {
@@ -116,11 +129,20 @@ function makeui(): UIElement {
         panel.appendChild(number);
         return number;
     }));
+    const panelElement: PanelElement = { toggle, undo, redo, autoPencil, autoFill,
+        takeSnapshot, loadSnapshot, exportButton, importButton, clear, dark, numbers };
 
     const reasons = document.querySelector('div.reasons') as HTMLDivElement;
 
-    return { panel: { toggle, undo, redo, autoPencil, autoFill,
-        takeSnapshot, loadSnapshot, exportButton, importButton, clear, numbers }, reasons, blocks };
+    const modal = document.querySelector('div.modal') as HTMLDivElement;
+    const title = document.querySelector('div.modal div.title') as HTMLDivElement;
+    const text = document.querySelector('div.modal div.text') as HTMLDivElement;
+    const fileInput = document.querySelector("div.modal input[type='file']") as HTMLInputElement;
+    const cancel = document.querySelector('div.modal button.cancel') as HTMLButtonElement;
+    const ok = document.querySelector('div.modal button.ok') as HTMLButtonElement;
+    const modalElement: ModalElement = { self: modal, title, text, fileInput, cancel, ok };
+
+    return { panel: panelElement, reasons, modal: modalElement, blocks };
 }
 
 // --------------------------------------
@@ -399,6 +421,59 @@ class Board {
     }
 }
 
+// this is not data, but do wraps ui element
+class Modal {
+    public readonly element: ModalElement;
+    public constructor(element: UIElement) {
+        this.element = element.modal;
+        this.element.cancel.addEventListener('click', () => this.hide());
+    }
+
+    public set title(title: string) {
+        this.element.title.innerText = title;
+    }
+    public set text(text: string) {
+        this.element.text.innerText = text;
+    }
+    public set inputVisible(on: boolean) {
+        classControl(this.element.fileInput, 'visible', on);
+    }
+    public show() {
+        classControl(this.element.self, 'visible', true);
+    }
+    public hide() {
+        if (this.changeHandler) {
+            this.element.fileInput.removeEventListener('change', this.changeHandler);
+            this.changeHandler = null;
+        }
+        if (this.okHandler) {
+            this.element.ok.removeEventListener('click', this.okHandler);
+            this.okHandler = null;
+        }
+        this.element.fileInput.value = '';
+        classControl(this.element.self, 'visible', false);
+    }
+
+    private changeHandler: ((e: Event) => void) | null = null;
+    public handleFileChange(handler: (e: Event) => void): () => void {
+        this.changeHandler = handler;
+        this.element.fileInput.addEventListener('change', handler);
+        return () => {
+            this.changeHandler = null;
+            this.element.fileInput.removeEventListener('change', handler);
+        };
+    }
+    private okHandler: ((e: MouseEvent) => void) | null = null;
+    public handleOk(handler: (e: MouseEvent) => void): () => void {
+        this.okHandler = handler;
+        this.element.ok.addEventListener('click', handler);
+        return () => {
+            this.okHandler = null;
+            this.element.ok.removeEventListener('click', handler);
+        };
+    }
+}
+
 // ----------------------------------------
 // region user interactive, here handles rule
 
@@ -419,6 +494,7 @@ interface Operation {
 
 class Rule {
     public readonly board: Board;
+    public readonly modal: Modal;
     public readonly element: PanelElement;
     // item is null for invalidated (go back and do another)
     public readonly operations: Operation[] = [null as unknown as Operation];
@@ -434,9 +510,12 @@ class Rule {
     // or else alert(complete) and close alert will focus back and alert again
     // this is not saved or cleared by clear
     private reportedComplete: boolean;
+    // dark theme
+    private dark: boolean;
 
-    public constructor(board: Board, element: UIElement) {
+    public constructor(board: Board, modal: Modal, element: UIElement) {
         this.board = board;
+        this.modal = modal;
         this.element = element.panel;
         this.operations = [null as unknown as Operation];
         this.operationIndex = 1;
@@ -453,6 +532,7 @@ class Rule {
             this.operationIndex = savedata.operationIndex;
             this.snapshotIndex = savedata.snapshotIndex;
             this.isPencil = savedata.isPencil;
+            this.dark = savedata.dark;
         }
 
         this.board.forEach(cell => {
@@ -470,6 +550,7 @@ class Rule {
         this.element.exportButton.addEventListener('click', this.handleExport);
         this.element.importButton.addEventListener('click', this.handleImport);
         this.element.clear.addEventListener('click', this.handleClear);
+        this.element.dark.addEventListener('click', this.handleToggleTheme);
         seq.forEach(n => this.element.numbers[n].addEventListener('click', () => this.handleNumberClick(n)));
 
         this.update();
@@ -488,7 +569,7 @@ class Rule {
                 const sameGroup = activeCell.isSameGroup(other);
                 const sameValue = activeCell.isSameValue(other);
                 other.style('same-group-hint', sameGroup);
-                other.style('same-value-hint', !sameGroup && sameValue);
+                other.style('same-value-hint', (!sameGroup || activeCell.isSame(other)) && sameValue);
                 other.forEach(draft => {
                     draft.style('same-value-hint', draft.enabled && !sameGroup && !!activeCell._value && draft.index == activeCell._value);
                 });
@@ -529,17 +610,23 @@ class Rule {
         });
 
         // panel style
+        classControl(document.body, 'dark', this.dark);
         classControl(this.element.toggle, 'pen', !this.isPencil);
         classControl(this.element.toggle, 'pencil', this.isPencil);
         this.element.undo.disabled = this.operationIndex <= 1;
         this.element.redo.disabled = this.operations.length <= this.operationIndex || this.operations[this.operationIndex] == null;
         this.element.loadSnapshot.disabled = !this.snapshotIndex || this.operations[this.snapshotIndex] == null;
-        this.element.autoFill.disabled = !this.inferer;
         seq.forEach(numberIndex => classControl(this.element.numbers[numberIndex], 'active', this.externalActiveNumber == numberIndex));
 
         // complete!
         if (!this.reportedComplete && this.board.isComplete()) {
-            alert('complete!');
+            this.modal.title = 'completed!';
+            this.modal.inputVisible = false;
+            const removeOkHandler = this.modal.handleOk(() => {
+                removeOkHandler();
+                this.modal.hide();
+            });
+            this.modal.show();
             this.reportedComplete = true;
         }
         
@@ -550,6 +637,7 @@ class Rule {
             operationIndex: this.operationIndex,
             snapshotIndex: this.snapshotIndex,
             isPencil: this.isPencil,
+            dark: this.dark,
         }));
     }
 
@@ -630,13 +718,12 @@ class Rule {
         this.do({ kind: 'auto-pencil', id: [0, 0] });
     }
 
-    private inferer: InferLike;
-    public setInferer(inferer: InferLike) {
-        this.inferer = inferer;
-        this.update();
+    private inferrer: InferrerLike;
+    public setInferrer(inferer: InferrerLike) {
+        this.inferrer = inferer;
     }
     private handleAutoFill = () => {
-        this.inferer.infer();
+        this.inferrer?.infer();
     }
 
     private handleTakeSnapshot = () => {
@@ -650,11 +737,13 @@ class Rule {
         }
     }
 
-    private handleExport = () => {
-        // TODO make file download
-    }
-    private handleImport = () => {
-        // TODO directlry read file upload
+    public handleNumberClick = (n: number) => {
+        if (this.externalActiveNumber != n) {
+            this.externalActiveNumber = n;
+        } else {
+            this.externalActiveNumber = 0;
+        }
+        this.update();
     }
     
     private handleClear = () => {
@@ -667,15 +756,66 @@ class Rule {
         this.update();
     }
 
-    private handleNumberClick = (n: number) => {
-        if (this.externalActiveNumber != n) {
-            this.externalActiveNumber = n;
-        } else {
-            this.externalActiveNumber = 0;
-        }
-        this.update();
+    private handleExport = () => {
+        const data = JSON.stringify({
+            cellData: this.board.getCellData(),
+            operations: this.operations,
+            operationIndex: this.operationIndex,
+        });
+        const a = document.createElement('a');
+        a.setAttribute('href', 'data:text/plain;charset=utf8,' + encodeURIComponent(data));
+        a.setAttribute('download', 'sudoku.json');
+        a.style.display = 'none';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+    }
+    private handleImport = () => {
+        let data: { cellData: CellData[], operations: Operation[], operationIndex: number } | null = null;
+        this.modal.title = 'Import';
+        this.modal.text = '';
+        this.modal.inputVisible = true;
+        const removeNothingOkHandler = this.modal.handleOk(() => {
+            removeNothingOkHandler();
+            this.modal.hide();
+        });
+        const removeChangeHandler = this.modal.handleFileChange(e => {
+            if (this.modal.element.fileInput.files && this.modal.element.fileInput.files.length) {
+                let file = this.modal.element.fileInput.files[0];
+                let reader = new FileReader();
+                reader.onload = e => {
+                    try {
+                        data = JSON.parse(reader.result as string);
+                        removeChangeHandler();
+                        removeNothingOkHandler();
+                        const removeOkHandler = this.modal.handleOk(() => {
+                            this.board.setCellData(data!.cellData);
+                            this.operations.splice(0, this.operations.length);
+                            this.operations.push(...data!.operations);
+                            this.operationIndex = data!.operationIndex;
+                            this.snapshotIndex = 0;
+                            removeOkHandler();
+                            this.modal.hide();
+                            this.update();
+                        });
+                    } catch {
+                        this.modal.text = 'unrecognized file content';
+                    }
+                };
+                reader.onerror = () => {
+                    this.modal.text = 'failed to read file content';
+                };
+                reader.readAsText(file);
+            }
+        });
+        this.modal.show();
     }
     
+    private handleToggleTheme = () => {
+        this.dark = !this.dark;
+        this.update();
+    }
+
     private handleKeydown = (cell: Cell | null, e: KeyboardEvent) => {
         if (e.key == 'Shift') {
             this.isPencil = !this.isPencil;
@@ -696,7 +836,11 @@ class Rule {
             }
             e.stopPropagation();
         } else if (e.key == 'q' || e.key == 'Q') {
-            this.inferer?.infer();
+            if (e.altKey) {
+                this.inferrer.applyLastInferResult();
+            } else {
+                this.inferrer.infer();
+            }
             e.stopPropagation();
         } else if (e.key == 'ArrowLeft' && cell != null) {
             let [row, column, blockRow, blockColumn] = [cell.row, cell.column, cell.block.row, cell.block.column];
@@ -766,32 +910,101 @@ class Rule {
     }
 }
 
-interface InferLike {
-    infer: () => void,
+interface InferrerLike {
+    infer: () => void;
+    applyLastInferResult: () => void;
 }
-class Infer {
+
+type ReasonSegment = {
+    kind: 'text',
+    text: string,
+} | {
+    kind: 'cell-id',
+    cellId: CellId,
+} | {
+    kind: 'number',
+    value: number,
+} | {
+    kind: 'apply',
+    opCount: number,
+    applier: () => void,
+}
+
+class Inferrer {
+    public readonly rule: Rule;
     public readonly board: Board;
     public readonly element: HTMLDivElement;
-    public constructor(board: Board, element: UIElement) {
-        this.board = board;
+    public constructor(rule: Rule, element: UIElement) {
+        this.rule = rule;
+        this.board = rule.board;
         this.element = element.reasons;
     }
 
-    private reason(reason: string) {
-        const reasonElement = document.createElement('div');
-        reasonElement.className = 'reason';
-        reasonElement.innerText = reason;
-        this.element.appendChild(reasonElement);
-        reasonElement.scrollIntoView({ behavior: 'smooth' });
+    private appliers: HTMLSpanElement[];
+    public applyLastInferResult = () => {
+        while (this.appliers.length) {
+            // this event handler alters this appliers, so can only iterate like this
+            this.appliers[0].click();
+        }
+    };
+    private reason(segments: ReasonSegment[]) {
+        const reason = document.createElement('div');
+        reason.className = 'reason';
+        for (const segment of segments) {
+            if (segment.kind == 'text') {
+                const text = document.createElement('span');
+                text.className = 'text';
+                text.innerText = segment.text;
+                reason.appendChild(text);
+            } else if (segment.kind == 'cell-id') {
+                const cellId = document.createElement('span');
+                cellId.className = 'cell-id';
+                cellId.innerText = `${segment.cellId[0]},${segment.cellId[1]}`;
+                cellId.addEventListener('click', () => {
+                    this.board.byId(segment.cellId).focus();
+                });
+                reason.appendChild(cellId);
+            } else if (segment.kind == 'number') {
+                const number = document.createElement('span');
+                number.className = 'number';
+                number.innerText = segment.value.toString();
+                number.addEventListener('click', () => {
+                    if (seq.includes(segment.value)) {
+                        this.rule.handleNumberClick(segment.value);
+                    }
+                });
+                reason.appendChild(number);
+            } else if (segment.kind == 'apply') {
+                const apply = document.createElement('span');
+                apply.className = 'apply';
+                apply.innerText = 'apply';
+                if (segment.opCount > 1) {
+                    apply.innerText = `apply (${segment.opCount})`;
+                }
+                const handler = () => {
+                    segment.applier();
+                    this.appliers.splice(this.appliers.indexOf(apply), 1);
+                    apply.classList.add('disabled');
+                    apply.removeEventListener('click', handler);
+                };
+                apply.addEventListener('click', handler);
+                reason.appendChild(apply);
+                this.appliers.push(apply);
+            }
+        }
+        this.element.appendChild(reason);
+        reason.scrollIntoView({ behavior: 'smooth' });
     }
 
-    public infer() {
+    public infer = () => {
+        this.appliers = [];
         this.element.innerHTML = '';
         if (![
             this.basic,
             this.singleOccurenceInGroup,
+            this.subGroup,
         ].find(x => x())) {
-            this.reason('nothing for now');
+            this.reason([{ kind: 'text', text: 'nothing for now' }]);
         }
     }
 
@@ -805,9 +1018,21 @@ class Infer {
                 const possibleValues = seq.filter(v => !existValues.includes(v));
                 if (possibleValues.length == 1) {
                     ok = true;
-                    this.reason(`basic: cell ${cell.globalCoordinate} value ${possibleValues[0]}`);
+                    this.reason([
+                        { kind: 'text', text: 'basic: cell ' },
+                        { kind: 'cell-id', cellId: cell.id },
+                        { kind: 'text', text: ' value ' },
+                        { kind: 'number', value: possibleValues[0] },
+                        { kind: 'apply', opCount: 1, applier: () => {
+                            this.rule.do({ kind: 'set-value', id: cell.id, value: possibleValues[0] });
+                        } },
+                    ]);
                 } else if (possibleValues.length == 0) {
-                    this.reason(`basic: btw, cell ${cell.globalCoordinate} is already incorrect with no possible values`);
+                    this.reason([
+                        { kind: 'text', text: 'basic: btw, cell ' },
+                        { kind: 'cell-id', cellId: cell.id },
+                        { kind: 'text', text: ' is already incorrect with no possible values' },
+                    ]);
                 }
             }
         });
@@ -817,44 +1042,143 @@ class Infer {
     // single occurence in different types of group, this works on existing draft
     private singleOccurenceInGroup = () => {
         let ok = false;
+        const okedCells: CellId[] = []; 
 
         const handleCells = (cells: Cell[], groupName: string) => {
             // not work on some cell is empty and has no draft
             if (cells.some(cell => !cell.value && !cell.map(draft => draft.enabled ? 1 : 0).some(x => x))) {
-                return false;
+                return;
             }
-            let ok = false;
             for (const possibleValue of seq) {
                 const occurence = cells.filter(cell => !cell.value && cell.drafts[possibleValue].enabled);
                 if (occurence.length == 1) {
                     ok = true;
-                    this.reason(`single-occur: cell ${occurence[0].globalCoordinate} is ${possibleValue} because it is occurred only once in ${groupName}`);
+                    if (okedCells.some(id => occurence[0].isId(id))) {
+                        continue;
+                    }
+                    okedCells.push(occurence[0].id);
+                    this.reason([
+                        { kind: 'text', text: 'single-occur: cell ' },
+                        { kind: 'cell-id', cellId: occurence[0].id },
+                        { kind: 'text', text: ' is ' },
+                        { kind: 'number', value: possibleValue },
+                        { kind: 'text', text: ` because it is occurred only once in ${groupName}` },
+                        { kind: 'apply', opCount: 1, applier: () => {
+                            this.rule.do({ kind: 'set-value', id: occurence[0].id, value: possibleValue });
+                        } },
+                    ]);
                 }
             }
-            return ok;
         }
 
         for (const globalRow of seq) {
             const cells = seq.map(globalColumn => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            let thisok = handleCells(cells, `row ${globalRow}`);
-            ok ||= thisok;
+            handleCells(cells, `row ${globalRow}`);
         }
         for (const globalColumn of seq) {
             const cells = seq.map(globalRow => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            let thisok = handleCells(cells, `column ${globalColumn}`);
-            ok ||= thisok;
+            handleCells(cells, `column ${globalColumn}`);
         }
         for (const blockIndex of seq) {
             const block = this.board.blocks[blockIndex];
             const cells = block.map(cell => cell);
-            let thisok = handleCells(cells, `block ${block.row},${block.column}`);
-            ok ||= thisok;
+            handleCells(cells, `block ${block.row},${block.column}`);
         }
         return ok;
+    }
+
+    // for each group, if N cells only have N numbers,
+    // e.g. 2 cells with 2,4 and 2,4
+    // e.g. 3 cells with 2,3; 2,4 and 3,4
+    // then other cells should not have these number
+    private subGroup = () => {
+        let ok = false;
+
+        const handleCells = (cells: Cell[], groupName: string) => {
+            // not work on some cell is empty and has no draft
+            if (cells.some(cell => !cell.value && !cell.map(draft => draft.enabled ? 1 : 0).some(x => x))) {
+                return;
+            }
+            // only care about drafted cells
+            cells = cells.filter(cell => !cell.value);
+            // not work for remaining 2 cells
+            if (cells.length <= 2) {
+                return;
+            }
+            // 0x1, 0x10 is not 2 items, exclude all selected
+            for (let b = 3; b < (1 << cells.length) - 1; b += 1) {
+                const x = b.toString(2).padStart(cells.length, '0');
+                const selection = new Array(x.length).fill(0).map((_, i) => x[i] == '1' ? cells[i] : null).filter(x => x) as unknown as Cell[];
+                if (selection.length <= 1) {
+                    continue;
+                }
+                const draftset = new Set(selection.flatMap(cell => cell.map(x => x).filter(draft => draft.enabled).map(draft => draft.index)));
+                if (draftset.size != selection.length) {
+                    continue; // most normal case
+                }
+                
+                const drafts = Array.from(draftset);
+                const otherCells = cells.filter(cell => !selection.some(selection => selection.isSame(cell)));
+                const operations: Operation[] = [];
+                for (const otherCell of otherCells) {
+                    for (const value of drafts) {
+                        if (otherCell.drafts[value].enabled) {
+                            operations.push({ kind: 'draft-off', id: otherCell.id, value });
+                        }
+                    }
+                }
+
+                if (operations.length == 0) {
+                    continue; // other cells already cleared
+                }
+                const segments: ReasonSegment[] = [
+                    { kind: 'text', text: 'sub-group: cells ' },
+                ];
+                for (const cell of selection) {
+                    segments.push({ kind: 'cell-id', cellId: cell.id });
+                    segments.push({ kind: 'text', text: ';' });
+                }
+                segments.pop();
+                segments.push({ kind: 'text', text: ' only contains ' });
+                for (const value of draftset) {
+                    segments.push({ kind: 'number', value });
+                    segments.push({ kind: 'text', text: ',' });
+                }
+                segments.push({ kind: 'text', text: ` so other cells in ${groupName} can remove these values` });
+                segments.push({ kind: 'apply', opCount: operations.length, applier: () => {
+                    for (const op of operations) {
+                        this.rule.do(op);
+                    }
+                } });
+                ok = true;
+                this.reason(segments);
+            }
+        }
+
+        for (const globalRow of seq) {
+            const cells = seq.map(globalColumn => this.board.byGlobalCoordinate([globalRow, globalColumn]));
+            handleCells(cells, `row ${globalRow}`);
+        }
+        for (const globalColumn of seq) {
+            const cells = seq.map(globalRow => this.board.byGlobalCoordinate([globalRow, globalColumn]));
+            handleCells(cells, `column ${globalColumn}`);
+        }
+        for (const blockIndex of seq) {
+            const block = this.board.blocks[blockIndex];
+            const cells = block.map(cell => cell);
+            handleCells(cells, `block ${block.row},${block.column}`);
+        }
+        return ok;
+    }
+
+    // if a specific value only appears in one row/column inside one block,
+    // then other cells in this group and that complete row cannot have that value
+    private groupRowOrColumn = () => {
     }
 }
 
 const ui = makeui();
 const board = new Board(ui);
-const rule = window['thegame'] = new Rule(board, ui);
-rule.setInferer(new Infer(board, ui));
+const modal = new Modal(ui);
+const rule = window['thegame'] = new Rule(board, modal, ui);
+rule.setInferrer(new Inferrer(rule, ui));

@@ -1,9 +1,13 @@
 
+body.dark {
+    background-color: #212121;
+}
+
 div.container {
     display: grid;
     margin-left: calc(50vw - 224px);
-    margin-top: calc(50vh - 234px);
-    grid-template-rows: 368px 60px;
+    margin-top: calc(50vh - 256px);
+    grid-template-rows: 368px 80px;
     grid-template-columns: 369px 72px;
     gap: 8px;
 }
@@ -43,19 +47,34 @@ div.cell {
     padding: 4px 4px;
     border-radius: 2px;
 }
+body.dark div.cell {
+    border-color: gray;
+}
 div.cell:focus {
     outline: none;
     border: 2px solid rgb(0, 174, 255);
     padding: 3px 3px;
 }
+body.dark div.cell:focus {
+    border: 2px solid rgb(0, 174, 255);
+}
 div.cell.same-group-hint {
     background: #f0f0f0;
+}
+body.dark div.cell.same-group-hint {
+    background: #404040;
 }
 div.cell.duplicate-hint div.value {
     color: darkred;
 }
+body.dark div.cell.duplicate-hint div.value {
+    color: lightcoral;
+}
 div.cell.same-value-hint div.value {
     color: blue;
+}
+body.dark div.cell.same-value-hint div.value {
+    color: darkgoldenrod;
 }
 div.cell-1 { grid-area: 1/1/1/1; }
 div.cell-2 { grid-area: 1/2/1/2; }
@@ -74,6 +93,10 @@ div.draft {
     visibility: hidden;
     text-align: center;
     line-height: 10px;
+    font-family: sans-serif;
+}
+body.dark div.draft {
+    color: #a3a2a2;
 }
 div.draft.visible {
     visibility: visible;
@@ -82,9 +105,15 @@ div.draft.duplicate-hint {
     color: white;
     background: darkred;
 }
+body.dark div.draft.duplicate-hint {
+    background: lightcoral;
+}
 div.draft.same-value-hint:not(.duplicate-hint) {
     color: blue;
     font-weight: bold;
+}
+body.dark div.draft.same-value-hint:not(.duplicate-hint) {
+    color: darkgoldenrod;
 }
 div.draft-1 { grid-area: 1/1/1/1; }
 div.draft-2 { grid-area: 1/2/1/2; }
@@ -101,8 +130,12 @@ div.value {
     padding: 3px 9px;
     font-size: 20px;
     font-weight: bold;
+    font-family: sans-serif;
     color: #303030;
     cursor: default;
+}
+body.dark div.value {
+    color: #D0D0D0;
 }
 
 div.panel {
@@ -122,6 +155,10 @@ button {
     border-radius: 4px;
     border-width: 1.5px;
 }
+body.dark button {
+    color: #D0D0D0;
+    background-color: #313131;
+}
 button:not(.number) {
     padding: 5px 4px;
 }
@@ -129,6 +166,9 @@ button:not(.number) {
 button.toggle.pen {
     color: white;
     background-color: lightskyblue;
+}
+body.dark button.toggle.pen {
+    background-color: darkcyan;
 }
 button.toggle>span:last-child {
     position: relative;
@@ -154,6 +194,9 @@ button.number.active {
     color: white;
     background-color: lightblue;
 }
+body.dark button.number.active {
+    background-color: darkcyan;
+}
 
 div.reasons {
     grid-area: 2/1/2/3;
@@ -162,4 +205,77 @@ div.reasons {
 }
 div.reason {
     font-size: 10px;
+}
+body.dark div.reason {
+    color: #D0D0D0;
+}
+div.reason span.cell-id {
+    color: blue;
+    cursor: pointer;
+}
+body.dark div.reason span.cell-id {
+    color: lightblue;
+}
+div.reason span.number {
+    color: blue;
+    cursor: pointer;
+}
+body.dark div.reason span.number {
+    color: lightblue;
+}
+div.reason span.apply {
+    margin-left: 4px;
+}
+div.reason span.apply:not(.disabled) {
+    cursor: pointer;
+    color: darkmagenta;
+}
+body.dark div.reason span.apply:not(.disabled) {
+    color: magenta;
+}
+
+div.modal {
+    display: none;
+    position: fixed;
+    left: calc(50vw - 140px);
+    top: calc(50vh - 120px);
+    width: 280px;
+    height: 84px;
+    padding: 6px;
+    background: white;
+    border-radius: 4px;
+    border: 2px solid lightgray;
+    box-shadow: 2px 2px 1px lightgray;
+}
+div.modal.visible {
+    display: block;
+}
+body.dark div.modal {
+    background: #101010;
+    box-shadow: 2px 2px 1px gray;
+}
+body.dark div.modal div.title {
+    color: #D0D0D0;
+}
+div.modal div.content {
+    height: 32px;
+    padding: 8px 0;
+}
+body.dark div.content {
+    color: #D0D0D0;
+}
+div.modal input {
+    color: #D0D0D0;
+    visibility: hidden;
+}
+div.modal input.visible {
+    visibility: visible;
+}
+div.modal button {
+    float: right;
+    width: 56px;
+    height: 18px;
+    padding: 0 4px;
+    font-size: 10px;
+    margin-left: 6px;
 }
