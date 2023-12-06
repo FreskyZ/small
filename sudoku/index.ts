@@ -241,6 +241,12 @@ class Cell {
     public map<T>(callback: (draft: Draft) => T): T[] {
         return seq.map(draftIndex => callback(this.drafts[draftIndex]));
     }
+    public get draftValues() {
+        return seq.filter(draftIndex => this.drafts[draftIndex].enabled);
+    }
+    public get draftCount() {
+        return seq.filter(draftIndex => this.drafts[draftIndex].enabled).length;
+    }
 
     // these 2 functions do not care about operation history
     public apply(op: Operation) {
@@ -261,7 +267,7 @@ class Cell {
             cell.drafts[op.value!].enabled = false;
         } else if (op.kind == 'set-value') {
             op.oldValue = cell.value;
-            op.oldDrafts = this.map(draft => draft.enabled ? draft.index : 0).filter(x => x);
+            op.oldDrafts = this.draftValues;
             op.otherCells = [];
             this.board.forEach(other => {
                 if (cell.isSameGroup(other) && !cell.isSame(other) && other.drafts[op.value!].enabled) {
@@ -279,7 +285,7 @@ class Cell {
             cell.value = null;
         } else if (op.kind == 'auto-pencil') {
             op.otherCells ??= [];
-            if (!cell.value && !cell.map(draft => draft.enabled ? 1 : 0).some(x => x)) {
+            if (!cell.value && !cell.draftCount) {
                 const values = this.board.map(x => x)
                     .filter(other => cell.isSameGroup(other) && other.value).map(other => other.value);
                 for (const value of seq.filter(v => !values.includes(v))) {
@@ -537,6 +543,7 @@ class Rule {
 
         this.board.forEach(cell => {
             cell.cellElement.addEventListener('focus', () => this.update());
+            cell.cellElement.addEventListener('blur', () => this.update());
             cell.cellElement.addEventListener('keydown', e => this.handleKeydown(cell, e));
         });
         document.addEventListener('keydown', e => this.handleKeydown(null, e));
@@ -561,6 +568,11 @@ class Rule {
     private update() {
 
         // same group hint and same value hint
+        this.board.forEach(cell => {
+            cell.style('same-group-hint', false);
+            cell.style('same-value-hint', false);
+            cell.forEach(draft => draft.style('same-value-hint', false));
+        })
         const activeCell = this.board.map(x => x).find(cell => cell.isFocused());
         if (activeCell) {
             this.externalActiveNumber = 0;
@@ -616,6 +628,14 @@ class Rule {
         this.element.undo.disabled = this.operationIndex <= 1;
         this.element.redo.disabled = this.operations.length <= this.operationIndex || this.operations[this.operationIndex] == null;
         this.element.loadSnapshot.disabled = !this.snapshotIndex || this.operations[this.snapshotIndex] == null;
+        seq.forEach(numberIndex => {
+            const disabled = this.board.map(cell => cell.value == numberIndex).filter(x => x).length == 9;
+            this.element.numbers[numberIndex].disabled = disabled;
+            if (disabled && this.externalActiveNumber == numberIndex) {
+                this.externalActiveNumber = 0;
+            }
+        });
+        
         seq.forEach(numberIndex => classControl(this.element.numbers[numberIndex], 'active', this.externalActiveNumber == numberIndex));
 
         // complete!
@@ -738,6 +758,10 @@ class Rule {
     }
 
     public handleNumberClick = (n: number) => {
+        if (this.element.numbers[n].disabled = this.board.map(cell => cell.value == n).filter(x => x).length == 9) {
+            // pretend nothing happens
+            return;
+        }
         if (this.externalActiveNumber != n) {
             this.externalActiveNumber = n;
         } else {
@@ -794,6 +818,7 @@ class Rule {
                             this.operations.push(...data!.operations);
                             this.operationIndex = data!.operationIndex;
                             this.snapshotIndex = 0;
+                            this.reportedComplete = false;
                             removeOkHandler();
                             this.modal.hide();
                             this.update();
@@ -825,21 +850,25 @@ class Rule {
                 this.go(-1);
             }
             e.stopPropagation();
+            return;
         } else if (e.key == 'y' || e.key == 'Y') {
             if (this.operations.length > this.operationIndex && this.operations[this.operationIndex] != null) {
                 this.go(1);
             }
             e.stopPropagation();
+            return;
         } else if (e.key == 'r' || e.key == 'R') {
             if (this.snapshotIndex && this.operations[this.snapshotIndex] != null) {
                 this.go(this.snapshotIndex - this.operationIndex);
             }
             e.stopPropagation();
+            return;
         } else if (e.key == 'q' || e.key == 'Q') {
             if (e.altKey) {
-                this.inferrer.applyLastInferResult();
+                this.inferrer.infer();
             } else {
                 this.inferrer.infer();
+                this.inferrer.applyLastInferResult();
             }
             e.stopPropagation();
         } else if (e.key == 'ArrowLeft' && cell != null) {
@@ -899,11 +928,8 @@ class Rule {
                     this.do({ id: cell.id, kind: 'set-value', value });
                 }
             } else {
-                if (this.externalActiveNumber != value) {
-                    this.externalActiveNumber = value;
-                } else {
-                    this.externalActiveNumber = 0;
-                }
+                this.handleNumberClick(value);
+                return;
             }
         }
         this.update();
@@ -942,9 +968,17 @@ class Inferrer {
 
     private appliers: HTMLSpanElement[];
     public applyLastInferResult = () => {
+        // if apply throws, this seems infinite loop
+        const maxApplyTimes = this.appliers.length;
+        // so use this to prevent that
+        let applyTimes = 0;
         while (this.appliers.length) {
             // this event handler alters this appliers, so can only iterate like this
             this.appliers[0].click();
+            applyTimes += 1;
+            if (applyTimes == maxApplyTimes) {
+                break;
+            }
         }
     };
     private reason(segments: ReasonSegment[]) {
@@ -1000,38 +1034,62 @@ class Inferrer {
         this.appliers = [];
         this.element.innerHTML = '';
         if (![
+            this.requireNotEmpty,
             this.basic,
             this.singleOccurenceInGroup,
             this.subGroup,
+            this.simpleSameGroupCircle,
         ].find(x => x())) {
-            this.reason([{ kind: 'text', text: 'nothing for now' }]);
+            this.reason([{ kind: 'text', text: 'nothing for now ' }]);
         }
     }
 
+    private requireNotEmpty = () => {
+        let ok = false;
+        // validate invalid cell by basic rule should be before require not empty
+        this.board.forEach(cell => {
+            if (!cell.value) {
+                // also validate the cell regardless of current draft state
+                const existValues = this.board.map(x => x)
+                    .filter(other => cell.isSameGroup(other) && other.value).map(other => other.value);
+                const possibleValues = seq.filter(v => !existValues.includes(v));
+                if (possibleValues.length == 0) {
+                    ok = true;
+                    this.reason([
+                        { kind: 'text', text: 'basic: cell ' },
+                        { kind: 'cell-id', cellId: cell.id },
+                        { kind: 'text', text: ' is already incorrect with no possible values' },
+                    ]);
+                }
+            }
+        })
+        if (this.board.map(cell => !cell.value && !cell.draftCount).some(x => x)) {
+            this.reason([
+                { kind: 'text', text: 'basic: some cells are still empty, fill by apply' },
+                { kind: 'apply', opCount: 1, applier: () => this.rule.do({ kind: 'auto-pencil', id: [0, 0] }) },
+            ]);
+            ok = true; // return true to disable following steps
+        }
+        return ok;
+    }
     // same as auto pencil, when only one value possible, that's the result
     private basic = () => {
         let ok = false;
         this.board.forEach(cell => {
             if (!cell.value) {
-                const existValues = this.board.map(x => x)
-                    .filter(other => cell.isSameGroup(other) && other.value).map(other => other.value);
-                const possibleValues = seq.filter(v => !existValues.includes(v));
-                if (possibleValues.length == 1) {
+                if (cell.draftCount == 1) {
                     ok = true;
+                    // cannot inline this, if some error happens,
+                    // cell.draftvalues may become empty after previous applies in same batch
+                    const value = cell.draftValues[0];
                     this.reason([
                         { kind: 'text', text: 'basic: cell ' },
                         { kind: 'cell-id', cellId: cell.id },
                         { kind: 'text', text: ' value ' },
-                        { kind: 'number', value: possibleValues[0] },
+                        { kind: 'number', value },
                         { kind: 'apply', opCount: 1, applier: () => {
-                            this.rule.do({ kind: 'set-value', id: cell.id, value: possibleValues[0] });
+                            this.rule.do({ kind: 'set-value', id: cell.id, value });
                         } },
-                    ]);
-                } else if (possibleValues.length == 0) {
-                    this.reason([
-                        { kind: 'text', text: 'basic: btw, cell ' },
-                        { kind: 'cell-id', cellId: cell.id },
-                        { kind: 'text', text: ' is already incorrect with no possible values' },
                     ]);
                 }
             }
@@ -1045,10 +1103,6 @@ class Inferrer {
         const okedCells: CellId[] = []; 
 
         const handleCells = (cells: Cell[], groupName: string) => {
-            // not work on some cell is empty and has no draft
-            if (cells.some(cell => !cell.value && !cell.map(draft => draft.enabled ? 1 : 0).some(x => x))) {
-                return;
-            }
             for (const possibleValue of seq) {
                 const occurence = cells.filter(cell => !cell.value && cell.drafts[possibleValue].enabled);
                 if (occurence.length == 1) {
@@ -1095,10 +1149,6 @@ class Inferrer {
         let ok = false;
 
         const handleCells = (cells: Cell[], groupName: string) => {
-            // not work on some cell is empty and has no draft
-            if (cells.some(cell => !cell.value && !cell.map(draft => draft.enabled ? 1 : 0).some(x => x))) {
-                return;
-            }
             // only care about drafted cells
             cells = cells.filter(cell => !cell.value);
             // not work for remaining 2 cells
@@ -1112,7 +1162,7 @@ class Inferrer {
                 if (selection.length <= 1) {
                     continue;
                 }
-                const draftset = new Set(selection.flatMap(cell => cell.map(x => x).filter(draft => draft.enabled).map(draft => draft.index)));
+                const draftset = new Set(selection.flatMap(cell => cell.draftValues));
                 if (draftset.size != selection.length) {
                     continue; // most normal case
                 }
@@ -1147,6 +1197,10 @@ class Inferrer {
                 segments.push({ kind: 'text', text: ` so other cells in ${groupName} can remove these values` });
                 segments.push({ kind: 'apply', opCount: operations.length, applier: () => {
                     for (const op of operations) {
+                        // the draft may be already off by other appliers in same batch, do not apply them
+                        if (op.kind == 'draft-off' && !this.board.byId(op.id).drafts[op.value!].enabled) {
+                            continue;
+                        }
                         this.rule.do(op);
                     }
                 } });
@@ -1175,6 +1229,107 @@ class Inferrer {
     // then other cells in this group and that complete row cannot have that value
     private groupRowOrColumn = () => {
     }
+
+    // cell a and b are same group, b and c are same group, c and d are same group, d and a are same group
+    // if select one value in a will make b and c left with only one selection (which requires b and c only have 2 selection)
+    // and than b and c's selection make d no possible values, than a should not select that value
+    // this is actually one special case of 2-step backtrack
+    private simpleSameGroupCircle = () => {
+        let ok = false;
+        const cells = this.board.map(x => x).filter(cell => !cell.value);
+
+        // this seems to be the easiest way to enumerate size 4 sub slices
+        for (let i1 = 0; i1 < cells.length - 3; i1 += 1) {
+            for (let i2 = i1 + 1; i2 < cells.length - 2; i2 += 1) {
+                for (let i3 = i2 + 1; i3 < cells.length - 1; i3 += 1) {
+                    for (let i4 = i3 + 1; i4 < cells.length; i4 += 1) {
+                        const the4 = [cells[i1], cells[i2], cells[i3], cells[i4]];
+                        if (![
+                            // try multiple circle order
+                            [0, 1, 2, 3],
+                            [0, 1, 3, 2],
+                            [0, 2, 1, 3],
+                            [0, 2, 3, 1],
+                            [0, 3, 1, 2],
+                            [0, 3, 2, 1],
+                        ].some(seq =>
+                            // no need to !isSame them
+                            the4[seq[0]].isSameGroup(the4[seq[1]])
+                            && the4[seq[1]].isSameGroup(the4[seq[2]])
+                            && the4[seq[2]].isSameGroup(the4[seq[3]])
+                            && the4[seq[3]].isSameGroup(the4[seq[0]])
+                        )) {
+                            continue;
+                        }
+                        if (the4[0].isId([1, 9]) && the4[1].isId([3, 8]) && the4[2].isId([4, 9]) && the4[3].isId([5, 8])) {
+                            console.log('interest case');
+                        }
+                        const the3 = the4.filter(cell => cell.draftCount == 2);
+                        const the1Selection = the3.length == 3
+                            // if one of them draft count is not 2, that is the one to be attempted
+                            ? the4.filter(cell => cell.draftCount != 2)
+                            // if 4 of them are length 4, then need try each
+                            : the3.length == 4 ? the4 : [];
+                        if (the1Selection.length == 0) {
+                            // console.log(`the1selection is empty for 4cells ${the4.map(cell => cell.globalCoordinate.join(',')).join(';')}`);
+                            continue;
+                        }
+                        for (const the1 of the1Selection) {
+                            // also need victim selection if the remaining 3 are all same group of the1
+                            const theVictimSelection = the4.filter(cell => cell.isSameGroup(the1) && !cell.isSame(the1)).length == 2
+                                ? the4.filter(cell => !cell.isSameGroup(the1))
+                                : the4.filter(cell => !cell.isSame(the1));
+                            for (const theVictim of theVictimSelection) {
+                                const theSameGroup2 = the4.filter(cell => !cell.isSame(the1) && !cell.isSame(theVictim));
+                                // console.log(`the1 ${the1.globalCoordinate.join(',')} the2 ${
+                                //     theSameGroup2[0].globalCoordinate.join(',')};${
+                                //     theSameGroup2[1].globalCoordinate.join(',')} the victim ${theVictim.globalCoordinate.join(',')}`);
+                                const theVictimDraftValues = theVictim.draftValues;
+                                theVictimDraftValues.sort((a, b) => a - b);
+                                for (const attempt of the1.draftValues) {
+                                    if (!theSameGroup2[0].drafts[attempt].enabled || !theSameGroup2[1].drafts[attempt].enabled) {
+                                        // console.log(`reject attempt ${attempt}`);
+                                        continue;
+                                    }
+                                    const the2Values = theSameGroup2.map(cell => cell.draftValues.filter(x => x != attempt)[0]);
+                                    the2Values.sort((a, b) => a - b); 
+                                    if (the2Values[0] == theVictimDraftValues[0] && the2Values[1] == theVictimDraftValues[1]) {
+                                        ok = true;
+                                        this.reason([
+                                            { kind: 'text', text: 'same-group-circle: cell ' },
+                                            { kind: 'cell-id', cellId: the1.id },
+                                            { kind: 'text', text: ' cannot be ' },
+                                            { kind: 'number', value: attempt },
+                                            { kind: 'text', text: ' because this will make cell ' },
+                                            { kind: 'cell-id', cellId: theSameGroup2[0].id },
+                                            { kind: 'text', text: ' become ' },
+                                            { kind: 'number', value: theSameGroup2[0].draftValues.filter(x => x != attempt)[0] },
+                                            { kind: 'text', text: ' and cell ' },
+                                            { kind: 'cell-id', cellId: theSameGroup2[1].id },
+                                            { kind: 'text', text: ' become ' },
+                                            { kind: 'number', value: theSameGroup2[1].draftValues.filter(x => x != attempt)[0] },
+                                            { kind: 'text', text: ' which will make cell ' },
+                                            { kind: 'cell-id', cellId: theVictim.id },
+                                            { kind: 'text', text: ' have no possiblility' },
+                                            { kind: 'apply', opCount: 1, applier: () => {
+                                                if (the1.drafts[attempt].enabled) {
+                                                    this.rule.do({ kind: 'draft-off', id: the1.id, value: attempt });
+                                                }
+                                            } },
+                                        ])
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return ok;
+    }
+    // finally backtrack
+    // TODO this may need additional ui logic
 }
 
 const ui = makeui();
