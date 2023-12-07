@@ -226,7 +226,9 @@ class Cell {
 
     public isId(id: CellId) { return this.id[0] == id[0] && this.id[1] == id[1]; }
     public isSame(rhs: Cell) { return this.isId(rhs.id); }
+    // TODO rename to same-digit
     public isSameValue(rhs: Cell) { return !!this._value && this._value == rhs._value; }
+    // TODO rename to same-region
     public isSameGroup(rhs: Cell) {
         return this.globalRow == rhs.globalRow
             || this.globalColumn == rhs.globalColumn
@@ -518,6 +520,8 @@ class Rule {
     private reportedComplete: boolean;
     // dark theme
     private dark: boolean;
+    // previously active cell for touch device, not work for mouse device
+    private previouslyActiveCell: Cell | null;
 
     public constructor(board: Board, modal: Modal, element: UIElement) {
         this.board = board;
@@ -529,6 +533,7 @@ class Rule {
         this.isPencil = false;
         this.externalActiveNumber = 0;
         this.reportedComplete = false;
+        this.previouslyActiveCell = null;
     
         const savedatastring = localStorage.getItem('PAGEDATA');
         if (savedatastring) {
@@ -543,7 +548,7 @@ class Rule {
 
         this.board.forEach(cell => {
             cell.cellElement.addEventListener('focus', () => this.update());
-            cell.cellElement.addEventListener('blur', () => this.update());
+            cell.cellElement.addEventListener('blur', () => { this.previouslyActiveCell = cell; this.update(); });
             cell.cellElement.addEventListener('keydown', e => this.handleKeydown(cell, e));
         });
         document.addEventListener('keydown', e => this.handleKeydown(null, e));
@@ -558,7 +563,7 @@ class Rule {
         this.element.importButton.addEventListener('click', this.handleImport);
         this.element.clear.addEventListener('click', this.handleClear);
         this.element.dark.addEventListener('click', this.handleToggleTheme);
-        seq.forEach(n => this.element.numbers[n].addEventListener('click', () => this.handleNumberClick(n)));
+        seq.forEach(n => this.element.numbers[n].addEventListener('pointerdown', e => this.handleNumberInput(n, e)));
 
         this.update();
     }
@@ -573,7 +578,9 @@ class Rule {
             cell.style('same-value-hint', false);
             cell.forEach(draft => draft.style('same-value-hint', false));
         })
-        const activeCell = this.board.map(x => x).find(cell => cell.isFocused());
+        const activeCell = this.board.map(x => x).find(cell => cell.isFocused())
+            // TODO this make externactivenumber's external part not working, may need a button for that
+            || (navigator['userAgentData']?.mobile ? this.previouslyActiveCell : null);
         if (activeCell) {
             this.externalActiveNumber = 0;
             this.board.forEach(other => {
@@ -757,19 +764,38 @@ class Rule {
         }
     }
 
-    public handleNumberClick = (n: number) => {
-        if (this.element.numbers[n].disabled = this.board.map(cell => cell.value == n).filter(x => x).length == 9) {
-            // pretend nothing happens
-            return;
-        }
-        if (this.externalActiveNumber != n) {
-            this.externalActiveNumber = n;
+    // keyboard number click or number button click
+    public handleNumberInput = (value: number, e?: PointerEvent) => {
+        const cell = this.board.map(x => x).find(cell => cell.isFocused())
+            || (e?.pointerType == 'touch' ? this.previouslyActiveCell : null);
+        if (cell) {
+            if (this.isPencil && !cell.value) {
+                if (cell.drafts[value].enabled) {
+                    this.do({ id: cell.id, kind: 'draft-off', value });
+                } else {
+                    this.do({ id: cell.id, kind: 'draft-on', value });
+                }
+            } else if (!this.isPencil && cell.value != value) {
+                this.do({ id: cell.id, kind: 'set-value', value });
+            }
+            // if cell lost focus because of click number button, focus back
+            if (!cell.isFocused()) {
+                cell.focus();
+            }
         } else {
-            this.externalActiveNumber = 0;
+            // pretend nothing if that number is not available
+            if (this.element.numbers[value].disabled = this.board.map(cell => cell.value == value).filter(x => x).length == 9) {
+                return;
+            }
+            if (this.externalActiveNumber != value) {
+                this.externalActiveNumber = value;
+            } else {
+                this.externalActiveNumber = 0;
+            }
+            this.update();
         }
-        this.update();
     }
-    
+
     private handleClear = () => {
         this.board.setCellData([]);
         this.operations.splice(0, this.operations.length);
@@ -916,21 +942,9 @@ class Rule {
                 this.do({ id: cell.id, kind: 'clear-value' });
             }
         } else if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
-            const value = parseInt(e.key);
-            if (cell != null) {
-                if (this.isPencil && !cell.value) {
-                    if (cell.drafts[value].enabled) {
-                        this.do({ id: cell.id, kind: 'draft-off', value });
-                    } else {
-                        this.do({ id: cell.id, kind: 'draft-on', value });
-                    }
-                } else if (!this.isPencil && cell.value != value) {
-                    this.do({ id: cell.id, kind: 'set-value', value });
-                }
-            } else {
-                this.handleNumberClick(value);
-                return;
-            }
+            this.handleNumberInput(parseInt(e.key));
+            e.stopPropagation();
+            return;
         }
         this.update();
     }
@@ -993,7 +1007,8 @@ class Inferrer {
             } else if (segment.kind == 'cell-id') {
                 const cellId = document.createElement('span');
                 cellId.className = 'cell-id';
-                cellId.innerText = `${segment.cellId[0]},${segment.cellId[1]}`;
+                const cell = this.board.byId(segment.cellId);
+                cellId.innerText = cell.globalCoordinate.join(',');
                 cellId.addEventListener('click', () => {
                     this.board.byId(segment.cellId).focus();
                 });
@@ -1004,7 +1019,7 @@ class Inferrer {
                 number.innerText = segment.value.toString();
                 number.addEventListener('click', () => {
                     if (seq.includes(segment.value)) {
-                        this.rule.handleNumberClick(segment.value);
+                        this.rule.handleNumberInput(segment.value);
                     }
                 });
                 reason.appendChild(number);
@@ -1038,6 +1053,7 @@ class Inferrer {
             this.basic,
             this.singleOccurenceInGroup,
             this.subGroup,
+            this.groupRowOrColumn,
             this.simpleSameGroupCircle,
         ].find(x => x())) {
             this.reason([{ kind: 'text', text: 'nothing for now ' }]);
@@ -1062,7 +1078,7 @@ class Inferrer {
                     ]);
                 }
             }
-        })
+        });
         if (this.board.map(cell => !cell.value && !cell.draftCount).some(x => x)) {
             this.reason([
                 { kind: 'text', text: 'basic: some cells are still empty, fill by apply' },
@@ -1226,8 +1242,169 @@ class Inferrer {
     }
 
     // if a specific value only appears in one row/column inside one block,
-    // then other cells in this group and that complete row cannot have that value
+    // if this value does not appear in the same row/column outside of the block,
+    // then other cell in same block should not have the value,
+    // or if this value does not appear in other cell in the same block,
+    // then other cell in same row/column outside of the block cannot have the value
     private groupRowOrColumn = () => {
+        let ok = false;
+
+        for (const blockIndex of seq) {
+            const block = this.board.blocks[blockIndex];
+            for (const row of [1, 2, 3]) {
+                const inBlockCells = block.map(x => x).filter(cell => !cell.value && cell.row == row);
+                if (inBlockCells.length < 2) {
+                    continue;
+                }
+                const allDraftsInBlockRow = Array.from(new Set(inBlockCells.flatMap(cell => cell.draftValues)));
+                const draftValuesInAllCellsInBlockRow = allDraftsInBlockRow.filter(value => !inBlockCells.some(cell => !cell.drafts[value].enabled));
+                if (draftValuesInAllCellsInBlockRow.length == 0) {
+                    continue;
+                }
+                // console.log(`block ${block.row},${block.column} row ${row} has common draft ${draftValuesInAllCellsInBlockRow.join(',')}`);
+                const otherCellsInBlock = block.map(x => x).filter(cell => !cell.value && cell.row != row);
+                const otherCellsInRow = this.board.map(x => x)
+                    .filter(cell => !cell.value && cell.globalRow == inBlockCells[0].globalRow && cell.block.index != blockIndex);
+                if (otherCellsInBlock.length == 0 && otherCellsInRow.length == 0) {
+                    continue;
+                }
+                for (const attempt of draftValuesInAllCellsInBlockRow) {
+                    if (!otherCellsInBlock.some(cell => cell.drafts[attempt].enabled)) {
+                        const otherCellsInRowHaveThisValue = otherCellsInRow.filter(cell => cell.drafts[attempt].enabled);
+                        if (otherCellsInRowHaveThisValue.length == 0) {
+                            continue;
+                        }
+                        ok = true;
+                        const segments: ReasonSegment[] = [
+                            { kind: 'text', text: 'group-row: value ' },
+                            { kind: 'number', value: attempt },
+                            { kind: 'text', text: ' only exist in cells ' },
+                        ];
+                        for (const cell of inBlockCells) {
+                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                            segments.push({ kind: 'text', text: ';' });
+                        }
+                        segments.pop();
+                        segments.push({ kind: 'text', text: ` in row ${inBlockCells[0].globalRow
+                            } and not in other cells in block ${block.row},${block.column
+                            }, so it cannot exist in other cells in the row outside of the block` });
+                        segments.push({ kind: 'apply', opCount: otherCellsInRowHaveThisValue.length, applier: () => {
+                            for (const cell of otherCellsInRowHaveThisValue) {
+                                if (cell.drafts[attempt].enabled) {
+                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
+                                }
+                            }
+                        } });
+                        this.reason(segments);
+                    } else if (!otherCellsInRow.some(cell => cell.drafts[attempt].enabled)) {
+                        const otherCellsInBlockHaveThisValue = otherCellsInBlock.filter(cell => cell.drafts[attempt].enabled);
+                        if (otherCellsInBlockHaveThisValue.length == 0) {
+                            continue;
+                        }
+                        ok = true;
+                        const segments: ReasonSegment[] = [
+                            { kind: 'text', text: 'group-row: value ' },
+                            { kind: 'number', value: attempt },
+                            { kind: 'text', text: ' only exist in cells ' },
+                        ];
+                        for (const cell of inBlockCells) {
+                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                            segments.push({ kind: 'text', text: ';' });
+                        }
+                        segments.pop();
+                        segments.push({ kind: 'text', text: ` in block ${block.row},${block.column
+                            } and not in other cells in row ${inBlockCells[0].globalRow
+                            }, so it cannot exist in other cells in the block outside of this row` });
+                        segments.push({ kind: 'apply', opCount: otherCellsInBlockHaveThisValue.length, applier: () => {
+                            for (const cell of otherCellsInBlockHaveThisValue) {
+                                if (cell.drafts[attempt].enabled) {
+                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
+                                }
+                            }
+                        } });
+                        this.reason(segments);
+                    }
+                }
+            }
+            // row/column part looks really like but cannot merge for now
+            for (const column of [1, 2, 3]) {
+                const inBlockCells = block.map(x => x).filter(cell => !cell.value && cell.column == column);
+                if (inBlockCells.length < 2) {
+                    continue;
+                }
+                const allDraftsInBlockColumn = Array.from(new Set(inBlockCells.flatMap(cell => cell.draftValues)));
+                const draftValuesInAllCellsInBlockColumn = allDraftsInBlockColumn.filter(value => !inBlockCells.some(cell => !cell.drafts[value].enabled));
+                if (draftValuesInAllCellsInBlockColumn.length == 0) {
+                    continue;
+                }
+                // console.log(`block ${block.row},${block.column} column ${column} has common draft ${draftValuesInAllCellsInBlockColumn.join(',')}`);
+                const otherCellsInBlock = block.map(x => x).filter(cell => !cell.value && cell.column != column);
+                const otherCellsInColumn = this.board.map(x => x)
+                    .filter(cell => !cell.value && cell.globalColumn == inBlockCells[0].globalColumn && cell.block.index != blockIndex);
+                if (otherCellsInBlock.length == 0 && otherCellsInColumn.length == 0) {
+                    continue;
+                }
+                for (const attempt of draftValuesInAllCellsInBlockColumn) {
+                    if (!otherCellsInBlock.some(cell => cell.drafts[attempt].enabled)) {
+                        const otherCellsInColumnHaveThisValue = otherCellsInColumn.filter(cell => cell.drafts[attempt].enabled);
+                        if (otherCellsInColumnHaveThisValue.length == 0) {
+                            continue;
+                        }
+                        ok = true;
+                        const segments: ReasonSegment[] = [
+                            { kind: 'text', text: 'group-column: value ' },
+                            { kind: 'number', value: attempt },
+                            { kind: 'text', text: ' only exist in cells ' },
+                        ];
+                        for (const cell of inBlockCells) {
+                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                            segments.push({ kind: 'text', text: ';' });
+                        }
+                        segments.pop();
+                        segments.push({ kind: 'text', text: ` in column ${inBlockCells[0].globalColumn
+                            } and not in other cells in block ${block.row},${block.column
+                            }, so it cannot exist in other cells in the column outside of the block` });
+                        segments.push({ kind: 'apply', opCount: otherCellsInColumnHaveThisValue.length, applier: () => {
+                            for (const cell of otherCellsInColumnHaveThisValue) {
+                                if (cell.drafts[attempt].enabled) {
+                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
+                                }
+                            }
+                        } });
+                        this.reason(segments);
+                    } else if (!otherCellsInColumn.some(cell => cell.drafts[attempt].enabled)) {
+                        const otherCellsInBlockHaveThisValue = otherCellsInBlock.filter(cell => cell.drafts[attempt].enabled);
+                        if (otherCellsInBlockHaveThisValue.length == 0) {
+                            continue;
+                        }
+                        ok = true;
+                        const segments: ReasonSegment[] = [
+                            { kind: 'text', text: 'group-column: value ' },
+                            { kind: 'number', value: attempt },
+                            { kind: 'text', text: ' only exist in cells ' },
+                        ];
+                        for (const cell of inBlockCells) {
+                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                            segments.push({ kind: 'text', text: ';' });
+                        }
+                        segments.pop();
+                        segments.push({ kind: 'text', text: ` in block ${block.row},${block.column
+                            } and not in other cells in column ${inBlockCells[0].globalColumn
+                            }, so it cannot exist in other cells in the block outside of this column` });
+                        segments.push({ kind: 'apply', opCount: otherCellsInBlockHaveThisValue.length, applier: () => {
+                            for (const cell of otherCellsInBlockHaveThisValue) {
+                                if (cell.drafts[attempt].enabled) {
+                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
+                                }
+                            }
+                        } });
+                        this.reason(segments);
+                    }
+                }
+            }
+        }
+
+        return ok;
     }
 
     // cell a and b are same group, b and c are same group, c and d are same group, d and a are same group
@@ -1328,12 +1505,38 @@ class Inferrer {
 
         return ok;
     }
-    // finally backtrack
-    // TODO this may need additional ui logic
+
+    // they call this swordfish
+    // if a value in draft make form like this
+    // 1      1
+    // 1    1 1
+    //      1 1
+    // which I regard them as an arrow toword right top
+    // |-----|
+    // |---| |
+    //     |-|
+    // then if no additional cells in these 3 rows have the value
+    // then other cells in these 3 columns cannot have the value
+    // or if no additional cells in these 3 columns have the value
+    // then other cells in these 3 rows cannot have the value  
+
+    private thickv = () => {
+        let ok = false;
+
+        return ok;
+    }
+    
 }
+
+// finally backtrack
+// TODO this may need additional ui logic
 
 const ui = makeui();
 const board = new Board(ui);
 const modal = new Modal(ui);
 const rule = window['thegame'] = new Rule(board, modal, ui);
 rule.setInferrer(new Inferrer(rule, ui));
+
+// TODO case 2 have incorrect same-group-circle
+
+// 080006400210040690060070002000000086690804020128000004842010060031000049906400030

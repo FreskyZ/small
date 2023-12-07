@@ -6,7 +6,6 @@ body.dark {
 div.container {
     display: grid;
     margin-left: calc(50vw - 224px);
-    margin-top: calc(50vh - 256px);
     grid-template-rows: 368px 80px;
     grid-template-columns: 369px 72px;
     gap: 8px;
