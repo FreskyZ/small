@@ -60,10 +60,10 @@ div.cell:focus {
 body.dark div.cell:focus {
     border: 2px solid rgb(0, 174, 255);
 }
-div.cell.same-group-hint {
+div.cell.same-region-hint {
     background: #f0f0f0;
 }
-body.dark div.cell.same-group-hint {
+body.dark div.cell.same-region-hint {
     background: #404040;
 }
 div.cell.duplicate-hint div.value {
@@ -109,6 +109,7 @@ div.draft.duplicate-hint {
     background: darkred;
 }
 body.dark div.draft.duplicate-hint {
+    color: #D0D0D0;
     background: lightcoral;
 }
 div.draft.same-value-hint:not(.duplicate-hint) {

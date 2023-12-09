@@ -154,7 +154,7 @@ type CellId = readonly [number, number];
 interface CellData {
     id: CellId,
     value: number,
-    drafts: number[],
+    candidates: readonly number[],
 }
 
 // --------------------------------------
@@ -164,12 +164,12 @@ class Draft {
     public readonly board: Board;
     public readonly block: Block;
     public readonly cell: Cell;
-    public readonly index: number; // index in cell, which is also its display value
-    public constructor(board: Board, block: Block, cell: Cell, index: number, element: HTMLDivElement) {
+    public readonly value: number;
+    public constructor(board: Board, block: Block, cell: Cell, value: number, element: HTMLDivElement) {
         this.board = board;
         this.block = block;
         this.cell = cell;
-        this.index = index;
+        this.value = value;
         this.element = element;
         this._enabled = false;
     }
@@ -185,10 +185,9 @@ class Draft {
 class Cell {
     public readonly board: Board;
     public readonly block: Block;
-    public readonly id: [number, number]; // [block index, cell index], cell index is index in block, start from 1
-    public readonly coordinate: [number, number]; // [row, column], coordinate in block, start from 1 to 3
-    public readonly globalCoordinate: [number, number]; // [row, column], coordinate in board, start from 1 to 9
-    public readonly drafts: Draft[];     // index start from 1, 0 is dummy, true for draft enable
+    public readonly id: CellId; // [block index, cell index], cell index is index in block, start from 1
+    public readonly coordinate: readonly [number, number];       // [row, column], coordinate in block, start from 1 to 3
+    public readonly globalCoordinate: readonly [number, number]; // [row, column], coordinate in board, start from 1 to 9
 
     // cell index start from 1
     public constructor(board: Board, block: Block, index: number, element: CellElement) {
@@ -203,8 +202,7 @@ class Cell {
             (block.index - 1) % 3 * 3 + this.column,
         ];
         this._value = null as unknown as number;
-        this.drafts = [null as unknown as Draft]
-            .concat(seq.map(draftIndex => new Draft(board, block, this, draftIndex, element.drafts[draftIndex])));
+        this.drafts = seq.map(value => new Draft(board, block, this, value, element.drafts[value]));
         this.cellElement = element.self;
         this.valueElement = element.value;
     }
@@ -220,78 +218,93 @@ class Cell {
     public isFocused() { return this.cellElement == document.activeElement; }
     public style(className: string, on: boolean) { classControl(this.cellElement, className, on); }
 
-    public _value: number; // null for empty
+    private _value: number; // null for empty
     public get value(): number { return this._value; }
     public set value(v: number | null) { this._value = v as number; this.valueElement.innerText = v ? v.toString() : ''; }
+    public get hasValue() { return !!this._value; }
+
+    // drafts are the small number in each cell, start from 0
+    public readonly drafts: readonly Draft[];
+    // candidates are cell's possible values, as array of number
+    public hasCandidate(value: number) { return this.drafts[value - 1].enabled; }
+    public get hasAnyCandidate(): boolean { return this.drafts.some(draft => draft.enabled); }
+    public get candidates(): readonly number[] { return this.drafts.filter(draft => draft.enabled).map(draft => draft.value); }
+
+    public get data(): CellData | null {
+        return !this.hasValue && !this.hasAnyCandidate ? null : { id: this.id, value: this.value, candidates: this.candidates };
+    }
+    // set null to clear value and candidates
+    public set data(v: CellData | null) {
+        if (v) {
+            this.value = v.value;
+            this.drafts.forEach(draft => draft.enabled = v.candidates ? v.candidates.includes(draft.value) : false);
+            // compatibility fix for old field name
+            if ((v as any).drafts) {
+                this.drafts.forEach(draft => draft.enabled = (v as any).drafts.includes(draft.value));
+            }
+        } else {
+            this.value = null;
+            this.drafts.forEach(draft => draft.enabled = false);
+        }
+    }
 
     public isId(id: CellId) { return this.id[0] == id[0] && this.id[1] == id[1]; }
     public isSame(rhs: Cell) { return this.isId(rhs.id); }
-    // TODO rename to same-digit
     public isSameValue(rhs: Cell) { return !!this._value && this._value == rhs._value; }
-    // TODO rename to same-region
-    public isSameGroup(rhs: Cell) {
-        return this.globalRow == rhs.globalRow
-            || this.globalColumn == rhs.globalColumn
-            || this.block.index == rhs.block.index;
+    // exclude this
+    public isSameRegion(rhs: Cell) {
+        return !this.isSame(rhs) && (this.globalRow == rhs.globalRow || this.globalColumn == rhs.globalColumn || this.block.index == rhs.block.index);
+    }
+    // include this
+    public isSameOrSameRegion(rhs: Cell) {
+        return this.globalRow == rhs.globalRow || this.globalColumn == rhs.globalColumn || this.block.index == rhs.block.index;
     }
 
-    // this may be widely used
-    public forEach(callback: (draft: Draft) => any) {
-        seq.forEach(draftIndex => callback(this.drafts[draftIndex]));
+    // actually only those 2 functions will set draft on/off
+    // allow undefined because those 2 functions are known to correctly only call with valid draftindex
+    public draftControl(draftIndex: number | undefined, on: boolean) {
+        this.drafts[draftIndex! - 1].enabled = on;
     }
-    // this may be widely used
-    public map<T>(callback: (draft: Draft) => T): T[] {
-        return seq.map(draftIndex => callback(this.drafts[draftIndex]));
-    }
-    public get draftValues() {
-        return seq.filter(draftIndex => this.drafts[draftIndex].enabled);
-    }
-    public get draftCount() {
-        return seq.filter(draftIndex => this.drafts[draftIndex].enabled).length;
-    }
-
     // these 2 functions do not care about operation history
     public apply(op: Operation) {
         const cell = this; // keep separated from this, in case I move this outside of Cell again
         if (op.kind == 'draft-on') {
-            if (cell.value) {
+            if (cell.hasValue) {
                 throw 'invalid operation, draft on when have final value';
-            } else if (cell.drafts[op.value!].enabled) {
+            } else if (cell.hasCandidate(op.value!)) {
                 throw 'invalid operation, draft on duplicate';
             }
-            cell.drafts[op.value!].enabled = true;
+            cell.draftControl(op.value, true);
         } else if (op.kind == 'draft-off') {
-            if (cell.value) {
+            if (cell.hasValue) {
                 throw 'invalid operation, draft off when have final value';
-            } else if (!cell.drafts[op.value!].enabled) {
+            } else if (!cell.hasCandidate(op.value!)) {
                 throw 'invalid operation, draft off when not exist';
             }
-            cell.drafts[op.value!].enabled = false;
+            cell.draftControl(op.value, false);
         } else if (op.kind == 'set-value') {
             op.oldValue = cell.value;
-            op.oldDrafts = this.draftValues;
+            op.oldCandidates = this.candidates;
             op.otherCells = [];
-            this.board.forEach(other => {
-                if (cell.isSameGroup(other) && !cell.isSame(other) && other.drafts[op.value!].enabled) {
-                    other.drafts[op.value!].enabled = false;
-                    op.otherCells?.push(other.id);
-                }
-            })
-            cell.forEach(draft => draft.enabled = false);
+            this.board.cells.filter(other => cell.isSameRegion(other) && other.hasCandidate(op.value!)).forEach(other => {
+                other.draftControl(op.value, false);
+                op.otherCells?.push(other.id);
+            });
+            cell.drafts.forEach(draft => draft.enabled = false);
             cell.value = op.value!;
         } else if (op.kind == 'clear-value') {
-            if (!cell.value) {
+            if (!cell.hasValue) {
                 throw 'invalid operation, clear final value when not have final value';
             }
             op.oldValue = cell.value;
             cell.value = null;
         } else if (op.kind == 'auto-pencil') {
             op.otherCells ??= [];
-            if (!cell.value && !cell.draftCount) {
-                const values = this.board.map(x => x)
-                    .filter(other => cell.isSameGroup(other) && other.value).map(other => other.value);
+            if (!cell.hasValue && !cell.hasAnyCandidate) {
+                const values = this.board.cells
+                    .filter(other => cell.isSameRegion(other) && other.hasValue).map(other => other.value);
                 for (const value of seq.filter(v => !values.includes(v))) {
-                    cell.drafts[value].enabled = true;
+                    cell.draftControl(value, true);
                 }
                 op.otherCells?.push(cell.id);
             }
@@ -300,31 +313,31 @@ class Cell {
     public reverseApply(op: Operation) {
         const cell = this;
         if (op.kind == 'draft-on') {
-            if (cell.value) {
+            if (cell.hasValue) {
                 throw 'invalid reverse operation, cannot reverse draft on when have final value'
-            } else if (!cell.drafts[op.value!].enabled) {
+            } else if (!cell.hasCandidate(op.value!)) {
                 throw 'invalid reverse opration, cannot reverse draft on when that is not on';
             }
-            cell.drafts[op.value!].enabled = false;
+            cell.draftControl(op.value, false);
         } else if (op.kind == 'draft-off') {
-            if (cell.value) {
+            if (cell.hasValue) {
                 throw 'invalid reverse operation, cannot reverse draft off when have final value'
-            } else if (cell.drafts[op.value!].enabled) {
+            } else if (cell.hasCandidate(op.value!)) {
                 throw 'invalid reverse opration, cannot reverse draft off when that is not off';
             }
-            cell.drafts[op.value!].enabled = true;
+            cell.draftControl(op.value, true);
         } else if (op.kind == 'set-value') {
             cell.value = op.oldValue!;
-            op.oldDrafts?.forEach(draftIndex => cell.drafts[draftIndex].enabled = true);
-            op.otherCells?.forEach(id => this.board.byId(id).drafts[op.value!].enabled = true);
+            op.oldCandidates?.forEach(candidate => cell.draftControl(candidate, true));
+            op.otherCells?.forEach(id => this.board.byId(id).draftControl(op.value, true));
         } else if (op.kind == 'clear-value') {
-            if (cell.value) {
+            if (cell.hasValue) {
                 throw 'invalid operation, cannot reverse clear final value when have final value';
             }
             cell.value = op.oldValue!;
         } else if (op.kind == 'auto-pencil') {
             if (op.otherCells?.some(id => cell.isId(id))) {
-                cell.forEach(draft => draft.enabled = false);
+                cell.drafts.forEach(draft => draft.enabled = false);
             }
         }
     }
@@ -332,100 +345,92 @@ class Cell {
 
 class Block {
     public readonly board: Board;
-    public element: BlockElement;
+    public readonly element: BlockElement;
     public readonly index: number;
     public readonly row: number;
     public readonly column: number;
-    public readonly cells: Cell[]; // index start from 1, 0 is dummy
+    public readonly cells: readonly Cell[]; // start from 0
 
     public constructor(board: Board, index: number, element: BlockElement) {
         this.board = board;
         this.element = null as unknown as BlockElement;
         this.index = index;
         [this.row, this.column] = indexToRowColumn(index);
-        this.cells = [null as unknown as Cell]
-            .concat(seq.map(cellIndex => new Cell(board, this, cellIndex, element.cells[cellIndex])));
-    }
-    // this may be widely used
-    public forEach(callback: (cell: Cell) => any) {
-        seq.forEach(cellIndex => callback(this.cells[cellIndex]));
-    }
-    // this may be widely used
-    public map<T>(callback: (cell: Cell) => T): T[] {
-        return seq.map(cellIndex => callback(this.cells[cellIndex]));
+        this.cells = seq.map(cellIndex => new Cell(board, this, cellIndex, element.cells[cellIndex]));
     }
 }
 
 class Board {
-    public readonly blocks: Block[]; // index start from 1, 0 is dummy
+    // start from 0
+    public readonly blocks: readonly Block[];
+    // start from 0, contain exactly the 81 cells, not this.blocks.flatmap(block.cells)
+    // the order is not specified, although it is currently implemented by id (block index then cell index)
+    public readonly cells: readonly Cell[]; 
     
-    constructor(element: UIElement) {
-        this.blocks = [null as unknown as Block]
-            .concat(seq.map(blockIndex => new Block(this, blockIndex, element.blocks[blockIndex])));
+    public constructor(element: UIElement) {
+        this.blocks = seq.map(blockIndex => new Block(this, blockIndex, element.blocks[blockIndex]));
+        this.cells = seq.flatMap(blockIndex => seq.map(cellIndex => this.byId([blockIndex, cellIndex])));
     }
 
     public getCellData(): CellData[] {
-        const results: CellData[] = [];
-        this.forEach(cell => {
-            if (!!cell.value || seq.some(draftIndex => cell.drafts[draftIndex].enabled)) {
-                results.push({
-                    id: cell.id,
-                    value: cell.value,
-                    drafts: seq.filter(draftIndex => cell.drafts[draftIndex].enabled),
-                });
-            }
-        });
-        return results;
+        // amazingly typescript cannot Array<CellData | null>.filter(x => x): Array<CellData>
+        return this.cells.map<CellData>(cell => cell.data!).filter(x => x);
     }
     public setCellData(cellDatas: CellData[]) {
-        this.forEach(cell => {
-            const cellData = cellDatas.find(d => cell.isId(d.id));
-            if (cellData) {
-                cell.value = cellData.value;
-                cell.forEach(draft => draft.enabled = cellData.drafts.includes(draft.index));
-            } else {
-                cell.value = null;
-                cell.forEach(draft => draft.enabled = false);
-                seq.forEach(draftIndex => cell.drafts[draftIndex].enabled = false);
-            }
-        });
+        this.cells.forEach(cell => cell.data = null);
+        cellDatas.forEach(data => this.byId(data.id).data = data);
     }
 
-    // this is widely used
-    public forEach(callback: (cell: Cell) => any) {
-        seq.forEach(blockIndex => seq.forEach(cellIndex => callback(this.blocks[blockIndex].cells[cellIndex])));
+    // get block by block index
+    public byBlockIndex(blockIndex: number): Block {
+        return this.blocks[blockIndex - 1];
     }
-    // this seems widely used
-    public map<T>(callback: (cell: Cell) => T): T[] {
-        const result: T[] = [];
-        seq.forEach(blockIndex => seq.forEach(cellIndex => result.push(callback(this.blocks[blockIndex].cells[cellIndex]))));
-        return result;
+    // get cell by id
+    public byId(id: CellId): Cell {
+        return this.blocks[id[0] - 1].cells[id[1] - 1];
     }
-
-    public byId(id: CellId) {
-        return this.blocks[id[0]].cells[id[1]];
+    // get cells by global row
+    public byGlobalRow(globalRow: number): Cell[] {
+        return this.cells.filter(cell => cell.globalRow == globalRow);
     }
-    // board row and board column start from 1
-    public byGlobalCoordinate([globalRow, globalColumn]: [number, number]) {
+    // get cells by global column
+    public byGlobalColumn(globalColumn: number): Cell[] {
+        return this.cells.filter(cell => cell.globalColumn == globalColumn);
+    }
+    // get cell by global coordinate, global row and global column start from 1
+    public byGlobalCoordinate([globalRow, globalColumn]: [number, number]): Cell {
         return this.blocks[
             // block's row = Math.floor((boardRow - 1) / 3) + 1
             // block's column = Math.floor((boardColumn - 1) / 3) + 1
-            Math.floor((globalRow - 1) / 3) * 3 + Math.floor((globalColumn - 1) / 3) + 1
+            Math.floor((globalRow - 1) / 3) * 3 + Math.floor((globalColumn - 1) / 3)
         ].cells[
             // cell's row = (boardRow - 1) % 3 + 1;
             // cell's column = (boardColumn - 1) % 3 + 1;
-            (globalRow - 1) % 3 * 3 + (globalColumn - 1) % 3 + 1
+            (globalRow - 1) % 3 * 3 + (globalColumn - 1) % 3
         ];
     }
 
+    public forEachRegion(callback: (cells: Cell[], regionName: string) => any) {
+        for (const globalRow of seq) {
+            const cells = seq.map(globalColumn => this.byGlobalCoordinate([globalRow, globalColumn]));
+            callback(cells, `row ${globalRow}`);
+        }
+        for (const globalColumn of seq) {
+            const cells = seq.map(globalRow => this.byGlobalCoordinate([globalRow, globalColumn]));
+            callback(cells, `column ${globalColumn}`);
+        }
+        this.blocks.map(block => callback(block.cells.map(x => x), `block ${block.row},${block.column}`));
+    }
+
     public isComplete() {
-        return !this.map(cell => cell.value).some(v => !v) // not any cell does not have value
-            // every row is complete 1-9
-            && !seq.some(row => seq.map(column => this.byGlobalCoordinate([row, column]).value).sort().some((v, i) => v != i + 1))
-            // every column is complete 1-9
-            && !seq.some(column => seq.map(row => this.byGlobalCoordinate([row, column]).value).sort().some((v, i) => v != i + 1))
-            // every block is complete 1-9
-            && !seq.some(blockIndex => seq.map(cellIndex => this.blocks[blockIndex].cells[cellIndex].value).sort().some((v, i) => v != i + 1));
+        if (this.cells.some(cell => !cell.hasValue)) {
+            return false;
+        }
+        let ok = true;
+        this.forEachRegion((cells, _) => {
+            ok &&= !cells.map(cell => cell.value).sort((a, b) => a - b).some((v, i) => v != i + 1);
+        });
+        return true;
     }
 }
 
@@ -485,22 +490,57 @@ class Modal {
 // ----------------------------------------
 // region user interactive, here handles rule
 
-interface Operation {
-    kind: 'draft-on' | 'draft-off' | 'set-value' | 'clear-value' | 'auto-pencil',
-    // not used in auto-pencil
+type Operation = {
+    kind: 'draft-on',
     id: CellId,
-    // value for draft-on, draft-off, set-value
-    value?: number,
-    // stored old value for set-value or clear-value
-    oldValue?: number,
-    // old draft values in this cell for set-value
-    oldDrafts?: number[],
-    // other same group cell cleared specific draft value by set-value,
-    // or updated auto-pencil cells
-    otherCells?: CellId[],
+    value: number,
+} | {
+    kind: 'draft-off',
+    id: CellId,
+    value: number,
+} | {
+    kind: 'set-value',
+    id: CellId,
+    value: number,
+    // old value, null for originally no value,
+    // specify |null will only add meaningless ! so not 
+    oldValue: number,
+    // old draft values in this cell
+    oldCandidates: readonly number[],
+    // other same region cells with same value candidate
+    otherCells: CellId[],
+} | {
+    kind: 'clear-value',
+    id: CellId,
+    oldValue: number,
+} | {
+    kind: 'auto-pencil',
+    // not used, but put here to make id eaiser to access
+    id: CellId,
+    // auto pencil changed cells
+    otherCells: CellId[],
+}
+// don't require specify those mutable and for-reverse parts when calling do
+type OperationInit = {
+    kind: 'draft-on',
+    id: CellId,
+    value: number,
+} | {
+    kind: 'draft-off',
+    id: CellId,
+    value: number,
+} | {
+    kind: 'set-value',
+    id: CellId,
+    value: number,
+} | {
+    kind: 'clear-value',
+    id: CellId,
+} | {
+    kind: 'auto-pencil',
 }
 
-class Rule {
+class Behavior {
     public readonly board: Board;
     public readonly modal: Modal;
     public readonly element: PanelElement;
@@ -539,14 +579,15 @@ class Rule {
         if (savedatastring) {
             const savedata = JSON.parse(savedatastring);
             this.board.setCellData(savedata.cellData);
-            this.operations = savedata.operations;
+            // compatibility fix for old field name
+            this.operations = savedata.operations.map((op: any) => { if (op) { op.oldCandidates = op.oldCandidates || op.oldDrafts; } return op; });
             this.operationIndex = savedata.operationIndex;
             this.snapshotIndex = savedata.snapshotIndex;
             this.isPencil = savedata.isPencil;
             this.dark = savedata.dark;
         }
 
-        this.board.forEach(cell => {
+        this.board.cells.forEach(cell => {
             cell.cellElement.addEventListener('focus', () => this.update());
             cell.cellElement.addEventListener('blur', () => { this.previouslyActiveCell = cell; this.update(); });
             cell.cellElement.addEventListener('keydown', e => this.handleKeydown(cell, e));
@@ -572,60 +613,54 @@ class Rule {
     // this is called every time game is interacted to update related state
     private update() {
 
-        // same group hint and same value hint
-        this.board.forEach(cell => {
-            cell.style('same-group-hint', false);
+        // same region hint and same value hint
+        this.board.cells.forEach(cell => {
+            cell.style('same-region-hint', false);
             cell.style('same-value-hint', false);
-            cell.forEach(draft => draft.style('same-value-hint', false));
+            cell.drafts.forEach(draft => draft.style('same-value-hint', false));
         })
-        const activeCell = this.board.map(x => x).find(cell => cell.isFocused())
+        const activeCell = this.board.cells.find(cell => cell.isFocused())
             // TODO this make externactivenumber's external part not working, may need a button for that
             || (navigator['userAgentData']?.mobile ? this.previouslyActiveCell : null);
         if (activeCell) {
             this.externalActiveNumber = 0;
-            this.board.forEach(other => {
+            this.board.cells.forEach(other => {
                 // don't forget to off not meet condition cells
-                const sameGroup = activeCell.isSameGroup(other);
+                const sameRegion = activeCell.isSameOrSameRegion(other);
                 const sameValue = activeCell.isSameValue(other);
-                other.style('same-group-hint', sameGroup);
-                other.style('same-value-hint', (!sameGroup || activeCell.isSame(other)) && sameValue);
-                other.forEach(draft => {
-                    draft.style('same-value-hint', draft.enabled && !sameGroup && !!activeCell._value && draft.index == activeCell._value);
+                other.style('same-region-hint', sameRegion);
+                other.style('same-value-hint', !sameRegion && sameValue);
+                other.drafts.forEach(draft => {
+                    draft.style('same-value-hint', draft.enabled && !sameRegion && activeCell.hasValue && draft.value == activeCell.value);
                 });
             });
         } else {
-            this.board.forEach(cell => {
+            this.board.cells.forEach(cell => {
                 cell.style('same-value-hint', cell.value == this.externalActiveNumber);
-                cell.forEach(draft => {
-                    draft.style('same-value-hint', draft.enabled && draft.index == this.externalActiveNumber);
+                cell.drafts.forEach(draft => {
+                    draft.style('same-value-hint', draft.enabled && draft.value == this.externalActiveNumber);
                 });
             });
         }
 
         // duplicate hint
-        this.board.forEach(cell => {
+        this.board.cells.forEach(cell => {
             cell.style('duplicate-hint', false);
-            cell.forEach(draft => draft.style('duplicate-hint', false));
-        })
-        this.board.forEach(lhs => {
-            this.board.forEach(rhs => {
-                if (lhs.isSameGroup(rhs) && !lhs.isSame(rhs)) {
-                    if (lhs.isSameValue(rhs)) {
-                        lhs.style('duplicate-hint', true);
-                        rhs.style('duplicate-hint', true);
-                    }
-                    rhs.forEach(draft => {
-                        if (draft.enabled && !!lhs._value && draft.index == lhs.value) {
-                            draft.style('duplicate-hint', true);
-                        }
-                    });
-                    lhs.forEach(draft => {
-                        if (draft.enabled && !!rhs._value && draft.index == rhs.value) {
-                            draft.style('duplicate-hint', true);
-                        }
-                    });
+            cell.drafts.forEach(draft => draft.style('duplicate-hint', false));
+        });
+        this.board.forEachRegion((cells, _) => {
+            cells.forEach(lhs => cells.filter(rhs => !lhs.isSame(rhs)).forEach(rhs => {
+                if (lhs.isSameValue(rhs)) {
+                    lhs.style('duplicate-hint', true);
+                    rhs.style('duplicate-hint', true);
                 }
-            });
+                rhs.drafts.filter(draft => draft.enabled && lhs.hasValue && draft.value == lhs.value).forEach(draft => {
+                    draft.style('duplicate-hint', true);
+                });
+                lhs.drafts.filter(draft => draft.enabled && rhs.hasValue && draft.value == rhs.value).forEach(draft => {
+                    draft.style('duplicate-hint', true);
+                });
+            }));
         });
 
         // panel style
@@ -636,7 +671,7 @@ class Rule {
         this.element.redo.disabled = this.operations.length <= this.operationIndex || this.operations[this.operationIndex] == null;
         this.element.loadSnapshot.disabled = !this.snapshotIndex || this.operations[this.snapshotIndex] == null;
         seq.forEach(numberIndex => {
-            const disabled = this.board.map(cell => cell.value == numberIndex).filter(x => x).length == 9;
+            const disabled = this.board.cells.filter(cell => cell.value == numberIndex).length == 9;
             this.element.numbers[numberIndex].disabled = disabled;
             if (disabled && this.externalActiveNumber == numberIndex) {
                 this.externalActiveNumber = 0;
@@ -669,7 +704,8 @@ class Rule {
     }
 
     // only these 2 functions alternate operation history
-    public do(op: Operation) {
+    public do(init: OperationInit) {
+        const op = init as Operation;
         if (this.operations.length == this.operationIndex) {
             this.operations.push(op);
         } else {
@@ -679,7 +715,7 @@ class Rule {
             }
         }
         if (op.kind == 'auto-pencil') {
-            this.board.forEach(cell => cell.apply(op));
+            this.board.cells.forEach(cell => cell.apply(op));
         } else {
             this.board.byId(op.id).apply(op);
         }
@@ -698,7 +734,7 @@ class Rule {
                 }
                 const op = this.operations[index];
                 if (op.kind == 'auto-pencil') {
-                    this.board.forEach(cell => cell.reverseApply(op));
+                    this.board.cells.forEach(cell => cell.reverseApply(op));
                 } else {
                     this.board.byId(op.id).reverseApply(op);
                 }
@@ -713,7 +749,7 @@ class Rule {
                 }
                 const op = this.operations[index];
                 if (op.kind == 'auto-pencil') {
-                    this.board.forEach(cell => cell.apply(op));
+                    this.board.cells.forEach(cell => cell.apply(op));
                 } else {
                     this.board.byId(op.id).apply(op);
                 }
@@ -742,7 +778,7 @@ class Rule {
     }
 
     private handleAutoPencil = () => {
-        this.do({ kind: 'auto-pencil', id: [0, 0] });
+        this.do({ kind: 'auto-pencil' });
     }
 
     private inferrer: InferrerLike;
@@ -750,7 +786,7 @@ class Rule {
         this.inferrer = inferer;
     }
     private handleAutoFill = () => {
-        this.inferrer?.infer();
+        this.inferrer.infer(false);
     }
 
     private handleTakeSnapshot = () => {
@@ -766,11 +802,11 @@ class Rule {
 
     // keyboard number click or number button click
     public handleNumberInput = (value: number, e?: PointerEvent) => {
-        const cell = this.board.map(x => x).find(cell => cell.isFocused())
+        const cell = this.board.cells.find(cell => cell.isFocused())
             || (e?.pointerType == 'touch' ? this.previouslyActiveCell : null);
         if (cell) {
-            if (this.isPencil && !cell.value) {
-                if (cell.drafts[value].enabled) {
+            if (this.isPencil && !cell.hasValue) {
+                if (cell.hasCandidate(value)) {
                     this.do({ id: cell.id, kind: 'draft-off', value });
                 } else {
                     this.do({ id: cell.id, kind: 'draft-on', value });
@@ -784,7 +820,7 @@ class Rule {
             }
         } else {
             // pretend nothing if that number is not available
-            if (this.element.numbers[value].disabled = this.board.map(cell => cell.value == value).filter(x => x).length == 9) {
+            if (this.element.numbers[value].disabled = this.board.cells.filter(cell => cell.value == value).length == 9) {
                 return;
             }
             if (this.externalActiveNumber != value) {
@@ -841,7 +877,8 @@ class Rule {
                         const removeOkHandler = this.modal.handleOk(() => {
                             this.board.setCellData(data!.cellData);
                             this.operations.splice(0, this.operations.length);
-                            this.operations.push(...data!.operations);
+                            // compatibility fix for old field name
+                            this.operations.push(...data!.operations.map((op: any) => { if (op) { op.oldCandidates = op.oldCandidates || op.oldDrafts; } return op; }));
                             this.operationIndex = data!.operationIndex;
                             this.snapshotIndex = 0;
                             this.reportedComplete = false;
@@ -890,55 +927,51 @@ class Rule {
             e.stopPropagation();
             return;
         } else if (e.key == 'q' || e.key == 'Q') {
-            if (e.altKey) {
-                this.inferrer.infer();
-            } else {
-                this.inferrer.infer();
-                this.inferrer.applyLastInferResult();
-            }
+            this.inferrer.infer(true);
+            e.stopPropagation();
+        } else if (e.key == 'v' && e.ctrlKey) {
+            // text sharing format from sudoku.coach
+            // \d{81} as in globalrow from 1 to 9 then globalcolumn from 1 to 9 order
+            navigator.clipboard.readText().then(text => {
+                if (/^\d{81}$/.test(text) && confirm(`paste sudoku.coach text sharing format ${text}?`)) {
+                    let cellData: CellData[] = [];
+                    for (const globalRow of seq) {
+                        for (const globalColumn of seq) {
+                            const value = parseInt(text.charAt((globalRow - 1) * 9 + globalColumn - 1));
+                            if (value) {
+                                cellData.push({ id: this.board.byGlobalCoordinate([globalRow, globalColumn]).id, value, candidates: [] });
+                            }
+                        }
+                    }
+                    this.board.setCellData(cellData);
+                    this.operations.splice(0, this.operations.length);
+                    // compatibility fix for old field name
+                    this.operations.push(null as unknown as Operation);
+                    this.operationIndex = 1;
+                    this.snapshotIndex = 0;
+                    this.reportedComplete = false;
+                    this.update();
+                }
+            });
             e.stopPropagation();
         } else if (e.key == 'ArrowLeft' && cell != null) {
-            let [row, column, blockRow, blockColumn] = [cell.row, cell.column, cell.block.row, cell.block.column];
-            column -= 1;
-            if (column == 0) {
-                blockColumn -= 1;
-                column = 3;
-            }
-            if (blockColumn > 0) {
-                this.board.blocks[rowColumnToIndex(blockRow, blockColumn)].cells[rowColumnToIndex(row, column)].focus();
+            if (cell.globalColumn > 1) {
+                this.board.byGlobalCoordinate([cell.globalRow, cell.globalColumn - 1]).focus();
             }
         } else if (e.key == 'ArrowRight' && cell != null) {
-            let [row, column, blockRow, blockColumn] = [cell.row, cell.column, cell.block.row, cell.block.column];
-            column += 1;
-            if (column > 3) {
-                blockColumn += 1;
-                column = 1;
-            }
-            if (blockColumn <= 3) {
-                this.board.blocks[rowColumnToIndex(blockRow, blockColumn)].cells[rowColumnToIndex(row, column)].focus();
+            if (cell.globalColumn < 9) {
+                this.board.byGlobalCoordinate([cell.globalRow, cell.globalColumn + 1]).focus();
             }
         } else if (e.key == 'ArrowUp' && cell != null) {
-            let [row, column, blockRow, blockColumn] = [cell.row, cell.column, cell.block.row, cell.block.column];
-            row -= 1;
-            if (row == 0) {
-                blockRow -= 1;
-                row = 3;
-            }
-            if (blockRow > 0) {
-                this.board.blocks[rowColumnToIndex(blockRow, blockColumn)].cells[rowColumnToIndex(row, column)].focus();
+            if (cell.globalRow > 1) {
+                this.board.byGlobalCoordinate([cell.globalRow - 1, cell.globalColumn]).focus();
             }
         } else if (e.key == 'ArrowDown' && cell != null) {
-            let [row, column, blockRow, blockColumn] = [cell.row, cell.column, cell.block.row, cell.block.column];
-            row += 1;
-            if (row > 3) {
-                blockRow += 1;
-                row = 1;
-            }
-            if (blockRow <= 3) {
-                this.board.blocks[rowColumnToIndex(blockRow, blockColumn)].cells[rowColumnToIndex(row, column)].focus();
+            if (cell.globalRow < 9) {
+                this.board.byGlobalCoordinate([cell.globalRow + 1, cell.globalColumn]).focus();
             }
         } else if ((e.key == 'Backspace' || e.key == 'Delete') && cell != null) {
-            if (cell.value) {
+            if (cell.hasValue) {
                 this.do({ id: cell.id, kind: 'clear-value' });
             }
         } else if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(e.key)) {
@@ -951,8 +984,7 @@ class Rule {
 }
 
 interface InferrerLike {
-    infer: () => void;
-    applyLastInferResult: () => void;
+    infer: (apply: boolean) => void;
 }
 
 type ReasonSegment = {
@@ -960,44 +992,27 @@ type ReasonSegment = {
     text: string,
 } | {
     kind: 'cell-id',
-    cellId: CellId,
+    id: CellId,
 } | {
     kind: 'number',
     value: number,
-} | {
-    kind: 'apply',
-    opCount: number,
-    applier: () => void,
 }
 
 class Inferrer {
-    public readonly rule: Rule;
+    public readonly behavior: Behavior;
     public readonly board: Board;
     public readonly element: HTMLDivElement;
-    public constructor(rule: Rule, element: UIElement) {
-        this.rule = rule;
-        this.board = rule.board;
+    public constructor(behavior: Behavior, element: UIElement) {
+        this.behavior = behavior;
+        this.board = behavior.board;
         this.element = element.reasons;
     }
 
-    private appliers: HTMLSpanElement[];
-    public applyLastInferResult = () => {
-        // if apply throws, this seems infinite loop
-        const maxApplyTimes = this.appliers.length;
-        // so use this to prevent that
-        let applyTimes = 0;
-        while (this.appliers.length) {
-            // this event handler alters this appliers, so can only iterate like this
-            this.appliers[0].click();
-            applyTimes += 1;
-            if (applyTimes == maxApplyTimes) {
-                break;
-            }
-        }
-    };
-    private reason(segments: ReasonSegment[]) {
+    private reason(segments: ReasonSegment[], operations: OperationInit[]) {
         const reason = document.createElement('div');
         reason.className = 'reason';
+        this.element.appendChild(reason);
+        reason.scrollIntoView({ behavior: 'smooth' });
         for (const segment of segments) {
             if (segment.kind == 'text') {
                 const text = document.createElement('span');
@@ -1007,10 +1022,10 @@ class Inferrer {
             } else if (segment.kind == 'cell-id') {
                 const cellId = document.createElement('span');
                 cellId.className = 'cell-id';
-                const cell = this.board.byId(segment.cellId);
+                const cell = this.board.byId(segment.id);
                 cellId.innerText = cell.globalCoordinate.join(',');
                 cellId.addEventListener('click', () => {
-                    this.board.byId(segment.cellId).focus();
+                    this.board.byId(segment.id).focus();
                 });
                 reason.appendChild(cellId);
             } else if (segment.kind == 'number') {
@@ -1019,154 +1034,150 @@ class Inferrer {
                 number.innerText = segment.value.toString();
                 number.addEventListener('click', () => {
                     if (seq.includes(segment.value)) {
-                        this.rule.handleNumberInput(segment.value);
+                        this.behavior.handleNumberInput(segment.value);
                     }
                 });
                 reason.appendChild(number);
-            } else if (segment.kind == 'apply') {
-                const apply = document.createElement('span');
-                apply.className = 'apply';
-                apply.innerText = 'apply';
-                if (segment.opCount > 1) {
-                    apply.innerText = `apply (${segment.opCount})`;
-                }
-                const handler = () => {
-                    segment.applier();
-                    this.appliers.splice(this.appliers.indexOf(apply), 1);
-                    apply.classList.add('disabled');
-                    apply.removeEventListener('click', handler);
-                };
-                apply.addEventListener('click', handler);
-                reason.appendChild(apply);
-                this.appliers.push(apply);
             }
         }
-        this.element.appendChild(reason);
-        reason.scrollIntoView({ behavior: 'smooth' });
+        if (this.apply) {
+            for (const op of operations) {
+                if (op.kind == 'auto-pencil') {
+                    this.behavior.do(op);
+                } else if (op.kind == 'set-value') {
+                    if (this.board.byId(op.id).value != op.value) {
+                        this.behavior.do(op);
+                    }
+                } else if (op.kind == 'draft-off') {
+                    if (this.board.byId(op.id).hasCandidate(op.value!)) {
+                        this.behavior.do(op);
+                    }
+                } else {
+                    throw 'invalid reason op kind';
+                }
+            }
+        }
     }
 
-    public infer = () => {
-        this.appliers = [];
+    private apply: boolean;
+    public infer = (apply: boolean) => {
+        this.apply = apply;
         this.element.innerHTML = '';
         if (![
-            this.requireNotEmpty,
-            this.basic,
-            this.singleOccurenceInGroup,
-            this.subGroup,
-            this.groupRowOrColumn,
-            this.simpleSameGroupCircle,
+            this.basicValidation,
+            this.autoPencil,
+            this.singleCandidate,
+            this.singleOccurenceInRegion,
+            this.subregion,
+            this.blockRowOrColumn,
+            this.x,
+            this.simpleSameRegionCircle,
         ].find(x => x())) {
-            this.reason([{ kind: 'text', text: 'nothing for now ' }]);
+            this.reason([{ kind: 'text', text: 'nothing for now ' }], []);
         }
     }
 
-    private requireNotEmpty = () => {
+    private basicValidation = () => {
+        // note this ok means not ok in this function
+        // because other functions use ok to disable following strategies,
+        // this function use ok to indicate basic error and should not go forward
         let ok = false;
-        // validate invalid cell by basic rule should be before require not empty
-        this.board.forEach(cell => {
-            if (!cell.value) {
-                // also validate the cell regardless of current draft state
-                const existValues = this.board.map(x => x)
-                    .filter(other => cell.isSameGroup(other) && other.value).map(other => other.value);
-                const possibleValues = seq.filter(v => !existValues.includes(v));
-                if (possibleValues.length == 0) {
-                    ok = true;
-                    this.reason([
-                        { kind: 'text', text: 'basic: cell ' },
-                        { kind: 'cell-id', cellId: cell.id },
-                        { kind: 'text', text: ' is already incorrect with no possible values' },
-                    ]);
-                }
+        // duplicate value in region
+        this.board.forEachRegion((cells, regionName) => {
+            if (cells.filter(cell => cell.hasValue).map(cell => cell.value).some((v, i, a) => a.indexOf(v) != i)) {
+                ok = true;
+                this.reason([
+                    { kind: 'text', text: `basic-validation: ${regionName} have duplicate values` },
+                ], []);
             }
         });
-        if (this.board.map(cell => !cell.value && !cell.draftCount).some(x => x)) {
+        // no candidate
+        this.board.cells.filter(cell => !cell.hasValue).forEach(cell => {
+            // also validate the cell regardless of current draft state
+            const existValues = this.board.cells.filter(other => cell.isSameRegion(other) && other.hasValue).map(other => other.value);
+            const possibleValues = seq.filter(v => !existValues.includes(v));
+            if (possibleValues.length == 0) {
+                ok = true;
+                this.reason([
+                    { kind: 'text', text: 'basic-validation: cell ' },
+                    { kind: 'cell-id', id: cell.id },
+                    { kind: 'text', text: ' is already incorrect with no possible values' },
+                ], []);
+            }
+        });
+        return ok;
+    }
+    private autoPencil = () => {
+        let ok = false;
+        if (this.board.cells.some(cell => !cell.hasValue && !cell.hasAnyCandidate)) {
+            ok = true;
             this.reason([
-                { kind: 'text', text: 'basic: some cells are still empty, fill by apply' },
-                { kind: 'apply', opCount: 1, applier: () => this.rule.do({ kind: 'auto-pencil', id: [0, 0] }) },
+                { kind: 'text', text: 'basic: some cells are still empty' },
+            ], [
+                { kind: 'auto-pencil' },
             ]);
-            ok = true; // return true to disable following steps
         }
         return ok;
     }
-    // same as auto pencil, when only one value possible, that's the result
-    private basic = () => {
+
+    private singleCandidate = () => {
         let ok = false;
-        this.board.forEach(cell => {
-            if (!cell.value) {
-                if (cell.draftCount == 1) {
-                    ok = true;
-                    // cannot inline this, if some error happens,
-                    // cell.draftvalues may become empty after previous applies in same batch
-                    const value = cell.draftValues[0];
-                    this.reason([
-                        { kind: 'text', text: 'basic: cell ' },
-                        { kind: 'cell-id', cellId: cell.id },
-                        { kind: 'text', text: ' value ' },
-                        { kind: 'number', value },
-                        { kind: 'apply', opCount: 1, applier: () => {
-                            this.rule.do({ kind: 'set-value', id: cell.id, value });
-                        } },
-                    ]);
-                }
-            }
+        this.board.cells.filter(cell => !cell.hasValue && cell.candidates.length == 1).forEach(cell => {
+            ok = true;
+            // cannot inline this, if some error happens,
+            // cell.draftvalues may become empty after previous applies in same batch
+            const value = cell.candidates[0];
+            this.reason([
+                { kind: 'text', text: 'single-candidate: cell ' },
+                { kind: 'cell-id', id: cell.id },
+                { kind: 'text', text: ' value ' },
+                { kind: 'number', value },
+            ], [
+                { kind: 'set-value', id: cell.id, value },
+            ]);
         });
         return ok;
     }
 
-    // single occurence in different types of group, this works on existing draft
-    private singleOccurenceInGroup = () => {
+    // single occurence in different types of region, this works on existing draft
+    private singleOccurenceInRegion = () => {
         let ok = false;
         const okedCells: CellId[] = []; 
 
-        const handleCells = (cells: Cell[], groupName: string) => {
-            for (const possibleValue of seq) {
-                const occurence = cells.filter(cell => !cell.value && cell.drafts[possibleValue].enabled);
+        this.board.forEachRegion((cells, regionName) => {
+            for (const attempt of seq) {
+                const occurence = cells.filter(cell => !cell.hasValue && cell.hasCandidate(attempt));
                 if (occurence.length == 1) {
-                    ok = true;
                     if (okedCells.some(id => occurence[0].isId(id))) {
                         continue;
                     }
                     okedCells.push(occurence[0].id);
+                    ok = true;
                     this.reason([
                         { kind: 'text', text: 'single-occur: cell ' },
-                        { kind: 'cell-id', cellId: occurence[0].id },
+                        { kind: 'cell-id', id: occurence[0].id },
                         { kind: 'text', text: ' is ' },
-                        { kind: 'number', value: possibleValue },
-                        { kind: 'text', text: ` because it is occurred only once in ${groupName}` },
-                        { kind: 'apply', opCount: 1, applier: () => {
-                            this.rule.do({ kind: 'set-value', id: occurence[0].id, value: possibleValue });
-                        } },
+                        { kind: 'number', value: attempt },
+                        { kind: 'text', text: ` because it is occurred only once in ${regionName}` },
+                    ], [
+                        { kind: 'set-value', id: occurence[0].id, value: attempt },
                     ]);
                 }
             }
-        }
-
-        for (const globalRow of seq) {
-            const cells = seq.map(globalColumn => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            handleCells(cells, `row ${globalRow}`);
-        }
-        for (const globalColumn of seq) {
-            const cells = seq.map(globalRow => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            handleCells(cells, `column ${globalColumn}`);
-        }
-        for (const blockIndex of seq) {
-            const block = this.board.blocks[blockIndex];
-            const cells = block.map(cell => cell);
-            handleCells(cells, `block ${block.row},${block.column}`);
-        }
+        });
         return ok;
     }
 
-    // for each group, if N cells only have N numbers,
+    // for each region, if N cells only have N numbers,
     // e.g. 2 cells with 2,4 and 2,4
     // e.g. 3 cells with 2,3; 2,4 and 3,4
     // then other cells should not have these number
-    private subGroup = () => {
+    private subregion = () => {
         let ok = false;
 
-        const handleCells = (cells: Cell[], groupName: string) => {
+        this.board.forEachRegion((cells, regionName) => {
             // only care about drafted cells
-            cells = cells.filter(cell => !cell.value);
+            cells = cells.filter(cell => !cell.hasValue);
             // not work for remaining 2 cells
             if (cells.length <= 2) {
                 return;
@@ -1178,18 +1189,18 @@ class Inferrer {
                 if (selection.length <= 1) {
                     continue;
                 }
-                const draftset = new Set(selection.flatMap(cell => cell.draftValues));
-                if (draftset.size != selection.length) {
+                const candidateset = new Set(selection.flatMap(cell => cell.candidates));
+                if (candidateset.size != selection.length) {
                     continue; // most normal case
                 }
                 
-                const drafts = Array.from(draftset);
+                const allCandidates = Array.from(candidateset);
                 const otherCells = cells.filter(cell => !selection.some(selection => selection.isSame(cell)));
                 const operations: Operation[] = [];
                 for (const otherCell of otherCells) {
-                    for (const value of drafts) {
-                        if (otherCell.drafts[value].enabled) {
-                            operations.push({ kind: 'draft-off', id: otherCell.id, value });
+                    for (const attempt of allCandidates) {
+                        if (otherCell.hasCandidate(attempt)) {
+                            operations.push({ kind: 'draft-off', id: otherCell.id, value: attempt });
                         }
                     }
                 }
@@ -1197,47 +1208,24 @@ class Inferrer {
                 if (operations.length == 0) {
                     continue; // other cells already cleared
                 }
+                ok = true;
                 const segments: ReasonSegment[] = [
-                    { kind: 'text', text: 'sub-group: cells ' },
+                    { kind: 'text', text: 'subregion: cells ' },
                 ];
                 for (const cell of selection) {
-                    segments.push({ kind: 'cell-id', cellId: cell.id });
+                    segments.push({ kind: 'cell-id', id: cell.id });
                     segments.push({ kind: 'text', text: ';' });
                 }
                 segments.pop();
                 segments.push({ kind: 'text', text: ' only contains ' });
-                for (const value of draftset) {
+                for (const value of candidateset) {
                     segments.push({ kind: 'number', value });
                     segments.push({ kind: 'text', text: ',' });
                 }
-                segments.push({ kind: 'text', text: ` so other cells in ${groupName} can remove these values` });
-                segments.push({ kind: 'apply', opCount: operations.length, applier: () => {
-                    for (const op of operations) {
-                        // the draft may be already off by other appliers in same batch, do not apply them
-                        if (op.kind == 'draft-off' && !this.board.byId(op.id).drafts[op.value!].enabled) {
-                            continue;
-                        }
-                        this.rule.do(op);
-                    }
-                } });
-                ok = true;
-                this.reason(segments);
+                segments.push({ kind: 'text', text: ` so other cells in ${regionName} can remove these values` });
+                this.reason(segments, operations);
             }
-        }
-
-        for (const globalRow of seq) {
-            const cells = seq.map(globalColumn => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            handleCells(cells, `row ${globalRow}`);
-        }
-        for (const globalColumn of seq) {
-            const cells = seq.map(globalRow => this.board.byGlobalCoordinate([globalRow, globalColumn]));
-            handleCells(cells, `column ${globalColumn}`);
-        }
-        for (const blockIndex of seq) {
-            const block = this.board.blocks[blockIndex];
-            const cells = block.map(cell => cell);
-            handleCells(cells, `block ${block.row},${block.column}`);
-        }
+        });
         return ok;
     }
 
@@ -1246,159 +1234,137 @@ class Inferrer {
     // then other cell in same block should not have the value,
     // or if this value does not appear in other cell in the same block,
     // then other cell in same row/column outside of the block cannot have the value
-    private groupRowOrColumn = () => {
+    private blockRowOrColumn = () => {
         let ok = false;
 
-        for (const blockIndex of seq) {
-            const block = this.board.blocks[blockIndex];
+        for (const block of this.board.blocks) {
             for (const row of [1, 2, 3]) {
-                const inBlockCells = block.map(x => x).filter(cell => !cell.value && cell.row == row);
-                if (inBlockCells.length < 2) {
+                // both in block and in row cells
+                const blockRowCells = block.cells.filter(cell => !cell.hasValue && cell.row == row);
+                if (blockRowCells.length < 2) {
                     continue;
                 }
-                const allDraftsInBlockRow = Array.from(new Set(inBlockCells.flatMap(cell => cell.draftValues)));
-                const draftValuesInAllCellsInBlockRow = allDraftsInBlockRow.filter(value => !inBlockCells.some(cell => !cell.drafts[value].enabled));
-                if (draftValuesInAllCellsInBlockRow.length == 0) {
+                const multipleOccurenceCandidates = seq.filter(value => blockRowCells.filter(cell => cell.hasCandidate(value)).length > 1);
+                if (multipleOccurenceCandidates.length == 0) {
                     continue;
                 }
-                // console.log(`block ${block.row},${block.column} row ${row} has common draft ${draftValuesInAllCellsInBlockRow.join(',')}`);
-                const otherCellsInBlock = block.map(x => x).filter(cell => !cell.value && cell.row != row);
-                const otherCellsInRow = this.board.map(x => x)
-                    .filter(cell => !cell.value && cell.globalRow == inBlockCells[0].globalRow && cell.block.index != blockIndex);
-                if (otherCellsInBlock.length == 0 && otherCellsInRow.length == 0) {
+                const blockOtherCells = block.cells.filter(cell => !cell.hasValue && cell.row != row);
+                const rowOtherCells = this.board.cells
+                    .filter(cell => !cell.hasValue && cell.globalRow == blockRowCells[0].globalRow && cell.block.index != block.index);
+                if (blockOtherCells.length == 0 && rowOtherCells.length == 0) {
                     continue;
                 }
-                for (const attempt of draftValuesInAllCellsInBlockRow) {
-                    if (!otherCellsInBlock.some(cell => cell.drafts[attempt].enabled)) {
-                        const otherCellsInRowHaveThisValue = otherCellsInRow.filter(cell => cell.drafts[attempt].enabled);
-                        if (otherCellsInRowHaveThisValue.length == 0) {
+                for (const attempt of multipleOccurenceCandidates) {
+                    // if block other cells does not have the candidate, then row other cells cannot have the candidate
+                    if (!blockOtherCells.some(cell => cell.hasCandidate(attempt))) {
+                        const rowOtherCellsWithThisValue = rowOtherCells.filter(cell => cell.hasCandidate(attempt));
+                        if (rowOtherCellsWithThisValue.length == 0) {
                             continue;
                         }
                         ok = true;
                         const segments: ReasonSegment[] = [
-                            { kind: 'text', text: 'group-row: value ' },
+                            { kind: 'text', text: 'block-row: value ' },
                             { kind: 'number', value: attempt },
                             { kind: 'text', text: ' only exist in cells ' },
                         ];
-                        for (const cell of inBlockCells) {
-                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                        for (const cell of blockRowCells) {
+                            segments.push({ kind: 'cell-id', id: cell.id });
                             segments.push({ kind: 'text', text: ';' });
                         }
                         segments.pop();
-                        segments.push({ kind: 'text', text: ` in row ${inBlockCells[0].globalRow
+                        segments.push({ kind: 'text', text: ` in row ${blockRowCells[0].globalRow
                             } and not in other cells in block ${block.row},${block.column
                             }, so it cannot exist in other cells in the row outside of the block` });
-                        segments.push({ kind: 'apply', opCount: otherCellsInRowHaveThisValue.length, applier: () => {
-                            for (const cell of otherCellsInRowHaveThisValue) {
-                                if (cell.drafts[attempt].enabled) {
-                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
-                                }
-                            }
-                        } });
-                        this.reason(segments);
-                    } else if (!otherCellsInRow.some(cell => cell.drafts[attempt].enabled)) {
-                        const otherCellsInBlockHaveThisValue = otherCellsInBlock.filter(cell => cell.drafts[attempt].enabled);
-                        if (otherCellsInBlockHaveThisValue.length == 0) {
+                        const operations = rowOtherCellsWithThisValue
+                            .map<OperationInit>(cell => ({ kind: 'draft-off', id: cell.id, value: attempt }));
+                        this.reason(segments, operations);
+                    } else if (!rowOtherCells.some(cell => cell.hasCandidate(attempt))) {
+                        const blockOtherCellsWithThisValue = blockOtherCells.filter(cell => cell.hasCandidate(attempt));
+                        if (blockOtherCellsWithThisValue.length == 0) {
                             continue;
                         }
                         ok = true;
                         const segments: ReasonSegment[] = [
-                            { kind: 'text', text: 'group-row: value ' },
+                            { kind: 'text', text: 'block-row: value ' },
                             { kind: 'number', value: attempt },
                             { kind: 'text', text: ' only exist in cells ' },
                         ];
-                        for (const cell of inBlockCells) {
-                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                        for (const cell of blockRowCells) {
+                            segments.push({ kind: 'cell-id', id: cell.id });
                             segments.push({ kind: 'text', text: ';' });
                         }
                         segments.pop();
                         segments.push({ kind: 'text', text: ` in block ${block.row},${block.column
-                            } and not in other cells in row ${inBlockCells[0].globalRow
+                            } and not in other cells in row ${blockRowCells[0].globalRow
                             }, so it cannot exist in other cells in the block outside of this row` });
-                        segments.push({ kind: 'apply', opCount: otherCellsInBlockHaveThisValue.length, applier: () => {
-                            for (const cell of otherCellsInBlockHaveThisValue) {
-                                if (cell.drafts[attempt].enabled) {
-                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
-                                }
-                            }
-                        } });
-                        this.reason(segments);
+                        const operations = blockOtherCellsWithThisValue
+                            .map<OperationInit>(cell => ({ kind: 'draft-off', id: cell.id, value: attempt }));
+                        this.reason(segments, operations);
                     }
                 }
             }
             // row/column part looks really like but cannot merge for now
             for (const column of [1, 2, 3]) {
-                const inBlockCells = block.map(x => x).filter(cell => !cell.value && cell.column == column);
-                if (inBlockCells.length < 2) {
+                // both in block and column cells
+                const blockColumnCells = block.cells.filter(cell => !cell.hasValue && cell.column == column);
+                if (blockColumnCells.length < 2) {
                     continue;
                 }
-                const allDraftsInBlockColumn = Array.from(new Set(inBlockCells.flatMap(cell => cell.draftValues)));
-                const draftValuesInAllCellsInBlockColumn = allDraftsInBlockColumn.filter(value => !inBlockCells.some(cell => !cell.drafts[value].enabled));
-                if (draftValuesInAllCellsInBlockColumn.length == 0) {
+                const multipleOccurenceCandidates = seq.filter(value => blockColumnCells.filter(cell => cell.hasCandidate(value)).length > 1);
+                if (multipleOccurenceCandidates.length == 0) {
                     continue;
                 }
-                // console.log(`block ${block.row},${block.column} column ${column} has common draft ${draftValuesInAllCellsInBlockColumn.join(',')}`);
-                const otherCellsInBlock = block.map(x => x).filter(cell => !cell.value && cell.column != column);
-                const otherCellsInColumn = this.board.map(x => x)
-                    .filter(cell => !cell.value && cell.globalColumn == inBlockCells[0].globalColumn && cell.block.index != blockIndex);
-                if (otherCellsInBlock.length == 0 && otherCellsInColumn.length == 0) {
+                const blockOtherCells = block.cells.filter(cell => !cell.hasValue && cell.column != column);
+                const columnOtherCells = this.board.cells
+                    .filter(cell => !cell.hasValue && cell.globalColumn == blockColumnCells[0].globalColumn && cell.block.index != block.index);
+                if (blockOtherCells.length == 0 && columnOtherCells.length == 0) {
                     continue;
                 }
-                for (const attempt of draftValuesInAllCellsInBlockColumn) {
-                    if (!otherCellsInBlock.some(cell => cell.drafts[attempt].enabled)) {
-                        const otherCellsInColumnHaveThisValue = otherCellsInColumn.filter(cell => cell.drafts[attempt].enabled);
-                        if (otherCellsInColumnHaveThisValue.length == 0) {
+                for (const attempt of multipleOccurenceCandidates) {
+                    if (!blockOtherCells.some(cell => cell.hasCandidate(attempt))) {
+                        const ColumnOtherCellsWithThisValue = columnOtherCells.filter(cell => cell.hasCandidate(attempt));
+                        if (ColumnOtherCellsWithThisValue.length == 0) {
                             continue;
                         }
                         ok = true;
                         const segments: ReasonSegment[] = [
-                            { kind: 'text', text: 'group-column: value ' },
+                            { kind: 'text', text: 'block-column: value ' },
                             { kind: 'number', value: attempt },
                             { kind: 'text', text: ' only exist in cells ' },
                         ];
-                        for (const cell of inBlockCells) {
-                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                        for (const cell of blockColumnCells) {
+                            segments.push({ kind: 'cell-id', id: cell.id });
                             segments.push({ kind: 'text', text: ';' });
                         }
                         segments.pop();
-                        segments.push({ kind: 'text', text: ` in column ${inBlockCells[0].globalColumn
+                        segments.push({ kind: 'text', text: ` in column ${blockColumnCells[0].globalColumn
                             } and not in other cells in block ${block.row},${block.column
                             }, so it cannot exist in other cells in the column outside of the block` });
-                        segments.push({ kind: 'apply', opCount: otherCellsInColumnHaveThisValue.length, applier: () => {
-                            for (const cell of otherCellsInColumnHaveThisValue) {
-                                if (cell.drafts[attempt].enabled) {
-                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
-                                }
-                            }
-                        } });
-                        this.reason(segments);
-                    } else if (!otherCellsInColumn.some(cell => cell.drafts[attempt].enabled)) {
-                        const otherCellsInBlockHaveThisValue = otherCellsInBlock.filter(cell => cell.drafts[attempt].enabled);
-                        if (otherCellsInBlockHaveThisValue.length == 0) {
+                        const operations = ColumnOtherCellsWithThisValue
+                            .map<OperationInit>(cell => ({ kind: 'draft-off', id: cell.id, value: attempt }));
+                        this.reason(segments, operations);
+                    } else if (!columnOtherCells.some(cell => cell.hasCandidate(attempt))) {
+                        const blockOtherCellsWithThisValue = blockOtherCells.filter(cell => cell.hasCandidate(attempt));
+                        if (blockOtherCellsWithThisValue.length == 0) {
                             continue;
                         }
                         ok = true;
                         const segments: ReasonSegment[] = [
-                            { kind: 'text', text: 'group-column: value ' },
+                            { kind: 'text', text: 'block-column: value ' },
                             { kind: 'number', value: attempt },
                             { kind: 'text', text: ' only exist in cells ' },
                         ];
-                        for (const cell of inBlockCells) {
-                            segments.push({ kind: 'cell-id', cellId: cell.id });
+                        for (const cell of blockColumnCells) {
+                            segments.push({ kind: 'cell-id', id: cell.id });
                             segments.push({ kind: 'text', text: ';' });
                         }
                         segments.pop();
                         segments.push({ kind: 'text', text: ` in block ${block.row},${block.column
-                            } and not in other cells in column ${inBlockCells[0].globalColumn
+                            } and not in other cells in column ${blockColumnCells[0].globalColumn
                             }, so it cannot exist in other cells in the block outside of this column` });
-                        segments.push({ kind: 'apply', opCount: otherCellsInBlockHaveThisValue.length, applier: () => {
-                            for (const cell of otherCellsInBlockHaveThisValue) {
-                                if (cell.drafts[attempt].enabled) {
-                                    this.rule.do({ kind: 'draft-off', id: cell.id, value: attempt });
-                                }
-                            }
-                        } });
-                        this.reason(segments);
+                            const operations = blockOtherCellsWithThisValue
+                                .map<OperationInit>(cell => ({ kind: 'draft-off', id: cell.id, value: attempt }));
+                        this.reason(segments, operations);
                     }
                 }
             }
@@ -1407,13 +1373,106 @@ class Inferrer {
         return ok;
     }
 
-    // cell a and b are same group, b and c are same group, c and d are same group, d and a are same group
+    // if 2 rows/columns both only have 2 occurence of one value and that 2 ocurrence is same column/rows
+    // then the value must be in that 2 columns/rows, so other cells in the same columns/rows cannot have the value
+    // this is called x because the 4 cells only have 2 possiblities which are both diagnally, after connected they look like x
+    private x = () => {
+        let ok = false;
+
+        for (const row1 of seq) {
+            for (const row2 of seq.filter(r => r > row1)) {
+                for (const attempt of seq) {
+                    const row1Cells = this.board.byGlobalRow(row1).filter(cell => cell.hasCandidate(attempt));
+                    const row2Cells = this.board.byGlobalRow(row2).filter(cell => cell.hasCandidate(attempt));
+                    if (row1Cells.length != 2 || row2Cells.length != 2) {
+                        continue;
+                    }
+                    if (row1Cells[0].globalColumn != row2Cells[0].globalColumn || (row1Cells[1].globalColumn != row2Cells[1].globalColumn)) {
+                        continue;
+                    }
+                    for (const [column, thecells] of [
+                        [row1Cells[0].globalColumn, [row1Cells[0], row2Cells[0]]],
+                        [row1Cells[1].globalColumn, [row1Cells[1], row2Cells[1]]],
+                    ] as [number, [Cell, Cell]][]) {
+                        const otherHaveCandidateCells = this.board.byGlobalColumn(column)
+                            .filter(cell => cell.globalRow != row1 && cell.globalRow != row2 && cell.hasCandidate(attempt));
+                        if (otherHaveCandidateCells.length > 0) {
+                            ok = true;
+                            const segments: ReasonSegment[] = [
+                                { kind: 'text', text: 'x: cells ' },
+                            ];
+                            for (const cell of otherHaveCandidateCells) {
+                                segments.push({ kind: 'cell-id', id: cell.id });
+                                segments.push({ kind: 'text', text: ';' })
+                            }
+                            segments.pop();
+                            segments.push({ kind: 'text', text: ' cannot have ' });
+                            segments.push({ kind: 'number', value: attempt });
+                            segments.push({ kind: 'text', text: ' because this value must be in ' });
+                            segments.push({ kind: 'cell-id', id: thecells[0].id });
+                            segments.push({ kind: 'text', text: ' or ' });
+                            segments.push({ kind: 'cell-id', id: thecells[1].id });
+                            segments.push({ kind: 'text', text: ` because there are both only 2 occurence of this value in row ${row1
+                                } and row ${row2} and they are both in column ${row1Cells[0].globalColumn} and column ${row1Cells[1].globalColumn}` });
+                            this.reason(segments, otherHaveCandidateCells.map(cell => ({ kind: 'draft-off', id: cell.id, value: attempt })));
+                        }
+                    }
+                }
+            }
+        }
+
+        for (const column1 of seq) {
+            for (const column2 of seq.filter(r => r > column1)) {
+                for (const attempt of seq) {
+                    const column1Cells = this.board.byGlobalColumn(column1).filter(cell => cell.hasCandidate(attempt));
+                    const column2Cells = this.board.byGlobalColumn(column2).filter(cell => cell.hasCandidate(attempt));
+                    if (column1Cells.length != 2 || column2Cells.length != 2) {
+                        continue;
+                    }
+                    if (column1Cells[0].globalRow != column2Cells[0].globalRow || (column1Cells[1].globalRow != column2Cells[1].globalRow)) {
+                        continue;
+                    }
+                    for (const [row, thecells] of [
+                        [column1Cells[0].globalRow, [column1Cells[0], column2Cells[0]]],
+                        [column1Cells[1].globalRow, [column1Cells[1], column2Cells[1]]],
+                    ] as [number, [Cell, Cell]][]) {
+                        const otherHaveCandidateCells = this.board.byGlobalRow(row)
+                            .filter(cell => cell.globalColumn != column1 && cell.globalColumn != column2 && cell.hasCandidate(attempt));
+                        if (otherHaveCandidateCells.length > 0) {
+                            ok = true;
+                            const segments: ReasonSegment[] = [
+                                { kind: 'text', text: 'x: cells ' },
+                            ];
+                            for (const cell of otherHaveCandidateCells) {
+                                segments.push({ kind: 'cell-id', id: cell.id });
+                                segments.push({ kind: 'text', text: ';' })
+                            }
+                            segments.pop();
+                            segments.push({ kind: 'text', text: ' cannot have ' });
+                            segments.push({ kind: 'number', value: attempt });
+                            segments.push({ kind: 'text', text: ' because this value must be in ' });
+                            segments.push({ kind: 'cell-id', id: thecells[0].id });
+                            segments.push({ kind: 'text', text: ' or ' });
+                            segments.push({ kind: 'cell-id', id: thecells[1].id });
+                            segments.push({ kind: 'text', text: ` because there are both only 2 occurence of this value in column ${column1
+                                } and column ${column2} and they are both in row ${column1Cells[0].globalRow} and row ${column1Cells[1].globalRow}` });
+                            this.reason(segments, otherHaveCandidateCells.map(cell => ({ kind: 'draft-off', id: cell.id, value: attempt })));
+                        }
+                    }
+                }
+            }
+        }
+
+        return ok;
+    }
+
+    // cell a and b are same region, b and c are same region, c and d are same region, d and a are same region
     // if select one value in a will make b and c left with only one selection (which requires b and c only have 2 selection)
     // and than b and c's selection make d no possible values, than a should not select that value
     // this is actually one special case of 2-step backtrack
-    private simpleSameGroupCircle = () => {
+    private simpleSameRegionCircle = () => {
         let ok = false;
-        const cells = this.board.map(x => x).filter(cell => !cell.value);
+        const cells = this.board.cells.filter(cell => !cell.hasValue);
 
         // this seems to be the easiest way to enumerate size 4 sub slices
         for (let i1 = 0; i1 < cells.length - 3; i1 += 1) {
@@ -1430,21 +1489,20 @@ class Inferrer {
                             [0, 3, 1, 2],
                             [0, 3, 2, 1],
                         ].some(seq =>
-                            // no need to !isSame them
-                            the4[seq[0]].isSameGroup(the4[seq[1]])
-                            && the4[seq[1]].isSameGroup(the4[seq[2]])
-                            && the4[seq[2]].isSameGroup(the4[seq[3]])
-                            && the4[seq[3]].isSameGroup(the4[seq[0]])
+                            the4[seq[0]].isSameRegion(the4[seq[1]])
+                            && the4[seq[1]].isSameRegion(the4[seq[2]])
+                            && the4[seq[2]].isSameRegion(the4[seq[3]])
+                            && the4[seq[3]].isSameRegion(the4[seq[0]])
                         )) {
                             continue;
                         }
                         if (the4[0].isId([1, 9]) && the4[1].isId([3, 8]) && the4[2].isId([4, 9]) && the4[3].isId([5, 8])) {
                             console.log('interest case');
                         }
-                        const the3 = the4.filter(cell => cell.draftCount == 2);
+                        const the3 = the4.filter(cell => cell.candidates.length == 2);
                         const the1Selection = the3.length == 3
                             // if one of them draft count is not 2, that is the one to be attempted
-                            ? the4.filter(cell => cell.draftCount != 2)
+                            ? the4.filter(cell => cell.candidates.length != 2)
                             // if 4 of them are length 4, then need try each
                             : the3.length == 4 ? the4 : [];
                         if (the1Selection.length == 0) {
@@ -1452,47 +1510,50 @@ class Inferrer {
                             continue;
                         }
                         for (const the1 of the1Selection) {
-                            // also need victim selection if the remaining 3 are all same group of the1
-                            const theVictimSelection = the4.filter(cell => cell.isSameGroup(the1) && !cell.isSame(the1)).length == 2
-                                ? the4.filter(cell => !cell.isSameGroup(the1))
+                            // also need victim selection if the remaining 3 are all same region of the1
+                            const theVictimSelection = the4.filter(cell => cell.isSameRegion(the1)).length == 2
+                                ? the4.filter(cell => !cell.isSameRegion(the1))
+                                // if all 3 are same region with the1, this does not mean can select any of them as victim
+                                // because some cell may not be same region with thesameregion2
                                 : the4.filter(cell => !cell.isSame(the1));
                             for (const theVictim of theVictimSelection) {
-                                const theSameGroup2 = the4.filter(cell => !cell.isSame(the1) && !cell.isSame(theVictim));
+                                const theSameRegion2 = the4.filter(cell => !cell.isSame(the1) && !cell.isSame(theVictim));
+                                // ATTENTION if remaining 3 are all same region with the1,
+                                // this does not mean any of the remainging 3 can become victim, it may not be same region with the 2
+                                if (!theVictim.isSameRegion(theSameRegion2[0]) || theVictim.isSameRegion(theSameRegion2[1])) {
+                                    continue;
+                                }
                                 // console.log(`the1 ${the1.globalCoordinate.join(',')} the2 ${
-                                //     theSameGroup2[0].globalCoordinate.join(',')};${
-                                //     theSameGroup2[1].globalCoordinate.join(',')} the victim ${theVictim.globalCoordinate.join(',')}`);
-                                const theVictimDraftValues = theVictim.draftValues;
-                                theVictimDraftValues.sort((a, b) => a - b);
-                                for (const attempt of the1.draftValues) {
-                                    if (!theSameGroup2[0].drafts[attempt].enabled || !theSameGroup2[1].drafts[attempt].enabled) {
+                                //     theSameRegion2[0].globalCoordinate.join(',')};${
+                                //     theSameRegion2[1].globalCoordinate.join(',')} the victim ${theVictim.globalCoordinate.join(',')}`);
+                                const theVictimDraftValues = theVictim.candidates;
+                                for (const attempt of the1.candidates) {
+                                    if (!theSameRegion2[0].hasCandidate(attempt) || !theSameRegion2[1].hasCandidate(attempt)) {
                                         // console.log(`reject attempt ${attempt}`);
                                         continue;
                                     }
-                                    const the2Values = theSameGroup2.map(cell => cell.draftValues.filter(x => x != attempt)[0]);
+                                    const the2Values = theSameRegion2.map(cell => cell.candidates.filter(x => x != attempt)[0]);
                                     the2Values.sort((a, b) => a - b); 
                                     if (the2Values[0] == theVictimDraftValues[0] && the2Values[1] == theVictimDraftValues[1]) {
                                         ok = true;
                                         this.reason([
-                                            { kind: 'text', text: 'same-group-circle: cell ' },
-                                            { kind: 'cell-id', cellId: the1.id },
+                                            { kind: 'text', text: 'simple-circle: cell ' },
+                                            { kind: 'cell-id', id: the1.id },
                                             { kind: 'text', text: ' cannot be ' },
                                             { kind: 'number', value: attempt },
                                             { kind: 'text', text: ' because this will make cell ' },
-                                            { kind: 'cell-id', cellId: theSameGroup2[0].id },
+                                            { kind: 'cell-id', id: theSameRegion2[0].id },
                                             { kind: 'text', text: ' become ' },
-                                            { kind: 'number', value: theSameGroup2[0].draftValues.filter(x => x != attempt)[0] },
+                                            { kind: 'number', value: theSameRegion2[0].candidates.filter(x => x != attempt)[0] },
                                             { kind: 'text', text: ' and cell ' },
-                                            { kind: 'cell-id', cellId: theSameGroup2[1].id },
+                                            { kind: 'cell-id', id: theSameRegion2[1].id },
                                             { kind: 'text', text: ' become ' },
-                                            { kind: 'number', value: theSameGroup2[1].draftValues.filter(x => x != attempt)[0] },
+                                            { kind: 'number', value: theSameRegion2[1].candidates.filter(x => x != attempt)[0] },
                                             { kind: 'text', text: ' which will make cell ' },
-                                            { kind: 'cell-id', cellId: theVictim.id },
+                                            { kind: 'cell-id', id: theVictim.id },
                                             { kind: 'text', text: ' have no possiblility' },
-                                            { kind: 'apply', opCount: 1, applier: () => {
-                                                if (the1.drafts[attempt].enabled) {
-                                                    this.rule.do({ kind: 'draft-off', id: the1.id, value: attempt });
-                                                }
-                                            } },
+                                        ], [
+                                            { kind: 'draft-off', id: the1.id, value: attempt },
                                         ])
                                     }
                                 }
@@ -1528,15 +1589,8 @@ class Inferrer {
     
 }
 
-// finally backtrack
-// TODO this may need additional ui logic
-
 const ui = makeui();
 const board = new Board(ui);
 const modal = new Modal(ui);
-const rule = window['thegame'] = new Rule(board, modal, ui);
-rule.setInferrer(new Inferrer(rule, ui));
-
-// TODO case 2 have incorrect same-group-circle
-
-// 080006400210040690060070002000000086690804020128000004842010060031000049906400030
+const behavior = window['thegame'] = new Behavior(board, modal, ui);
+behavior.setInferrer(new Inferrer(behavior, ui));
