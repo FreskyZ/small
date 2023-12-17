@@ -50,22 +50,19 @@ const HEADER_TEMPLATE: &str = concat!(
 	"\x00\x00\x00\x00",
 );
 
-// create audio file from tracks of samples
-// - multiple tracks allowed, but they simply merged evenly, result is only 2 identical channels
-// - sample value is f32, which is good enough because result sample value is u16,
-//   there will be really many fp values and this is exactly
-//   the exception case in the recommendation "normally you should always prefer f64"
-fn make_audio_file(file_name: &str, tracks: &[Box<[f32]>]) -> Result<(), Error> {
+// create audio file from sample values
+// sample value is f32, which is good enough because result sample value is u16,
+// there will be really many fp values and this is exactly
+// the exception case in the recommendation "normally you should always prefer f64"
+fn serialize(file_name: &str, samples: &[f32]) -> Result<(), Error> {
     println!("making {}.mp3", file_name);
 
     let file = std::fs::File::create(format!("{}.wav", file_name))?;
     let mut writer = BufWriter::new(file);
     writer.write(HEADER_TEMPLATE.as_bytes())?;
     
-    let track_count = tracks.len() as f32;
-    let sample_count = tracks.iter().map(|track| track.len()).max().unwrap();
-    for i in 0..sample_count {
-        let sample = tracks.iter().map(|track| *track.get(i).unwrap_or(&0f32)).sum::<f32>() / track_count;
+    let sample_count = samples.len();
+    for &sample in samples {
         let sample_data = (sample * 32767f32) as u16;
         writer.write(&sample_data.to_le_bytes())?;
         writer.write(&sample_data.to_le_bytes())?;
@@ -102,273 +99,383 @@ fn make_audio_file(file_name: &str, tracks: &[Box<[f32]>]) -> Result<(), Error> 
         panic!("failed to execute ffmpeg\n{}\n{}\n", stdout, stderr);
     }
 
-    std::fs::remove_file(input_file_name)?;
+    // std::fs::remove_file(input_file_name)?;
     Ok(())
 }
 
 // floating point arithmetic is currently completely not const eval,
-// so you cannot currently constexpr double C4 = some calculation for now, so use these
+// so you cannot constexpr double C4 = some calculation for now, so use these
 
 // https://en.wikipedia.org/wiki/Scientific_pitch_notation
-#[derive(Clone, Copy)]
-enum PitchName { C, D, E, F, G, A, B }
 // https://en.wikipedia.org/wiki/Accidental_(music)
+
+// bit 0-2: pitch name: C, D, E, F, G, A, B,
+//          represented as bits 0-2 in their ASCII code, 0 for rest
+// bit 3-5: octave: 0 to 7,
+//          although there is 8 on piano, I guess that will not be used for now, 0 for rest
+// bit 6-8: accidental, 0 for natural, 1 for sharp, 2 for flat,
+//          reversed 3 for double sharp, resereved 4 for double flat
+// bit 9-11: note value, full, half, quarter, etc.
+//           represented as in 1/2^value note
+// bit 12: tie to next note
+// bit 16-31: loadness,
+//            represented as in value / 32767, 0 for rest
 #[derive(Clone, Copy)]
-enum Accidental { Sharp, Natural, Flat }
+struct Note(u32);
 
-// all members are u8, so can clone and copy
-#[derive(Clone, Copy)]
-struct Pitch {
-    pub name: PitchName,
-    // 0 to 8, actually can fit in uint3, 8 is really not "natural" music
-    // this don't need private and validation, because the calculate frequency part don't care about this
-    // // although some arbitrary does not look large number will result in sound energe to destroy earth
-    pub octave: u8,
-    pub accidental: Accidental,
-}
+// public type
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+enum PitchName { A = 1, B = 2, C = 3, D = 4, E = 5, F = 6, G = 7 }
 
-impl fmt::Display for PitchName {
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+enum Accidental { Natural = 0, Sharp = 1, Flat = 2 }
+
+// use _number is a lot easier to read then eighth, sixteenth, thirtysecond and hundredtwentyeighth
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug)]
+enum NoteValue { Full = 0, Half = 1, Quarter = 2, _8 = 3, _16 = 4, _32 = 5, _64 = 7, _128 = 8 }
+
+impl fmt::Display for Note {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use PitchName::*;
-        match self {
-            C => write!(f, "C"),
-            D => write!(f, "D"),
-            E => write!(f, "E"),
-            F => write!(f, "F"),
-            G => write!(f, "G"),
-            A => write!(f, "A"),
-            B => write!(f, "B"),
+        match self.accidental() {
+            Accidental::Sharp => write!(f, "\u{266F}")?,
+            Accidental::Flat => write!(f, "\u{266D}")?,
+            _ => {},
         }
+        write!(f, "{}{}/{}", (self.name() as u8 | 0x40) as char, self.octave(), 1 << (self.value() as u8))
     }
 }
-
-impl fmt::Display for Accidental {
+impl fmt::Debug for Note {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Sharp => write!(f, "#"),
-            Self::Flat => write!(f, "b"),
-            Self::Natural => Ok(()),
-        }
+        f.debug_struct("Note")
+            .field("name", &self.name())
+            .field("octave", &self.octave())
+            .field("accidental", &self.accidental())
+            .field("value", &self.value())
+            .field("loadness", &self.loadness())
+            .field("frequency", &self.frequency())
+            .field("duration(60bpm)", &self.duration(60))
+            .finish_non_exhaustive()
     }
 }
-impl fmt::Display for Pitch {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}{}", self.accidental, self.name, self.octave)
+
+// default A4/4, 25% loadness
+impl Default for Note {
+    fn default() -> Self {
+        Self(0x2000_0000 | 0b0000_010_000_100_001)
     }
 }
 
-impl Pitch {
-
-    pub fn parse(mut text: &str) -> Option<Self> {
-        if text.is_empty() { return None; }
-        let accidental = match text.as_bytes()[0] {
-            b'#' => { text = &text[1..]; Accidental::Sharp },
-            b'b' => { text = &text[1..]; Accidental::Flat },
-            _ => Accidental::Natural,
-        };
-
-        if text.is_empty() { return None; }
-        let name = match text.as_bytes()[0] {
-            b'C' => PitchName::C,
-            b'D' => PitchName::D,
-            b'E' => PitchName::E,
-            b'F' => PitchName::F,
-            b'G' => PitchName::G,
-            b'A' => PitchName::A,
-            b'B' => PitchName::B,
-            _ => return None,
-        };
-        text = &text[1..];
-
-        if text.is_empty() { return None; }
-        let Ok(octave) = text.parse() else { return None; };
-        let result = Self{ name, octave, accidental };
-        if result.is_valid() { Some(result) } else { None }
+impl Note {
+    pub fn name(self) -> PitchName {
+        unsafe { std::mem::transmute((self.0 & 0x7) as u8) }
+    }
+    pub fn with_name(self, name: PitchName) -> Self {
+        Self((self.0 & !0x7) | name as u8 as u32)
     }
 
-    pub fn is_valid(self) -> bool {
-        use PitchName::*;
-        use Accidental::*;
-        !matches!((self.name, self.accidental), (B, Sharp) | (E, Sharp) | (C, Flat) | (F, Flat))
+    pub fn octave(self) -> u8 {
+        ((self.0 & 0x38) >> 3) as u8
+    }
+    pub fn with_octave(self, octave: u8) -> Self {
+        Self((self.0 & !0x38) | (octave << 3) as u32)
     }
 
-    // prefer sharp
-    #[allow(dead_code)]
-    pub fn sharp(self) -> Self {
-        use PitchName::*;
-        use Accidental::*;
-        let new = |name: PitchName, accidental: Accidental| Self{ name, octave: self.octave, accidental };
-        let new_1 = |name: PitchName, accidental: Accidental| Self{ name, octave: self.octave + 1, accidental };
-        // really cannot think up of a branchless method for this
-        match (self.name, self.accidental) {
-            (C, Natural) => new(C, Sharp),
-            (C, Sharp) | (D, Flat) => /* not F# */ new(D, Natural),
-            (D, Natural) => new(D, Sharp),
-            (D, Sharp) | (E, Flat) => new(E, Natural),
-            (E, Natural) => new(F, Natural),
-            (F, Natural) => new(F, Sharp),
-            (F, Sharp) | (G, Flat) => new(G, Natural),
-            (G, Natural) => new(G, Sharp),
-            (G, Sharp) | (A, Flat) => new(A, Natural),
-            (A, Natural) => new(A, Sharp),
-            (A, Sharp) | (B, Flat) => new(B, Natural),
-            (B, Natural) => new_1(C, Natural),
-            _ => panic!("invalid pitch {}", self),
-        }
+    pub fn accidental(self) -> Accidental {
+        unsafe { std::mem::transmute(((self.0 & 0x1C0) >> 6) as u8) }
+    }
+    pub fn with_accidental(self, accidental: Accidental) -> Self {
+        Self((self.0 & !0x1C0) | ((accidental as u8 as u32) << 6))
     }
 
-    // also prefer sharp
-    #[allow(dead_code)]
-    pub fn flat(self) -> Self {
-        use PitchName::*;
-        use Accidental::*;
-        let new = |name: PitchName, accidental: Accidental| Self{ name, octave: self.octave, accidental };
-        let new_1 = |name: PitchName, accidental: Accidental| Self{ name, octave: self.octave - 1, accidental };
-        match (self.name, self.accidental) {
-            (C, Natural) => new_1(B, Natural),
-            (C, Sharp) | (D, Flat) => new(C, Natural),
-            (D, Natural) => new(C, Sharp),
-            (D, Sharp) | (E, Flat) => new(D, Natural),
-            (E, Natural) => new(D, Sharp),
-            (F, Natural) => new(E, Natural),
-            (F, Sharp) | (G, Flat) => new(F, Natural),
-            (G, Natural) => new(F, Sharp),
-            (G, Sharp) | (A, Flat) => new(G, Natural),
-            (A, Natural) => new(G, Sharp),
-            (A, Sharp) | (B, Flat) => new(A, Natural),
-            (B, Natural) => new(A, Sharp),
-            _ => panic!("invalid pitch {}", self),
-        }
+    pub fn value(self) -> NoteValue {
+        unsafe { std::mem::transmute(((self.0 & 0xE00) >> 9) as u8) }
     }
-    
-    #[allow(dead_code)]
-    pub fn prev_octane(self) -> Self {
-        Self{ name: self.name, octave: self.octave - 1, accidental: self.accidental }
+    pub fn with_value(self, value: NoteValue) -> Self {
+        Self((self.0 & !0xE00) | ((value as u8 as u32) << 9))
+    }
+
+    pub fn loadness(self) -> f32 {
+        ((self.0 & 0xFFFF0000) >> 16) as f32 / 32767f32
     }
     #[allow(dead_code)]
-    pub fn next_octane(self) -> Self {
-        Self{ name: self.name, octave: self.octave + 1, accidental: self.accidental }
+    pub fn with_loadness(self, loadness: f32) -> Self {
+        Self((self.0 & 0xFFFF) | (((loadness * 32767f32) as u32) << 16))
+    }
+
+    pub fn tie(self) -> bool {
+        (self.0 & 0x1000) == 0x1000
+    }
+    pub fn with_tie(self, tie: bool) -> Self {
+        Self((self.0 & !0x1000) | if tie { 0x1000 } else { 0 })
+    }
+
+    // NOTE: prefer sharp
+    #[allow(dead_code)]
+    pub fn with_sharp(self) -> Self {
+        // for now accidental only occupies 2 bits,
+        // so name+accidental only occupies 5 bits and can easily use calculated goto
+        // 0-2 name + 3-4 accidental map to 0-2 name, 3-5 accidental, 6 octave increase)
+        const MAP: &[u8] = &[
+            /* invalid */ 0,
+            /* a = 00, n = 001: A  => A# */ 0b00_001_001,
+            /* a = 00, n = 010: B  => C  */ 0b01_000_011,
+            /* a = 00, n = 011: C  => C# */ 0b00_001_011,
+            /* a = 00, n = 100: D  => D# */ 0b00_001_100,
+            /* a = 00, n = 101: E  => F  */ 0b00_000_110,
+            /* a = 00, n = 110: F  => F# */ 0b00_001_110,
+            /* a = 00, n = 111: G  => G# */ 0b00_001_111,
+            /* invalid */ 0,
+            /* a = 01, n = 001: A# => B  */ 0b00_000_010,
+            /* a = 01, n = 010: C  => C# */ 0b00_001_011,
+            /* a = 01, n = 011: C# => D  */ 0b00_000_100,
+            /* a = 01, n = 100: D# => E  */ 0b00_000_101,
+            /* a = 01, n = 101: F  => F# */ 0b00_001_110,
+            /* a = 01, n = 110: F# => G  */ 0b00_000_111,
+            /* a = 01, n = 111: G# => A  */ 0b00_000_001,
+            /* invalid */ 0,
+            /* a = 10, n = 001: Ab => A  */ 0b00_000_001,
+            /* a = 10, n = 010: Bb => B  */ 0b00_000_010,
+            /* a = 10, n = 011: B  => C  */ 0b01_000_011,
+            /* a = 10, n = 100: Db => D  */ 0b00_000_100,
+            /* a = 10, n = 101: Eb => E  */ 0b00_000_101,
+            /* a = 10, n = 110: E  => F  */ 0b00_000_110,
+            /* a = 10, n = 111: Gb => G  */ 0b00_000_111,
+        ];
+        let map_result = MAP[((self.0 & 0x7) | ((self.0 & 0x1C0) >> 3)) as usize];
+        self.with_name(unsafe { std::mem::transmute(map_result & 0x7) })
+            .with_accidental(unsafe { std::mem::transmute(map_result & 0x38) })
+            .with_octave(self.octave() + ((map_result & 0x40) >> 6))
+    }
+
+    // NOTE: prefer sharp
+    #[allow(dead_code)]
+    pub fn with_flat(self) -> Self {
+        // for now accidental only occupies 2 bits,
+        // so name+accidental only occupies 5 bits and can easily use calculated goto
+        // 0-2 name + 3-4 accidental map to 0-2 name, 3-5 accidental, 6 octave decrease absolute value)
+        const MAP: &[u8] = &[
+            /* invalid */ 0,
+            /* a = 00, n = 001: A  => G# */ 0b00_001_111,
+            /* a = 00, n = 010: B  => A# */ 0b00_001_001,
+            /* a = 00, n = 011: C  => B  */ 0b01_000_010,
+            /* a = 00, n = 100: D  => C# */ 0b00_001_011,
+            /* a = 00, n = 101: E  => D# */ 0b00_001_100,
+            /* a = 00, n = 110: F  => E  */ 0b00_000_101,
+            /* a = 00, n = 111: G  => F# */ 0b00_001_110,
+            /* invalid */ 0,
+            /* a = 01, n = 001: A# => A  */ 0b00_000_001,
+            /* a = 01, n = 010: C  => B  */ 0b01_000_010,
+            /* a = 01, n = 011: C# => C  */ 0b00_000_011,
+            /* a = 01, n = 100: D# => D  */ 0b00_000_100,
+            /* a = 01, n = 101: F  => E  */ 0b00_000_101,
+            /* a = 01, n = 110: F# => F  */ 0b00_000_110,
+            /* a = 01, n = 111: G# => G  */ 0b00_000_111,
+            /* invalid */ 0,
+            /* a = 10, n = 001: Ab => G  */ 0b00_000_111,
+            /* a = 10, n = 010: Bb => A  */ 0b00_000_001,
+            /* a = 10, n = 011: B  => A# */ 0b00_001_001,
+            /* a = 10, n = 100: Db => C  */ 0b00_000_011,
+            /* a = 10, n = 101: Eb => D  */ 0b00_000_100,
+            /* a = 10, n = 110: E  => D# */ 0b00_001_100,
+            /* a = 10, n = 111: Gb => F  */ 0b00_000_110,
+        ];
+        let map_result = MAP[((self.0 & 0x7) | ((self.0 & 0x1C0) >> 3)) as usize];
+        self.with_name(unsafe { std::mem::transmute(map_result & 0x7) })
+            .with_accidental(unsafe { std::mem::transmute(map_result & 0x38) })
+            .with_octave(self.octave() - ((map_result & 0x40) >> 6))
     }
 
     pub fn frequency(self) -> f32 {
-        use PitchName::*;
-        use Accidental::*;
-        let from4 = |base: f32| base * 2.0f32.powi(self.octave as i32 - 4);
-        // floating point arithmetic is not const eval
-        match (self.name, self.accidental) {
-            (C, Natural) => from4(261.6255653005987),
-            (C, Sharp) | (D, Flat) => from4(277.18263097687213),
-            (D, Natural) => from4(293.66476791740763),
-            (D, Sharp) | (E, Flat) => from4(311.126983722081),
-            (E, Natural) => from4(329.62755691287003),
-            (F, Natural) => from4(349.228231433004),
-            (F, Sharp) | (G, Flat) => from4(369.9944227116345),
-            (G, Natural) => from4(391.99543598174944),
-            (G, Sharp) | (A, Flat) => from4(415.3046975799453),
-            (A, Natural) => from4(440.0),
-            (A, Sharp) | (B, Flat) => from4(466.1637615180899),
-            (B, Natural) => from4(493.8833012561241),
-            _ => panic!("invalid pitch {}", self),
+        // for now accidental only occupies 2 bits,
+        // so name+accidental only occupies 5 bits and can easily use calculated goto
+        // base frequency is octave is 4
+        const MAP: &[f32] = &[
+            /* invalid */ 0.0,
+            /* a = 00, n = 001: A  */ 440.0,
+            /* a = 00, n = 010: B  */ 493.8833012561241,
+            /* a = 00, n = 011: C  */ 261.6255653005987,
+            /* a = 00, n = 100: D  */ 293.66476791740763,
+            /* a = 00, n = 101: E  */ 329.62755691287003,
+            /* a = 00, n = 110: F  */ 349.228231433004,
+            /* a = 00, n = 111: G  */ 391.99543598174944,
+            /* invalid */ 0.0,
+            /* a = 01, n = 001: A# */ 466.1637615180899,
+            /* a = 01, n = 010: C  */ 261.6255653005987,
+            /* a = 01, n = 011: C# */ 277.18263097687213,
+            /* a = 01, n = 100: D# */ 311.126983722081,
+            /* a = 01, n = 101: F  */ 349.228231433004,
+            /* a = 01, n = 110: F# */ 369.9944227116345,
+            /* a = 01, n = 111: G# */ 415.3046975799453,
+            /* invalid */ 0.0,
+            /* a = 10, n = 001: Ab */ 415.3046975799453,
+            /* a = 10, n = 010: Bb */ 466.1637615180899,
+            /* a = 10, n = 011: B  */ 493.8833012561241,
+            /* a = 10, n = 100: Db */ 277.18263097687213,
+            /* a = 10, n = 101: Eb */ 311.126983722081,
+            /* a = 10, n = 110: E  */ 329.62755691287003,
+            /* a = 10, n = 111: Gb */ 369.9944227116345,
+        ];
+        let map_result = MAP[((self.0 & 0x7) | ((self.0 & 0x1C0) >> 3)) as usize];
+        // for octave < 4 this is unsigned underflow: map_result * (1 << (self.octave() - 4)) as f32
+        map_result / 16f32 * (1 << self.octave()) as f32
+    }
+
+    pub fn duration(self, bpm: usize) -> f64 {
+        60f64 / bpm as f64 / (1 << (self.value() as u8)) as f64
+    }
+}
+
+fn parse(raw: &str) -> Vec<Note> {
+    let mut result = Vec::new();
+
+    // use semicolon to split measure, but will not likely to validate time specification
+    for raw_by_semicolon in raw.split(';') {
+        for raw_by_whitespace in raw_by_semicolon.split(' ') {
+            let raw_notes = raw_by_whitespace.split('-').collect::<Vec<_>>();
+            for (note_index, &raw_note) in raw_notes.iter().enumerate() {
+                if raw_note.is_empty() { continue; }
+                let mut raw_note = raw_note;
+                let (len, accidental) = if raw_note.starts_with('b') { (1, Accidental::Flat)
+                    } else if raw_note.starts_with('#') { (1, Accidental::Sharp) } else { (0, Accidental::Natural) };
+                raw_note = &raw_note[len..];
+                let name = unsafe { std::mem::transmute(raw_note.as_bytes()[0] & 0x7) };
+                raw_note = &raw_note[1..];
+                let octave = raw_note[..1].parse().unwrap();
+                raw_note = &raw_note[2..]; // also skip the /
+                let value = unsafe { std::mem::transmute(raw_note.parse::<u8>().unwrap().ilog2() as u8) };
+                let tie = raw_notes.len() > 1 && note_index < raw_notes.len() - 1;
+                result.push(Note::default()
+                    .with_name(name).with_octave(octave).with_accidental(accidental).with_value(value).with_tie(tie));
+            }
         }
     }
-}
-
-impl<'a> From<&'a str> for Pitch {
-    fn from(text: &'a str) -> Pitch {
-        Pitch::parse(text).expect("failed to parse pitch")
-    }
-}
-
-// https://en.wikipedia.org/wiki/Musical_note
-struct Note {
-    pub pitch: Pitch,
-    pub duration: f64, // duration in second
-    pub dynamics: f32, // loadness, should be 0 to 1, use 0 to no sound
-}
-macro_rules! note {
-    (silence, $duration:expr) => {{
-        Note{ pitch: "A4".into(), duration: $duration, dynamics: 0.0 }
-    }};
-    ($pitch:expr, $duration:expr) => {{
-        Note{ pitch: $pitch.into(), duration: $duration, dynamics: 0.25 }
-    }};
-    ($pitch:expr, $duration:expr, $dynamics:expr) => {{
-        Note{ pitch: $pitch.into(), duration: $duration, dynamics: $dynamics }
-    }};
+    result
 }
 
 // sampling a track of notes
-fn sample(notes: &[Note]) -> Box<[f32]> {
-    let total_duration = notes.iter().fold(0f64, |acc, note| acc + note.duration);
-    let sample_count = (total_duration * SAMPLE_RATE as f64) as usize;
-    let mut result = Vec::with_capacity(sample_count + 100); // add arbitrary length to encounter precision loss
-    for note in notes {
-        let frequency = note.pitch.frequency();
-        let sample_count = (note.duration * SAMPLE_RATE as f64) as usize;
-        for i in 0..sample_count {
-            result.push(f32::sin(2f32 * PI * frequency * i as f32 / SAMPLE_RATE as f32) * note.dynamics);
+fn sample(bpm: usize, tracks: &[&[Note]]) -> Box<[f32]> {
+
+    let mut all_samples = Vec::with_capacity(tracks.len());
+    let mut max_sample_count = 0;
+    for &notes in tracks {
+        let total_duration = notes.iter().fold(0f64, |acc, note| acc + note.duration(bpm));
+        // note duration * sample rate + note count * gap length + arbitrary length for precision loss
+        let estimate_sample_count = (total_duration * SAMPLE_RATE as f64) as usize + notes.len() * 2205 + 100;
+        let mut samples = Vec::with_capacity(estimate_sample_count);
+        for note in notes {
+            let frequency = note.frequency();
+            for t in 0..(note.duration(bpm) * SAMPLE_RATE as f64) as usize {
+                samples.push(f32::sin(2f32 * PI * frequency * t as f32 / SAMPLE_RATE as f32) * note.loadness());
+            }
+            if !note.tie() {
+                samples.extend(std::iter::repeat(0f32).take(2205));
+            }
         }
+        max_sample_count = usize::max(max_sample_count, samples.len());
+        all_samples.push(samples);
+    }
+
+    let track_count = tracks.len() as f32;
+    let mut result = Vec::with_capacity(max_sample_count);
+    for t in 0..max_sample_count {
+        result.push(all_samples.iter().map(|track| *track.get(t).unwrap_or(&0f32)).sum::<f32>() / track_count);
     }
     result.into_boxed_slice()
 }
 
-
 fn main() -> Result<(), Error> {
 
-    // make_audio_file("majorscale", &[sample(&[
-    //     note!("C4", 0.5),
-    //     note!("D4", 0.5),
-    //     note!("E4", 0.5),
-    //     note!("F4", 0.5),
-    //     note!("G4", 0.5),
-    //     note!("A4", 0.5),
-    //     note!("B4", 0.5),
-    // ])])?;
+    // serialize("majorscalec", &sample(&[&[
+    //     note!(C4/4), note!(D4/4), note!(E4/4), note!(F4/4), note!(G4/4), note!(A4/4), note!(B4/4), note!(C5/4),
+    // ]]))?;
+    // serialize("minorscalea", &sample(&[&[
+    //     note!(A3/4), note!(B3/4), note!(C4/4), note!(D4/4), note!(E4/4), note!(F4/4), note!(G4/4), note!(A4/4),
+    // ]]))?;
+    // serialize("minorscalec", &sample(&[&[
+    //     note!(C4/4), note!(D4/4), note!(#D4/4), note!(F4/4), note!(G4/4), note!(#G4/4), note!(#A4/4), note!(C5/4),
+    // ]]))?;
 
-    // make_audio_file("minorscale", &[sample(&[
-    //     note!("C4", 0.5),
-    //     note!("D4", 0.5),
-    //     note!("bE4", 0.5),
-    //     note!("F4", 0.5),
-    //     note!("G4", 0.5),
-    //     note!("bA4", 0.5),
-    //     note!("bB4", 0.5),
-    // ])])?;
+    // serialize("birthday", &sample(60, &[&parse(concat!(
+    //     "G4/8-G4/8-G4/8 G4/8 A4/2 G4/2 C5/2 B4/1;",
+    //     "G4/8-G4/8-G4/8 G4/8 A4/2 G4/2 D5/2 C5/1;",
+    //     "G4/8-G4/8-G4/8 G4/8 G5/2 E5/2 C5/2 B4/2 A4/2;",
+    //     "F5/8-F5/8-F5/8 F5/8 E5/2 C5/2 D5/2 C5/1;",
+    // ))]))?;
 
-    // make_audio_file("aminorscale", &[sample(&[
-    //     note!("A3", 0.5),
-    //     note!("B3", 0.5),
-    //     note!("C4", 0.5),
-    //     note!("D4", 0.5),
-    //     note!("E4", 0.5),
-    //     note!("F4", 0.5),
-    //     note!("G4", 0.5),
-    // ])])?;
+    // serialize("ctriad", &sample(60, &[
+    //     &parse("C4/1"),
+    //     &parse("E4/1"),
+    //     &parse("G4/1"),
+    // ]))?;
 
-    // make_audio_file("birthday", &[sample(&[
-    //     note!("G4", 0.375), note!("G4", 0.125), note!("A4", 0.5), note!("G4", 0.5), note!("C5", 0.5), note!("B4", 1.0),
-    //     note!("G4", 0.375), note!("G4", 0.125), note!("A4", 0.5), note!("G4", 0.5), note!("D5", 0.5), note!("C5", 1.0),
-    //     note!("G4", 0.375), note!("G4", 0.125), note!("G5", 0.5), note!("E5", 0.5), note!("C5", 0.5), note!("B4", 0.5), note!("A4", 0.5),
-    //     note!("F5", 0.375), note!("F5", 0.125), note!("E5", 0.5), note!("C5", 0.5), note!("D5", 0.5), note!("C5", 1.0),
-    // ])])?;
+    // let mut notes = Vec::new();
+    // for pitch in ["C4", "D4", "E4", "F4", "G4", "A4", "B4"] {
+    //     for i in 0..100 {
+    //         notes.push(note!(pitch, 0.0001, i as f32 * 0.0025));
+    //     }
+    //     notes.push(note!(pitch, 0.8, 0.25));
+    //     for i in 0..100 {
+    //         notes.push(note!(pitch, 0.0001, 0.2475 - i as f32 * 0.0025));
+    //     }
+    // }
+    // make_audio_file("majorscale", &[sample(&notes)])?;
 
-    // make_audio_file("ceg", &[
-    //     sample(&[note!("C4", 1.2)]),
-    //     sample(&[note!(silence, 0.1), note!("E4", 1.1)]),
-    //     sample(&[note!(silence, 0.2), note!("G4", 1.0)]),
-    // ])?;
+    // macro_rules! notes {
+    //     ($($pitch:literal:$duration:literal$(:$dynamics:literal)?,)+) => {{
+    //         &[sample(&[$(note!($pitch, $duration$(, $dynamics)?),)+])]
+    //     }} 
+    // }
 
-    let mut notes = Vec::new();
-    for pitch in ["C4", "D4", "E4", "F4", "G4", "A4", "B4"] {
-        for i in 0..100 {
-            notes.push(note!(pitch, 0.0001, i as f32 * 0.0025));
-        }
-        notes.push(note!(pitch, 0.8, 0.25));
-        for i in 0..100 {
-            notes.push(note!(pitch, 0.0001, 0.2475 - i as f32 * 0.0025));
-        }
-    }
-    make_audio_file("majorscale", &[sample(&notes)])?;
+    // make_audio_file("micorazonencantado", notes!(
+    //     "G5": 0.25, "G5": 0.25, "E5": 0.125, "F5": 0.125, "G5": 0.125, "A5": 0.125,
+    //     "G5": 0.25, "F5": 0.25, "E5": 0.25, "D5": 0.25,
+    //     "E5": 0.25, "E5": 0.25, "C5": 0.125, "D5": 0.125, "E5": 0.125, "G5": 0.125,
+    //     "E5": 0.25, "D5": 0.25, "C5": 0.25, "B4": 0.25,
+    //     "A4":0.25:0.0, "A4": 0.125, "A4": 0.125, "C5": 0.25, "A5": 0.25,
+    //     "G5": 0.5, "C5": 0.25, "D5": 0.125, "E5": 0.125,
+    //     "F5": 0.25, "E5": 0.25, "D5": 0.25, "C5": 0.25,
+    //     "D5": 0.5, "C5": 0.25, "B4": 0.25,
+    //     "C5": 1.0,
+    //     "C5": 1.0,
+    //     "C5": 1.0,
+    //     "A4":0.5:0.0, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
+    //     "C5": 0.25, "bB4": 0.125, "bA4": 0.25, "B4": 0.125, "C5": 0.25,
+    //     "bB4": 0.5, "B4": 0.125, "B4": 0.125, "B4": 0.125, "B4": 0.125,
+    //     "bB4": 0.125, "B4": 0.125, "bA4": 0.125, "G4": 0.25, "A4": 0.125, "B4": 0.25,
+    //     "bA4": 0.5, "A4": 0.125, "A4": 0.125, "A4": 0.125, "A4": 0.125,
+    //     "bA4": 0.25, "G4": 0.25, "G4": 0.25, "F4": 0.25,
+    //     "F4": 0.25, "G4": 0.25, "bE4": 0.125, "F4": 0.25, "G4": 0.125,
+    //     "G4": 0.5, "G4": 0.125, "bA4": 0.25, "bB4": 0.125,
+    //     "C5": 0.5, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
+    // ))?;
+
+    // make_audio_file("micorazonencantado", note!(@many
+    //     G5/4, A4/64[0.0], G5/4, A4/64[0.0], E5/8, A4/64[0.0], F5/8, A4/64[0.0], G5/8, A4/64[0.0], A5/8, A4/64[0.0],
+    //     G5/4, A4/64[0.0], F5/4, A4/64[0.0], E5/4, A4/64[0.0], D5/4, A4/64[0.0],
+    //     // "G5": 0.25, "G5": 0.25, "E5": 0.125, "F5": 0.125, "G5": 0.125, "A5": 0.125,
+    //     // "G5": 0.25, "F5": 0.25, "E5": 0.25, "D5": 0.25,
+    //     // "E5": 0.25, "E5": 0.25, "C5": 0.125, "D5": 0.125, "E5": 0.125, "G5": 0.125,
+    //     // "E5": 0.25, "D5": 0.25, "C5": 0.25, "B4": 0.25,
+    //     // "A4":0.25:0.0, "A4": 0.125, "A4": 0.125, "C5": 0.25, "A5": 0.25,
+    //     // "G5": 0.5, "C5": 0.25, "D5": 0.125, "E5": 0.125,
+    //     // "F5": 0.25, "E5": 0.25, "D5": 0.25, "C5": 0.25,
+    //     // "D5": 0.5, "C5": 0.25, "B4": 0.25,
+    //     // "C5": 1.0,
+    //     // "C5": 1.0,
+    //     // "C5": 1.0,
+    //     // "A4":0.5:0.0, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
+    //     // "C5": 0.25, "bB4": 0.125, "bA4": 0.25, "B4": 0.125, "C5": 0.25,
+    //     // "bB4": 0.5, "B4": 0.125, "B4": 0.125, "B4": 0.125, "B4": 0.125,
+    //     // "bB4": 0.125, "B4": 0.125, "bA4": 0.125, "G4": 0.25, "A4": 0.125, "B4": 0.25,
+    //     // "bA4": 0.5, "A4": 0.125, "A4": 0.125, "A4": 0.125, "A4": 0.125,
+    //     // "bA4": 0.25, "G4": 0.25, "G4": 0.25, "F4": 0.25,
+    //     // "F4": 0.25, "G4": 0.25, "bE4": 0.125, "F4": 0.25, "G4": 0.125,
+    //     // "G4": 0.5, "G4": 0.125, "bA4": 0.25, "bB4": 0.125,
+    //     // "C5": 0.5, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
+    // ))?;
 
     Ok(())
 }
