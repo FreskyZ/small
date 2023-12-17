@@ -126,7 +126,7 @@ struct Note(u32);
 // public type
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
-enum PitchName { A = 1, B = 2, C = 3, D = 4, E = 5, F = 6, G = 7 }
+enum PitchName { Rest = 0, A = 1, B = 2, C = 3, D = 4, E = 5, F = 6, G = 7 }
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
@@ -144,7 +144,11 @@ impl fmt::Display for Note {
             Accidental::Flat => write!(f, "\u{266D}")?,
             _ => {},
         }
-        write!(f, "{}{}/{}", (self.name() as u8 | 0x40) as char, self.octave(), 1 << (self.value() as u8))
+        if matches!(self.name(), PitchName::Rest) {
+            write!(f, "z/{}", 1 << (self.value() as u8))
+        } else {
+            write!(f, "{}{}/{}", (self.name() as u8 | 0x40) as char, self.octave(), 1 << (self.value() as u8))
+        }
     }
 }
 impl fmt::Debug for Note {
@@ -219,7 +223,7 @@ impl Note {
         // so name+accidental only occupies 5 bits and can easily use calculated goto
         // 0-2 name + 3-4 accidental map to 0-2 name, 3-5 accidental, 6 octave increase)
         const MAP: &[u8] = &[
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 00, n = 001: A  => A# */ 0b00_001_001,
             /* a = 00, n = 010: B  => C  */ 0b01_000_011,
             /* a = 00, n = 011: C  => C# */ 0b00_001_011,
@@ -227,7 +231,7 @@ impl Note {
             /* a = 00, n = 101: E  => F  */ 0b00_000_110,
             /* a = 00, n = 110: F  => F# */ 0b00_001_110,
             /* a = 00, n = 111: G  => G# */ 0b00_001_111,
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 01, n = 001: A# => B  */ 0b00_000_010,
             /* a = 01, n = 010: C  => C# */ 0b00_001_011,
             /* a = 01, n = 011: C# => D  */ 0b00_000_100,
@@ -235,7 +239,7 @@ impl Note {
             /* a = 01, n = 101: F  => F# */ 0b00_001_110,
             /* a = 01, n = 110: F# => G  */ 0b00_000_111,
             /* a = 01, n = 111: G# => A  */ 0b00_000_001,
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 10, n = 001: Ab => A  */ 0b00_000_001,
             /* a = 10, n = 010: Bb => B  */ 0b00_000_010,
             /* a = 10, n = 011: B  => C  */ 0b01_000_011,
@@ -257,7 +261,7 @@ impl Note {
         // so name+accidental only occupies 5 bits and can easily use calculated goto
         // 0-2 name + 3-4 accidental map to 0-2 name, 3-5 accidental, 6 octave decrease absolute value)
         const MAP: &[u8] = &[
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 00, n = 001: A  => G# */ 0b00_001_111,
             /* a = 00, n = 010: B  => A# */ 0b00_001_001,
             /* a = 00, n = 011: C  => B  */ 0b01_000_010,
@@ -265,7 +269,7 @@ impl Note {
             /* a = 00, n = 101: E  => D# */ 0b00_001_100,
             /* a = 00, n = 110: F  => E  */ 0b00_000_101,
             /* a = 00, n = 111: G  => F# */ 0b00_001_110,
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 01, n = 001: A# => A  */ 0b00_000_001,
             /* a = 01, n = 010: C  => B  */ 0b01_000_010,
             /* a = 01, n = 011: C# => C  */ 0b00_000_011,
@@ -273,7 +277,7 @@ impl Note {
             /* a = 01, n = 101: F  => E  */ 0b00_000_101,
             /* a = 01, n = 110: F# => F  */ 0b00_000_110,
             /* a = 01, n = 111: G# => G  */ 0b00_000_111,
-            /* invalid */ 0,
+            /* rest => rest */ 0,
             /* a = 10, n = 001: Ab => G  */ 0b00_000_111,
             /* a = 10, n = 010: Bb => A  */ 0b00_000_001,
             /* a = 10, n = 011: B  => A# */ 0b00_001_001,
@@ -293,7 +297,7 @@ impl Note {
         // so name+accidental only occupies 5 bits and can easily use calculated goto
         // base frequency is octave is 4
         const MAP: &[f32] = &[
-            /* invalid */ 0.0,
+            /* rest */ 0.0,
             /* a = 00, n = 001: A  */ 440.0,
             /* a = 00, n = 010: B  */ 493.8833012561241,
             /* a = 00, n = 011: C  */ 261.6255653005987,
@@ -301,7 +305,7 @@ impl Note {
             /* a = 00, n = 101: E  */ 329.62755691287003,
             /* a = 00, n = 110: F  */ 349.228231433004,
             /* a = 00, n = 111: G  */ 391.99543598174944,
-            /* invalid */ 0.0,
+            /* rest */ 0.0,
             /* a = 01, n = 001: A# */ 466.1637615180899,
             /* a = 01, n = 010: C  */ 261.6255653005987,
             /* a = 01, n = 011: C# */ 277.18263097687213,
@@ -309,7 +313,7 @@ impl Note {
             /* a = 01, n = 101: F  */ 349.228231433004,
             /* a = 01, n = 110: F# */ 369.9944227116345,
             /* a = 01, n = 111: G# */ 415.3046975799453,
-            /* invalid */ 0.0,
+            /* rest */ 0.0,
             /* a = 10, n = 001: Ab */ 415.3046975799453,
             /* a = 10, n = 010: Bb */ 466.1637615180899,
             /* a = 10, n = 011: B  */ 493.8833012561241,
@@ -338,17 +342,23 @@ fn parse(raw: &str) -> Vec<Note> {
             for (note_index, &raw_note) in raw_notes.iter().enumerate() {
                 if raw_note.is_empty() { continue; }
                 let mut raw_note = raw_note;
-                let (len, accidental) = if raw_note.starts_with('b') { (1, Accidental::Flat)
-                    } else if raw_note.starts_with('#') { (1, Accidental::Sharp) } else { (0, Accidental::Natural) };
-                raw_note = &raw_note[len..];
-                let name = unsafe { std::mem::transmute(raw_note.as_bytes()[0] & 0x7) };
-                raw_note = &raw_note[1..];
-                let octave = raw_note[..1].parse().unwrap();
-                raw_note = &raw_note[2..]; // also skip the /
-                let value = unsafe { std::mem::transmute(raw_note.parse::<u8>().unwrap().ilog2() as u8) };
-                let tie = raw_notes.len() > 1 && note_index < raw_notes.len() - 1;
-                result.push(Note::default()
-                    .with_name(name).with_octave(octave).with_accidental(accidental).with_value(value).with_tie(tie));
+                if raw_note.starts_with("z") {
+                    raw_note = &raw_note[2..]; // also skip the /
+                    let value = unsafe { std::mem::transmute(raw_note.parse::<u8>().unwrap().ilog2() as u8) };
+                    result.push(Note::default().with_name(PitchName::Rest).with_octave(0).with_value(value));
+                } else {
+                    let (len, accidental) = if raw_note.starts_with('b') { (1, Accidental::Flat)
+                        } else if raw_note.starts_with('#') { (1, Accidental::Sharp) } else { (0, Accidental::Natural) };
+                    raw_note = &raw_note[len..];
+                    let name = unsafe { std::mem::transmute(raw_note.as_bytes()[0] & 0x7) };
+                    raw_note = &raw_note[1..];
+                    let octave = raw_note[..1].parse().unwrap();
+                    raw_note = &raw_note[2..]; // also skip the /
+                    let value = unsafe { std::mem::transmute(raw_note.parse::<u8>().unwrap().ilog2() as u8) };
+                    let tie = raw_notes.len() > 1 && note_index < raw_notes.len() - 1;
+                    result.push(Note::default()
+                        .with_name(name).with_octave(octave).with_accidental(accidental).with_value(value).with_tie(tie));
+                }
             }
         }
     }
@@ -423,59 +433,55 @@ fn main() -> Result<(), Error> {
     // }
     // make_audio_file("majorscale", &[sample(&notes)])?;
 
-    // macro_rules! notes {
-    //     ($($pitch:literal:$duration:literal$(:$dynamics:literal)?,)+) => {{
-    //         &[sample(&[$(note!($pitch, $duration$(, $dynamics)?),)+])]
-    //     }} 
-    // }
-
-    // make_audio_file("micorazonencantado", notes!(
-    //     "G5": 0.25, "G5": 0.25, "E5": 0.125, "F5": 0.125, "G5": 0.125, "A5": 0.125,
-    //     "G5": 0.25, "F5": 0.25, "E5": 0.25, "D5": 0.25,
-    //     "E5": 0.25, "E5": 0.25, "C5": 0.125, "D5": 0.125, "E5": 0.125, "G5": 0.125,
-    //     "E5": 0.25, "D5": 0.25, "C5": 0.25, "B4": 0.25,
-    //     "A4":0.25:0.0, "A4": 0.125, "A4": 0.125, "C5": 0.25, "A5": 0.25,
-    //     "G5": 0.5, "C5": 0.25, "D5": 0.125, "E5": 0.125,
-    //     "F5": 0.25, "E5": 0.25, "D5": 0.25, "C5": 0.25,
-    //     "D5": 0.5, "C5": 0.25, "B4": 0.25,
-    //     "C5": 1.0,
-    //     "C5": 1.0,
-    //     "C5": 1.0,
-    //     "A4":0.5:0.0, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
-    //     "C5": 0.25, "bB4": 0.125, "bA4": 0.25, "B4": 0.125, "C5": 0.25,
-    //     "bB4": 0.5, "B4": 0.125, "B4": 0.125, "B4": 0.125, "B4": 0.125,
-    //     "bB4": 0.125, "B4": 0.125, "bA4": 0.125, "G4": 0.25, "A4": 0.125, "B4": 0.25,
-    //     "bA4": 0.5, "A4": 0.125, "A4": 0.125, "A4": 0.125, "A4": 0.125,
-    //     "bA4": 0.25, "G4": 0.25, "G4": 0.25, "F4": 0.25,
-    //     "F4": 0.25, "G4": 0.25, "bE4": 0.125, "F4": 0.25, "G4": 0.125,
-    //     "G4": 0.5, "G4": 0.125, "bA4": 0.25, "bB4": 0.125,
-    //     "C5": 0.5, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
-    // ))?;
-
-    // make_audio_file("micorazonencantado", note!(@many
-    //     G5/4, A4/64[0.0], G5/4, A4/64[0.0], E5/8, A4/64[0.0], F5/8, A4/64[0.0], G5/8, A4/64[0.0], A5/8, A4/64[0.0],
-    //     G5/4, A4/64[0.0], F5/4, A4/64[0.0], E5/4, A4/64[0.0], D5/4, A4/64[0.0],
-    //     // "G5": 0.25, "G5": 0.25, "E5": 0.125, "F5": 0.125, "G5": 0.125, "A5": 0.125,
-    //     // "G5": 0.25, "F5": 0.25, "E5": 0.25, "D5": 0.25,
-    //     // "E5": 0.25, "E5": 0.25, "C5": 0.125, "D5": 0.125, "E5": 0.125, "G5": 0.125,
-    //     // "E5": 0.25, "D5": 0.25, "C5": 0.25, "B4": 0.25,
-    //     // "A4":0.25:0.0, "A4": 0.125, "A4": 0.125, "C5": 0.25, "A5": 0.25,
-    //     // "G5": 0.5, "C5": 0.25, "D5": 0.125, "E5": 0.125,
-    //     // "F5": 0.25, "E5": 0.25, "D5": 0.25, "C5": 0.25,
-    //     // "D5": 0.5, "C5": 0.25, "B4": 0.25,
-    //     // "C5": 1.0,
-    //     // "C5": 1.0,
-    //     // "C5": 1.0,
-    //     // "A4":0.5:0.0, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
-    //     // "C5": 0.25, "bB4": 0.125, "bA4": 0.25, "B4": 0.125, "C5": 0.25,
-    //     // "bB4": 0.5, "B4": 0.125, "B4": 0.125, "B4": 0.125, "B4": 0.125,
-    //     // "bB4": 0.125, "B4": 0.125, "bA4": 0.125, "G4": 0.25, "A4": 0.125, "B4": 0.25,
-    //     // "bA4": 0.5, "A4": 0.125, "A4": 0.125, "A4": 0.125, "A4": 0.125,
-    //     // "bA4": 0.25, "G4": 0.25, "G4": 0.25, "F4": 0.25,
-    //     // "F4": 0.25, "G4": 0.25, "bE4": 0.125, "F4": 0.25, "G4": 0.125,
-    //     // "G4": 0.5, "G4": 0.125, "bA4": 0.25, "bB4": 0.125,
-    //     // "C5": 0.5, "C5": 0.125, "C5": 0.125, "C5": 0.125, "C5": 0.125,
-    // ))?;
+    serialize("micorazonencantado", &sample(60, &[&parse(concat!(
+        "G5/4 G5/4 E5/8 F5/8 G5/8 A5/8;",
+        "G5/4 F5/4 E5/4 D5/4;",
+        "E5/4 E5/4 C5/8 D5/8 E5/8 G5/8;",
+        "E5/4 D5/4 C5/4 B4/4;",
+        "z/4 A4/8 A4/8 C5/4 A5/4;",
+        "G5/2 C5/4 D5/8 C5/8;",
+        "F5/4 E5/4 D5/4 C5/4;",
+        "D5/2 C5/4 B4/4 C5/1-C5/1-C5/1;",
+        "z/1;",
+        "z/2 C5/8 C5/8 C5/8 C5/8;",
+        "C5/4 bB4/8 bA4/4 bB4/8 C5/4;",
+        "bB4/2 bB4/8 bB4/8 bB4/8 bB4/8;",
+        "bB4/8 bB4/8 bA4/8 G4/4 bA4/8 bB4/4;",
+        "bA4/2 bA4/8 bA4/8 bA4/8 bA4/8;",
+        "bA4/4 G4/4 G4/4 F4/4;",
+        "F4/4 G4/4 bE4/8 F4/4 G4/8-G4/2-G4/8 bA4/4 bB4/8;",
+        "C5/2 C5/8 C5/8 C5/8 C5/8;",
+        "C5/4 bB4/8 bA4/4 bB4/8 C5/4;",
+        "bB4/2 bB4/8 C5/8 D5/8 z/8;", // TODO what is the --3--
+        "D5/4 bE5/4 bB4/8 bA4/8 G4/8 z/8;",
+        "bA4/2-bA4/8 bB4/4 bA4/8;",
+        "G4/8 G4/8 z/8 G4/8 G4/8 G5/8 F5/8 z/8;",
+        "F5/2 F5/8 bE5/8 D5/8 bE5/8-bE5/2 C5/4 D5/4;",
+        "bE5/8 bE5/8 z/8 D5/8 E5/4-E5/8 D5/8;",
+        "bE5/4-bE5/8 C5/8 F5/8 E5/8 D5/8 C5/8;",
+        "C5/8 bB4/8 bB4/8 G4/8 bB4/8 bB4/4 G4/8;",
+        "bB4/2 bB4/8 C5/8 D5/8 z/8;",
+        "bE5/8 D5/8 bE5/8 z/8 C5/2;",
+        "bE5/8 D5/8 bE5/8 z/8 C5/8 C5/8 G5/4;",
+        "F5/4-F5/8 F5/8 F5/8 bE5/8 F5/8 G5/8-G5/1;",
+        "G5/4 G5/4 E5/8 F5/8 G5/8 A5/8;",
+        "G5/4 F5/4 E5/4 D5/4;",
+        "E5/4 E5/4 C5/8 D5/8 E5/8 F5/8;",
+        "E5/4 D5/4 C5/4 B4/4;",
+        "z/4 A4/8 A4/8 C5/4 A5/4;",
+        "G5/2 C5/4 D5/8 E5/8;",
+        "F5/4 E5/4 D5/9 C5/8 C5/8 D5/8;",
+        "E5/4 F5/4 D5/2;",
+        "G5/4 G5/4 E5/8 F5/8 G5/8 A5/8;",
+        "G5/4 F5/4 E5/4 D5/4;",
+        "E5/4 E5/4 C5/8 D5/8 E5/8 F5/8;",
+        "E5/4 D5/4 C5/4 B4/4;",
+        "z/4 A4/8 A4/8 C5/4 A5/4;",
+        "G5/2 C5/4 D5/8 E5/8;",
+        "F5/4 E5/4 D5/4 C5/4;",
+        "D5/2 C5/4 B4/4;",
+        "C5/1-C5/1-C5/1;",
+    ))]))?;
 
     Ok(())
 }
