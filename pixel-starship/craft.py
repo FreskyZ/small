@@ -90,37 +90,37 @@ import json, urllib.request
 #             print(f'{into["name"]}({into["rarity_level"]},{into["SpecialAbilityType"]}) = {from1["name"]}({from1["rarity_level"]},{from1["SpecialAbilityType"]}) + {from2["name"]}({from2["rarity_level"]},{from2["SpecialAbilityType"]})')
 #     template = input('> ')
 
-# step4 alternative: more complex queries directly write here
-class Operator(NamedTuple):
-    name: str
-    rarity: int
-    ability: str
-class Recipe(NamedTuple):
-    f1: Operator
-    f2: Operator
-    to: Operator
-with open('all.json') as f:
-    operators = json.loads(f.read())
-with open('craft.json') as f:
-    recipes = json.loads(f.read())
-    recipes.sort(key=lambda r: (r[2], r[0], r[1]))
-operators = { op['id']: Operator(op['name'], op['rarity_level'], op['SpecialAbilityType']) for op in operators }
-recipes = [Recipe(operators[r[0]], operators[r[1]], operators[r[2]]) for r in recipes]
-print(f'{len(operators)} operators, {len(recipes)} recipes')
+# step 4 alternative: more complex queries directly write here
+# class Operator(NamedTuple):
+#     name: str
+#     rarity: int
+#     ability: str
+# class Recipe(NamedTuple):
+#     f1: Operator
+#     f2: Operator
+#     to: Operator
+# with open('all.json') as f:
+#     operators = json.loads(f.read())
+# with open('craft.json') as f:
+#     recipes = json.loads(f.read())
+#     recipes.sort(key=lambda r: (r[2], r[0], r[1]))
+# operators = { op['id']: Operator(op['name'], op['rarity_level'], op['SpecialAbilityType']) for op in operators }
+# recipes = [Recipe(operators[r[0]], operators[r[1]], operators[r[2]]) for r in recipes]
+# print(f'{len(operators)} operators, {len(recipes)} recipes')
 
-def query(title: str, predicate: Callable[[Recipe], bool]):
-    print(title + ': ', end='')
-    matches = [r for r in recipes if predicate(r)]
-    if len(matches):
-        print()
-        for m in matches:
-            print(f'{m.to.name}({m.to.rarity},{m.to.ability}) = {m.f1.name}({m.f1.rarity},{m.f1.ability}) + {m.f2.name}({m.f2.rarity},{m.f2.ability})')
-        print(f'{len(matches)} matches')
-    else:
-        print('not found')
+# def query(title: str, predicate: Callable[[Recipe], bool]):
+#     print(title + ': ', end='')
+#     matches = [r for r in recipes if predicate(r)]
+#     if len(matches):
+#         print()
+#         for m in matches:
+#             print(f'{m.to.name}({m.to.rarity},{m.to.ability}) = {m.f1.name}({m.f1.rarity},{m.f1.ability}) + {m.f2.name}({m.f2.rarity},{m.f2.ability})')
+#         print(f'{len(matches)} matches')
+#     else:
+#         print('not found')
 
 # query('count of 7', lambda r: r.to.rarity == 7) # RESULT: 5929
-query('7 not from 5', lambda r: r.to.rarity == 7 and (r.f1.rarity != 5 or r.f2.rarity != 5)) # RESULT: NO
+# query('7 not from 5', lambda r: r.to.rarity == 7 and (r.f1.rarity != 5 or r.f2.rarity != 5)) # RESULT: NO
 # query('5 not from 4', lambda r: r.to.rarity == 5 and (r.f1.rarity != 4 or r.f2.rarity != 4)) # RESULT: NO
 # query('4 not from 3', lambda r: r.to.rarity == 4 and (r.f1.rarity != 3 or r.f2.rarity != 3)) # RESULT: NO
 # query('to rare 7 fire', lambda r: r.to.name == '银河炼金术士')
@@ -133,3 +133,47 @@ query('7 not from 5', lambda r: r.to.rarity == 7 and (r.f1.rarity != 5 or r.f2.r
 # while expr != '再见':
 #     query('custom', lambda r: eval(expr))
 #     expr = input('> ')
+
+# step 5: minimize 2 files to use in website, before: 571kb + 298kb, after: 23kb + 181kb
+
+with open('all.json') as f:
+    operators = json.loads(f.read())
+with open('craft.json') as f:
+    recipes = json.loads(f.read())
+
+skill_map = [
+    (0, "None", "无"),
+    (1, 'DeductReload', '系统骇入'),
+    (2, "HealSelfHp", "紧急自救"),
+    (3, "HealSameRoomCharacters", "天降甘霖"),
+    (4,  "AddReload", "紧急加速"),
+    (5, "DamageToRoom", "超级拆迁"),
+    (6, "HealRoomHp", "紧急修复"),
+    (7, "DamageToSameRoomCharacters", "毒气"),
+    (8, "DamageToCurrentEnemy", "致命一击"),
+    (9, "FireWalk", "烈焰足迹"),
+    (10, "Freeze", "冻结冲击"),
+    (11, "Bloodlust", "血之渴望"),
+    (12, "SetFire", "纵火"),
+    (13, "ProtectRoom", "静电护盾"),
+    (14, "Invulnerability", "相位闪现"),
+]
+def map_skill(name):
+    return next(s for s in skill_map if s[1] == name)[0]
+min_operators = [{ k: v for k, v in {
+    'id': op['id'],
+    'name': op['name'],
+    'rarity': op['rarity_level'],
+    'skill': map_skill(op['SpecialAbilityType']),
+}.items() if v } for op in operators]
+min_operators.sort(key=lambda op: op['id'])
+min_recipes = {}
+for from1, from2, target in recipes:
+    if target not in min_recipes:
+        min_recipes[target] = []
+    min_recipes[target].append((from1, from2) if from1 <= from2 else (from2, from1))
+
+with open('operators.json', 'w') as f:
+    json.dump(min_operators, f, ensure_ascii=False, separators=(',', ':'))
+with open('recipes.json', 'w') as f:
+    json.dump([{ 'target': target, 'recipes': ingredients } for target, ingredients in min_recipes.items()], f, separators=(',', ':'))

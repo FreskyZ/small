@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <title>合成查询</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type='image/x-icon' href="/favicon.ico">
+</head>
+<body>
+  <div>合成素材1</div>
+  <label for="from1-rarity">星级</label>
+  <select class="rarity" id="from1-rarity"></select>
+  <label for="from1-skill">技能</label>
+  <select class="skill" id="from1-skill"></select>
+  <label for="from1-name">干员</label>
+  <select class="name" id="from1-name"></select>
+  <div>合成素材2</div>
+  <label for="from2-rarity">星级</label>
+  <select class="rarity" id="from2-rarity"></select>
+  <label for="from2-skill">技能</label>
+  <select class="skill" id="from2-skill"></select>
+  <label for="from2-name">干员</label>
+  <select class="name" id="from2-name"></select>
+  <div>合成目标</div>
+  <label for="target-rarity">星级</label>
+  <select class="rarity" id="target-rarity"></select>
+  <label for="target-skill">技能</label>
+  <select class="skill" id="target-skill"></select>
+  <label for="target-name">干员</label>
+  <select class="name" id="target-name"></select>
+  <div><button id="query">查询</button></div>
+  <pre id="result"></pre>
+  <script>
+    const skills = [
+      [1, 'DeductReload', '系统骇入'],
+      [2, "HealSelfHp", "紧急自救"],
+      [3, "HealSameRoomCharacters", "天降甘霖"],
+      [4,  "AddReload", "紧急加速"],
+      [5, "DamageToRoom", "超级拆迁"],
+      [6, "HealRoomHp", "紧急修复"],
+      [7, "DamageToSameRoomCharacters", "毒气"],
+      [8, "DamageToCurrentEnemy", "致命一击"],
+      [9, "FireWalk", "烈焰足迹"],
+      [10, "Freeze", "冻结冲击"],
+      [11, "Bloodlust", "血之渴望"],
+      [12, "SetFire", "纵火"],
+      [13, "ProtectRoom", "静电护盾"],
+      [14, "Invulnerability", "相位闪现"],
+    ].map(v => [v[0], v[2]]);
+
+    function displayOperator(operator) {
+        const skill = operator.skill ? `, ${skills[operator.skill - 1][1]}` : '';
+        return `${operator.name} (${operator.rarity}${skill})`;
+    }
+
+    class Filter {
+      constructor(/** @type {string} */ className) {
+        /** @type {HTMLSelectElement} */
+        this.rarityElement = document.querySelector(`select#${className}-rarity`);
+        /** @type {HTMLSelectElement} */
+        this.skillElement = document.querySelector(`select#${className}-skill`);
+        /** @type {HTMLSelectElement} */
+        this.nameElement = document.querySelector(`select#${className}-name`);
+
+        this.rarityElement.options.add(new Option('未指定', '0'));
+        this.rarityElement.options[0].selected = true;
+        for (const v of [1, 2, 3, 4, 5, 7]) {
+          this.rarityElement.options.add(new Option(v.toString(), v.toString()));
+        }
+        this.rarityElement.onchange = this.handleRarityOrSkillChange.bind(this);
+
+        this.skillElement.options.add(new Option('未指定', '0'));
+        this.skillElement.options[0].selected = true;
+        for (const [id, name] of skills) {
+          this.skillElement.options.add(new Option(name, id.toString()));
+        }
+        this.skillElement.onchange = this.handleRarityOrSkillChange.bind(this);
+
+        this.nameElement.options.add(new Option('未指定', '0'));
+        /** @type {{ id: number, name: string, rarity: number, skill: number }[]} */
+        this.operators = [];
+      }
+      initializeNameSelector(operators) {
+        this.operators = operators;
+        for (const operator of this.operators) {
+          this.nameElement.options.add(new Option(displayOperator(operator), operator.id.toString()));
+        }
+      }
+
+      handleRarityOrSkillChange() {
+        const rarityFilter = parseInt(this.rarityElement.selectedOptions[0].value);
+        const skillFilter = parseInt(this.skillElement.selectedOptions[0].value);
+        for (const option of this.nameElement.options) {
+          const id = parseInt(option.value);
+          if (id == 0) { continue; } // the none selection
+          const operator = this.operators.find(op => op.id == id);
+          const is_rarity = rarityFilter == 0 || rarityFilter == operator.rarity;
+          const is_skill = skillFilter == 0 || (operator.skill && operator.skill == skillFilter);
+          option.hidden = !is_rarity || !is_skill;
+          if (option.selected && option.hidden) {
+            this.nameElement.selectedIndex = 0;
+          }
+        }
+      }
+
+      getValues() {
+        const rarity = parseInt(this.rarityElement.selectedOptions[0].value);
+        const skill = parseInt(this.skillElement.selectedOptions[0].value);
+        const operator = parseInt(this.nameElement.selectedOptions[0].value);
+        return [rarity, skill, operator];
+      }
+      isActive() {
+        const [rarity, skill, operator] = this.getValues();
+        return rarity != 0 || skill != 0 || operator != 0;
+      }
+      isMatch(operatorId) {
+        const [rarity, skill, id] = this.getValues();
+        if (id) { return operatorId == id; }
+        const operator = this.operators.find(op => op.id == operatorId);
+        return (rarity == 0 || operator.rarity == rarity) && (skill == 0 || operator.skill == skill);
+      }
+    }
+
+    async function loadData() {
+      const site = 'http://localhost:3000/';
+      const response = await Promise.all([fetch(`${site}operators.json`), fetch(`${site}recipes.json`)]);
+      const [operators, recipes] = await Promise.all(response.map(r => r.json()));
+      return [operators, recipes];
+    }
+    window.onload = async () => {
+      const [from1, from2, target] = ['from1', 'from2', 'target'].map(c => new Filter(c));
+      const [operators, recipes] = await loadData();
+      /** @type {[number, number, number][]} */
+      const flatRecipes = recipes.flatMap(r => r.recipes.map(([i1, i2]) => [i1, i2, r.target]));
+      [from1, from2, target].map(f => f.initializeNameSelector(operators));
+
+      /** @type {HTMLPreElement} */
+      const resultContainer = document.querySelector('pre#result');
+      document.querySelector('button#query').onclick = () => {
+        /** @type {[number, number, number][]} */
+        let matches = [];
+        if (!from1.isActive() && !from2.isActive()) {
+          matches = flatRecipes.filter(([f1, f2, to]) => target.isMatch(to));
+        } else if (from1.isActive() != from2.isActive()) {
+          // if only one of the from is not used, the used from is used to search both from in recipe
+          const from = from1.isActive() ? from1 : from2;
+          matches = flatRecipes.filter(([f1, f2, to]) => (from.isMatch(f1) || from.isMatch(f2)) && target.isMatch(to));
+        } else {
+          // if both active, test 2 directions
+          matches = flatRecipes.filter(([f1, f2, to]) => ((from1.isMatch(f1) && from2.isMatch(f2)) || (from2.isMatch(f1) && from1.isMatch(f2))) && target.isMatch(to));
+        }
+        if (matches.length == 0) {
+          resultContainer.innerText = '没有合成配方';
+        } else {
+          resultContainer.innerText = `${matches.length}个合成配方\n`;
+          if (matches.length > 100) {
+            matches = matches.slice(0, 100);
+          }
+          for (const [fromId1, fromId2, targetId] of matches) {
+            const fromOperator1 = target.operators.find(op => op.id == fromId1);
+            const fromOperator2 = target.operators.find(op => op.id == fromId2);
+            const targetOperator = target.operators.find(op => op.id == targetId);
+            resultContainer.innerText += `${displayOperator(targetOperator)} = ${displayOperator(fromOperator1)} + ${displayOperator(fromOperator2)}\n`;
+          }
+        }
+      };
+    };
+  </script>
+</body>
+</html>
