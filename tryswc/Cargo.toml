@@ -1,0 +1,10 @@
+[package]
+name = "tryswc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+swc_common = { version = "0.33.2", features = ["tty-emitter"] }
+swc_ecma_ast = "0.110.2"
+swc_ecma_parser = "0.141.6"
+swc_ecma_visit = "0.96.2"
