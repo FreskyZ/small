@@ -35,11 +35,11 @@ assembly_machine_slots = 5
 # assembly machines other than assembly machine have builtin productivity
 assembly_machine_builtin_productivity = 0.5
 # speed module'd quality 1 recipe assembly machine is more commonly used in my current design
-assembly_1_use_quality = True
+assembly_1_use_quality = False
 # level 1 assembly machine can have productivity module to produce more products with less ingredients
 assembly_1_productivity = 0
 # final level of assembly machine does not need quality module, use productivity module to get more
-assembly_final_productivity = 0.76 # 0.76
+assembly_final_productivity = 0 # 0.76
 
 # RECORDED RESULTS:
 # standard assembly machine recipe
@@ -98,7 +98,7 @@ assembly_chance = [_,
 ]
 
 if assembly_1_use_quality and assembly_1_productivity:
-    raise 'cannot quality and productivity level 1 at the same time'
+    raise ValueError('cannot quality and productivity level 1 at the same time')
 
 # all of the following calculations use 1 quality 1 product produce capability as base value,
 # produce capability is the in game displayed productivity displayed on the detailed information of an assembly machine
@@ -137,7 +137,7 @@ while True:
     print(f'iteration#{iteration}')
     print(f'   input {display(ingredients)}')
 
-    products = [_, 0, 0, 0, 0, 0]
+    products: list[float] = [_, 0, 0, 0, 0, 0]
     if not research5:
         # level 1 assembly machine
         products[1] += ingredients[1] * (1 + assembly_machine_builtin_productivity) * (1 - assembly_chance[1]) * (1 + assembly_1_productivity)
@@ -198,7 +198,7 @@ while True:
             ingredients[4] += products[3] * recycle_rate * recycler_chance * 0.1
             products[3] = 0
         if target_level > 4:
-            raise 'cannot discard level 4 when not researched level 5, that\'s nothing'
+            raise ValueError('cannot discard level 4 when not researched level 5, that\'s nothing')
     else:
         if target_level > 1: # level 1 recycle
             ingredients[1] += products[1] * recycle_rate * (1 - recycler_chance)
