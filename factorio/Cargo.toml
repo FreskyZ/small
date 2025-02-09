@@ -1,0 +1,8 @@
+[package]
+name = "factorio-blueprint-utilities"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+byteorder = "1.5.0"
+chrono = "0.4.39"
