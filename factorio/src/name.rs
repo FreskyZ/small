@@ -15,6 +15,7 @@ pub struct Names<'a> {
     names: [Vec<&'a str>; 6],
 }
 
+#[allow(dead_code)]
 impl<'a> Names<'a> {
 
     pub fn new() -> Self {

@@ -25,6 +25,7 @@ impl<'a> Reader<'a> {
     pub fn position(&self) -> usize {
         self.position
     }
+    #[allow(dead_code)]
     pub fn set_position(&mut self, position: usize) -> anyhow::Result<()> {
         if position >= self.base.len() { bail!("index out of range") }
         self.position = position;
