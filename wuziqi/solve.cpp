@@ -1,15 +1,14 @@
 #include <iostream>
-#include <thread>
+// #include <thread>
 
 auto main() -> int {
 
-    std::cout << std::thread::hardware_concurrency() << std::endl;
+    //std::cout << std::thread::hardware_concurrency() << std::endl;
 
     uint64_t v = 0;
     uint64_t carry = 0;
 
-    uint32_t white_count = 0;
-    uint32_t black_count = 0;
+    uint64_t count = 0;
     while (true) {
 
         // add 1
@@ -40,7 +39,7 @@ auto main() -> int {
         // }
         // std::cout << std::endl;
     
-        const uint64_t mask_win[] = {
+        constexpr uint64_t mask_win[] = {
             0x1FULL,         // row 0
             0x3E0ULL,        // row 1
             0x7C00ULL,       // row 2
@@ -56,40 +55,36 @@ auto main() -> int {
         };
     
         uint64_t white_board = v & mask1;
-        uint64_t white_win = 0
-            | ((white_board & mask_win[0]) == mask_win[0])
-            | ((white_board & mask_win[1]) == mask_win[1])
-            | ((white_board & mask_win[2]) == mask_win[2])
-            | ((white_board & mask_win[3]) == mask_win[3])
-            | ((white_board & mask_win[4]) == mask_win[4])
-            | ((white_board & mask_win[5]) == mask_win[5])
-            | ((white_board & mask_win[6]) == mask_win[6])
-            | ((white_board & mask_win[7]) == mask_win[7])
-            | ((white_board & mask_win[8]) == mask_win[8])
-            | ((white_board & mask_win[9]) == mask_win[9])
-            | ((white_board & mask_win[10]) == mask_win[10])
-            | ((white_board & mask_win[11]) == mask_win[11]);
         uint64_t black_board = (v & mask2) >> 1;
-        uint64_t black_win = 0
-            | ((black_board & mask_win[0]) == mask_win[0])
-            | ((black_board & mask_win[1]) == mask_win[1])
-            | ((black_board & mask_win[2]) == mask_win[2])
-            | ((black_board & mask_win[3]) == mask_win[3])
-            | ((black_board & mask_win[4]) == mask_win[4])
-            | ((black_board & mask_win[5]) == mask_win[5])
-            | ((black_board & mask_win[6]) == mask_win[6])
-            | ((black_board & mask_win[7]) == mask_win[7])
-            | ((black_board & mask_win[8]) == mask_win[8])
-            | ((black_board & mask_win[9]) == mask_win[9])
-            | ((black_board & mask_win[10]) == mask_win[10])
-            | ((black_board & mask_win[11]) == mask_win[11]);
-    
-        white_count += white_win;
-        black_count += black_win;
+        count +=
+              ((white_board & mask_win[0]) == mask_win[0])
+            + ((white_board & mask_win[1]) == mask_win[1])
+            + ((white_board & mask_win[2]) == mask_win[2])
+            + ((white_board & mask_win[3]) == mask_win[3])
+            + ((white_board & mask_win[4]) == mask_win[4])
+            + ((white_board & mask_win[5]) == mask_win[5])
+            + ((white_board & mask_win[6]) == mask_win[6])
+            + ((white_board & mask_win[7]) == mask_win[7])
+            + ((white_board & mask_win[8]) == mask_win[8])
+            + ((white_board & mask_win[9]) == mask_win[9])
+            + ((white_board & mask_win[10]) == mask_win[10])
+            + ((white_board & mask_win[11]) == mask_win[11])
+            + ((black_board & mask_win[0]) == mask_win[0])
+            + ((black_board & mask_win[1]) == mask_win[1])
+            + ((black_board & mask_win[2]) == mask_win[2])
+            + ((black_board & mask_win[3]) == mask_win[3])
+            + ((black_board & mask_win[4]) == mask_win[4])
+            + ((black_board & mask_win[5]) == mask_win[5])
+            + ((black_board & mask_win[6]) == mask_win[6])
+            + ((black_board & mask_win[7]) == mask_win[7])
+            + ((black_board & mask_win[8]) == mask_win[8])
+            + ((black_board & mask_win[9]) == mask_win[9])
+            + ((black_board & mask_win[10]) == mask_win[10])
+            + ((black_board & mask_win[11]) == mask_win[11]) == 1;
 
         if (v & 0x4'0000'000LL) { break; }
         // if (v & 0x4'0000'0000'000LL) { break; }
     }
 
-    std::cout << white_count << "," << black_count << "," << white_count + black_count << std::endl;
+    std::cout << count << std::endl;
 }
