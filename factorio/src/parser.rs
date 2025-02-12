@@ -110,6 +110,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_blueprint(&mut self, names: &Names<'a>) -> anyhow::Result<Blueprint<'a>> {
+        println!("0x{:x} beginning of a blueprint", self.base.position());
 
         let _label = self.base.read_str()?;
         self.base.expect(0)?; // mysterious skip
@@ -128,8 +129,9 @@ impl<'a> Parser<'a> {
         let snap_to_grid = self.parse_snap_to_grid()?;
 
         let entity_count = self.base.read_u32()?;
-        let mut entities = Vec::<BlueprintEntity<'a>>::new();
+        let mut entities = Vec::<BlueprintEntity<'a>>::with_capacity(entity_count as usize);
         for _ in 0..entity_count {
+            println!("0x{:x} beginning of a entity", self.base.position());
             let entity_name_index = self.base.read_u16()?;
             let entity_name = names.get_entity_name(entity_name_index as usize)?;
 
@@ -153,19 +155,32 @@ impl<'a> Parser<'a> {
             // this flag only have 0 or 0x10 value
             let has_entity_id = self.base.read_u8()? & 0x10 == 0x10;
             // this is not json format's entity_number, TODO check this value's postprocess
-            let _entity_id = if has_entity_id {
+            let entity_id = if has_entity_id {
                 self.base.expect(1)?; // mysterious skip
-                self.base.read_u32()?
+                self.base.read_u32()? as usize
             } else { 0 };
 
             let kind = match entity_name {
-                "roboport" => EntityKind::Roboport(self.parse_roboport()?),
+                "roboport" => EntityKind::Roboport(self.parse_roboport(names)?),
                 _ => bail!("unhandled entity {entity_name}"),
             };
 
-            entities.push(BlueprintEntity{ kind, position });
-            // ATTENTION break first loop here because first loop is incomplete now and second loop will meet corrupted data
-            break;
+            // entity contained items, like ammo and robot
+            let mut items = Vec::new();
+            let item_type_count = self.base.read_u32()?;
+            for _ in 0..item_type_count {
+                let name_index = self.base.read_u16()?;
+                let name = names.get_item_name(name_index as usize)?;
+                let count = self.base.read_u32()? as usize;
+                items.push((name, count));
+            }
+
+            let has_tags = self.base.read_bool()?;
+            if has_tags {
+                bail!("not support has tags for now");
+            }
+
+            entities.push(BlueprintEntity{ kind, position, entity_id, items });
         }
 
         Ok(Blueprint{ version, description, snap_to_grid, entities })
@@ -195,10 +210,66 @@ impl<'a> Parser<'a> {
         Ok(Some(SnapToGrid{ size: (x, y), absolute: (absolute_x, absolute_y) }))
     }
 
-    fn parse_roboport(&mut self) -> anyhow::Result<&'a str> {
+    fn parse_circuit_connections(&mut self) -> anyhow::Result<Option<CircuitConnections>> {
         let has_circuit_connections = self.base.read_bool()?;
+        if !has_circuit_connections { return Ok(None); }
 
-        Ok("")
+        let mut connections = CircuitConnections{ red: Vec::new(), green: Vec::new() };
+        let connection_count = self.base.read_u8()?;
+        for _ in 0..connection_count {
+            connections.red.push((self.base.read_u32()? as usize, self.base.read_u8()? as usize));
+            self.base.expect(0xFF)?; // mysterious skip
+        }
+        let connection_count = self.base.read_u8()?;
+        for _ in 0..connection_count {
+            connections.green.push((self.base.read_u32()? as usize, self.base.read_u8()? as usize));
+            self.base.expect(0xFF)?; // mysterious skip
+        }
+
+        for _ in 0..9 {
+            self.base.expect(0)?; // mysterious skip
+        }
+        Ok(Some(connections))
+    }
+
+    fn parse_signal(&mut self, names: &Names<'a>) -> anyhow::Result<Option<Signal<'a>>> {
+        let kind = match self.base.read_u8()? {
+            0 => SignalKind::Item,
+            1 => SignalKind::Fluid,
+            2 => SignalKind::Virtual,
+            _ => bail!("invalid signal kind"),
+        };
+        let name_index = self.base.read_u16()? as usize;
+        let name = match kind {
+            SignalKind::Item => names.get_item_name(name_index),
+            SignalKind::Fluid => names.get_fluid_name(name_index),
+            SignalKind::Virtual => names.get_virtual_signal_name(name_index),
+        };
+        if let Ok(name) = &name {
+            println!("0x{:x} looks like valid signal {:?} {}", self.base.position() - 3, kind, name);
+        }
+        // TODO check whether this ignore is actually check index == 0
+        Ok(name.ok().map(|n| Signal{ kind, name: n }))
+    }
+
+    fn parse_roboport(&mut self, names: &Names<'a>) -> anyhow::Result<Roboport<'a>> {
+        println!("0x{:x} beginning of a roboport", self.base.position());
+
+        // ATTENTION INVENSION this is not here anymore?
+        let circuit_connections = None; // self.parse_circuit_connections()?;
+        let read_logistics = self.base.read_bool()?;
+        let read_robot_stats = self.base.read_bool()?;
+        // ATTENTION INVENTION this signals not exist when read_robots_stats not exist
+        let available_logistic_output_signal = if read_robot_stats { self.parse_signal(names)? } else { None };
+        let total_logistic_output_signal = if read_robot_stats { self.parse_signal(names)? } else { None };
+        let available_construction_output_signal = if read_robot_stats { self.parse_signal(names)? } else { None };
+        let total_construction_output_signal = if read_robot_stats { self.parse_signal(names)? } else { None };
+        // NEW in 2.0 TODO check whether this works like this
+        let roboport_count_output_signal = if read_robot_stats { self.parse_signal(names)? } else { None };
+
+        Ok(Roboport{ circuit_connections, read_logistics, read_robot_stats,
+            available_construction_output_signal, available_logistic_output_signal, total_construction_output_signal,
+            total_logistic_output_signal, roboport_count_output_signal })
     }
 }
 

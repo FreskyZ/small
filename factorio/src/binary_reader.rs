@@ -51,7 +51,8 @@ impl<'a> Reader<'a> {
     pub fn read_bool(&mut self) -> anyhow::Result<bool> {
         if self.position == self.base.len() { bail!("index out of range"); }
         let value = self.base[self.position];
-        if value != 0 && value != 1 { bail!("0x{:x}: expect bool, meet {}", self.position, value); }
+        // capture backtrace: set RUST_BACKTRACE=1
+        if value != 0 && value != 1 { bail!("0x{:x}: expect bool, meet {}, {:?}", self.position, value, std::backtrace::Backtrace::capture()); }
         self.position += 1;
         Ok(value != 0)
     }

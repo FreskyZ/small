@@ -97,18 +97,40 @@ pub struct SnapToGrid {
 pub struct BlueprintEntity<'a> {
     pub kind: EntityKind<'a>,
     pub position: (f64, f64),
+    pub entity_id: usize, // NOTE this is not blueprint json format's entity number
+    pub items: Vec<(&'a str, usize)>, // item name and count
 }
 
 impl<'a> fmt::Debug for BlueprintEntity<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "  entity {} {:?}", self.kind.name(), self.position)?;
+        writeln!(f, "  entity {} {:?} #{}", self.kind.name(), self.position, self.entity_id)?;
+        for (item_name, item_count) in &self.items {
+            writeln!(f, "    item {} x {}", item_name, item_count)?;
+        }
         Ok(())
     }
 }
 
+pub struct CircuitConnections {
+    // (entity id, circuit id)[], NOTE entity id is not blueprint json format's entity number
+    pub red: Vec<(usize, usize)>,
+    pub green: Vec<(usize, usize)>,
+}
+
+#[derive(Debug)]
+pub enum SignalKind {
+    Item,
+    Fluid,
+    Virtual,
+}
+
+pub struct Signal<'a> {
+    pub kind: SignalKind,
+    pub name: &'a str,
+}
+
 pub enum EntityKind<'a> {
-    // ATTENTION TODO dummy string to keep using the 'a, remove when other variant use 'a
-    Roboport(&'a str),
+    Roboport(Roboport<'a>),
 }
 
 impl<'a> EntityKind<'a> {
@@ -119,6 +141,38 @@ impl<'a> EntityKind<'a> {
     }
 }
 
-pub struct Roboport {
-    
+pub struct Roboport<'a> {
+    pub circuit_connections: Option<CircuitConnections>,
+    // control behaviors
+    pub read_logistics: bool,
+    pub read_robot_stats: bool,
+    pub available_logistic_output_signal: Option<Signal<'a>>,
+    pub total_logistic_output_signal: Option<Signal<'a>>,
+    pub available_construction_output_signal: Option<Signal<'a>>,
+    pub total_construction_output_signal: Option<Signal<'a>>,
+    // NEW in 2.0
+    pub roboport_count_output_signal: Option<Signal<'a>>,
+}
+
+impl<'a> fmt::Debug for Roboport<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "    read_logistics {}", self.read_logistics)?;
+        writeln!(f, "    read_robots_stats {}", self.read_robot_stats)?;
+        if let Some(signal) = &self.available_logistic_output_signal {
+            writeln!(f, "    available_logistic_output_signal {:?} {}", signal.kind, signal.name)?;
+        }
+        if let Some(signal) = &self.total_logistic_output_signal {
+            writeln!(f, "    total_logistic_output_signal {:?} {}", signal.kind, signal.name)?;
+        }
+        if let Some(signal) = &self.available_construction_output_signal {
+            writeln!(f, "    available_construction_output_signal {:?} {}", signal.kind, signal.name)?;
+        }
+        if let Some(signal) = &self.total_construction_output_signal {
+            writeln!(f, "    total_construction_output_signal {:?} {}", signal.kind, signal.name)?;
+        }
+        if let Some(signal) = &self.roboport_count_output_signal {
+            writeln!(f, "    roboport_count_output_signal {:?} {}", signal.kind, signal.name)?;
+        }
+        Ok(())
+    }
 }

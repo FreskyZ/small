@@ -23,29 +23,5 @@ fn main() -> anyhow::Result<()> {
 
     println!("{library:?}");
 
-
-    //             // entity contained items, like ammo
-    //             let item_count = r.u32();
-    //             for _ in 0..item_count {
-    //                 let item_index = r.u16() as usize;
-    //                 let item_name = item_indexes[&item_index];
-    //                 let item_count = r.u32();
-    //                 println!("    item {} count {}", item_name, item_count);
-    //             }
-
-    //             let has_tags = r.u8() != 0;
-    //             if has_tags {
-    //                 panic!("tags not handled");
-    //             }
-
-    //             // ATTENTION break first loop here because first loop is incomplete now and second loop will meet corrupted data
-    //             // break;
-    //         }
-    //     }
-
-    //     // ATTENTION break first loop here because first loop is incomplete now and second loop will meet corrupted data
-    //     break;
-    // }
-
     Ok(())
 }

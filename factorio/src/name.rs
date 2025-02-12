@@ -50,32 +50,32 @@ impl<'a> Names<'a> {
 
     pub fn get_item_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[0].len() <= index { bail!("name index out of range"); }
-        if self.names[0][index] == "" { bail!("name index invalid"); }
+        if self.names[0][index] == "" { bail!("item name index {} invalid\n{:?}", index, self.names[0]); }
         Ok(self.names[0][index])
     }
     pub fn get_recipe_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[1].len() <= index { bail!("name index out of range"); }
-        if self.names[1][index] == "" { bail!("name index invalid"); }
+        if self.names[1][index] == "" { bail!("recipe name index {} invalid\n{:?}", index, self.names[1]); }
         Ok(self.names[1][index])
     }
     pub fn get_entity_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[2].len() <= index { bail!("name index out of range"); }
-        if self.names[2][index] == "" { bail!("name index invalid"); }
+        if self.names[2][index] == "" { bail!("entity name index {} invalid\n{:?}", index, self.names[2]); }
         Ok(self.names[2][index])
     }
     pub fn get_tile_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[3].len() <= index { bail!("name index out of range"); }
-        if self.names[3][index] == "" { bail!("name index invalid"); }
+        if self.names[3][index] == "" { bail!("tile name index {} invalid\n{:?}", index, self.names[3]); }
         Ok(self.names[3][index])
     }
     pub fn get_virtual_signal_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[4].len() <= index { bail!("name index out of range"); }
-        if self.names[4][index] == "" { bail!("name index invalid"); }
+        if self.names[4][index] == "" { bail!("vsignal name index {} invalid\n{:?}", index, self.names[4]); }
         Ok(self.names[4][index])
     }
     pub fn get_fluid_name(&self, index: usize) -> anyhow::Result<&'a str> {
         if self.names[5].len() <= index { bail!("name index out of range"); }
-        if self.names[5][index] == "" { bail!("name index invalid"); }
+        if self.names[5][index] == "" { bail!("fluid name index {} invalid\n{:?}", index, self.names[5]); }
         Ok(self.names[5][index])
     }
 }
