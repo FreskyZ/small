@@ -131,12 +131,14 @@ pub struct Signal<'a> {
 
 pub enum EntityKind<'a> {
     Roboport(Roboport<'a>),
+    ExpressUndergroundBelt(UndergroundBelt),
 }
 
 impl<'a> EntityKind<'a> {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Roboport(_) => "roboport",
+            Self::ExpressUndergroundBelt(_) => "express-underground-belt",
         }
     }
 }
@@ -175,4 +177,9 @@ impl<'a> fmt::Debug for Roboport<'a> {
         }
         Ok(())
     }
+}
+
+pub struct UndergroundBelt {
+    pub direction: usize,
+    pub output: bool, // false for input, true for output
 }

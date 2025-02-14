@@ -131,7 +131,6 @@ impl<'a> Parser<'a> {
         let entity_count = self.base.read_u32()?;
         let mut entities = Vec::<BlueprintEntity<'a>>::with_capacity(entity_count as usize);
         for _ in 0..entity_count {
-            println!("0x{:x} beginning of a entity", self.base.position());
             let entity_name_index = self.base.read_u16()?;
             let entity_name = names.get_entity_name(entity_name_index as usize)?;
 
@@ -162,8 +161,10 @@ impl<'a> Parser<'a> {
 
             let kind = match entity_name {
                 "roboport" => EntityKind::Roboport(self.parse_roboport(names)?),
+                "express-underground-belt" => EntityKind::ExpressUndergroundBelt(self.parse_underground_belt()?),
                 _ => bail!("unhandled entity {entity_name}"),
             };
+            println!("entity {}", kind.name());
 
             // entity contained items, like ammo and robot
             let mut items = Vec::new();
@@ -253,7 +254,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_roboport(&mut self, names: &Names<'a>) -> anyhow::Result<Roboport<'a>> {
-        println!("0x{:x} beginning of a roboport", self.base.position());
+        // println!("0x{:x} beginning of a roboport", self.base.position());
 
         // ATTENTION INVENSION this is not here anymore?
         let circuit_connections = None; // self.parse_circuit_connections()?;
@@ -270,6 +271,13 @@ impl<'a> Parser<'a> {
         Ok(Roboport{ circuit_connections, read_logistics, read_robot_stats,
             available_construction_output_signal, available_logistic_output_signal, total_construction_output_signal,
             total_logistic_output_signal, roboport_count_output_signal })
+    }
+
+    fn parse_underground_belt(&mut self) -> anyhow::Result<UndergroundBelt> {
+        self.base.expect(0); // mysterious skip
+        let direction = self.base.read_u8()? as usize;
+        let output = self.base.read_bool()?;
+        Ok(UndergroundBelt{ direction, output })
     }
 }
 
