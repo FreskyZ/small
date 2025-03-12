@@ -2,3 +2,8 @@
 /bilibili-replace/av*
 /bilibili-replace/COOKIE
 target
+/theai/bin
+/theai/include
+/theai/lib
+/theai/lib64
+/theai/pyvenv.cfg
