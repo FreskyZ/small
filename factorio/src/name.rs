@@ -9,10 +9,11 @@ use std::fmt;
 
 // the strings are still borrowing the buffer
 pub struct Names<'a> {
-    // 6 namespaces, see later
+    // ATTENTION NOT SAME 2/SA obiviously have new namespace quality and planet
+    // 8 namespaces, see later
     // there are less than 300 items in each namespace,
     // use sparse array seems good, not used entries use static empty string
-    names: [Vec<&'a str>; 6],
+    names: [Vec<&'a str>; 8],
 }
 
 #[allow(dead_code)]
@@ -28,11 +29,21 @@ impl<'a> Names<'a> {
         let namespace_index = match prototype_name {
             | "capsule" // (capsule, raw fish) is item
             | "gun" // (gun, rocket launcher) is item? // NOTE rocket luancher is the gun, not rocket silo
+            | "module" // speed module, productivity module, etc.
             | "blueprint"
+            | "upgrade-item"
+            | "deconstruction-item"
+            | "rail-planner" // what is rail planner
+            | "repair-tool"  // repair pack
+            | "tool" // science pack is here?
+            | "item-with-entity-data"
             | "item" => 0,
             "recipe" => 1,
             "virtual-signal" => 4,
             "tile" => 3,
+            "fluid" => 5,
+            "quality" => 6,
+            "planet" => 7,
             // for now all other things are entity
             _ => 2,
         };
@@ -78,6 +89,16 @@ impl<'a> Names<'a> {
         if self.names[5][index] == "" { bail!("fluid name index {} invalid\n{:?}", index, self.names[5]); }
         Ok(self.names[5][index])
     }
+    pub fn get_quality_name(&self, index: usize) -> anyhow::Result<&'a str> {
+        if self.names[6].len() <= index { bail!("name index out of range"); }
+        if self.names[6][index] == "" { bail!("quality name index {} invalid\n{:?}", index, self.names[6]); }
+        Ok(self.names[6][index])
+    }
+    pub fn get_planet_name(&self, index: usize) -> anyhow::Result<&'a str> {
+        if self.names[7].len() <= index { bail!("name index out of range"); }
+        if self.names[7][index] == "" { bail!("planet name index {} invalid\n{:?}", index, self.names[7]); }
+        Ok(self.names[7][index])
+    }
 }
 
 impl<'a> fmt::Debug for Names<'a> {
@@ -104,6 +125,14 @@ impl<'a> fmt::Debug for Names<'a> {
         }
         writeln!(f, "fluids:")?;
         for (index, name) in self.names[5].iter().enumerate().filter(|(_, v)| !v.is_empty()) {
+            writeln!(f, "  {index}: {}", *name)?;
+        }
+        writeln!(f, "quality:")?;
+        for (index, name) in self.names[6].iter().enumerate().filter(|(_, v)| !v.is_empty()) {
+            writeln!(f, "  {index}: {}", *name)?;
+        }
+        writeln!(f, "planets:")?;
+        for (index, name) in self.names[7].iter().enumerate().filter(|(_, v)| !v.is_empty()) {
             writeln!(f, "  {index}: {}", *name)?;
         }
         Ok(())

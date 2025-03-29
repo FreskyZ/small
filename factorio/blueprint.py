@@ -1,12 +1,18 @@
 import base64, json, sys, zlib
 
-# decode or encode factorio blueprint / blueprint book import/export text format
+# factorio blueprint tool
+# encode or decode import/export text format
+
 # this is a simple feasibility analysis of possible future projects
 # (include my own blueprint archive project, minimal gui blueprint editor)
 # this script reads blueprint text and writes the json format or vice versa
 # no command line options,
 #   if input file name is .txt, output overwrite same name .json
 #   if input file name is .json, output overwrite same name .txt
+
+# requirement log from bluprint.html
+# - move signal when configuration icon for blueprint/book
+# - quality variant of a blueprint
 
 if len(sys.argv) != 2:
     print('USAGE: python blueprint.py blueprint.txt or python blueprint.py blueprint.json')

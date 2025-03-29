@@ -30,6 +30,7 @@ impl<'a> Parser<'a> {
         let _generation_counter = self.base.read_u32()?;
 
         // this is 2023/11/12, what's this time? looks like the game install time?
+        // this is 2025/1/21, looks like last update time
         let timestamp = self.base.read_u32()? as i64;
         let file_timestamp = DateTime::<Utc>::from_timestamp(timestamp, 0).ok_or_else(|| anyhow!("invalid timestamp"))?;
 
@@ -66,10 +67,17 @@ impl<'a> Parser<'a> {
         let prototype_count = self.base.read_u16()?;
         for _ in 0..prototype_count {
             let prototype_name = self.base.read_str()?;
-            let name_count = self.base.read_u16_unless_then_u8(prototype_name == "tile")?;
+            // ATTENTION NOT SAME 2/SA seems does not have this difference
+            // self.base.read_u16_unless_then_u8(prototype_name == "tile")?;
+            // ATTENTION NOT SAME 2/SA quality use this mechanism
+            let name_count = self.base.read_u16_unless_then_u8(prototype_name == "quality")?; 
             for _ in 0..name_count {
-                let index = self.base.read_u16_unless_then_u8(prototype_name == "tile")?;
+                // ATTENTION NOT SAME 2/SA seems does not have this difference
+                // self.base.read_u16_unless_then_u8(prototype_name == "tile")?;
+                // ATTENTION NOT SAME 2/SA quality use this mechanism
+                let index = self.base.read_u16_unless_then_u8(prototype_name == "quality")?;
                 let name = self.base.read_str()?;
+                // println!("prototype {prototype_name} name {name} index {index}");
                 names.add(index, name, prototype_name)?;
             }
         }
