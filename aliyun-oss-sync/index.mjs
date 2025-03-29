@@ -10,6 +10,9 @@ import OSS from 'ali-oss';
 // - ALIYUN_OSS_BUCKET: bucket
 // - AOS_TARGET_DIR: local path to put the files, this path is required to exist, objects' path will create automatically
 
+// access key information see https://ram.console.aliyun.com/
+// bucket information see https://oss.console.aliyun.com/, if you forget
+
 const bucketName = process.env['ALIYUN_OSS_BUCKET'];
 const localDirectory = process.env['AOS_TARGET_DIR'];
 const client = OSS({
@@ -37,7 +40,6 @@ if (process.argv[2] == 'upload') {
     });
     console.log(`aos: upload ${process.argv[3]} => ${process.argv[4]}`);
     console.log(result);
-    process.exit(0);
 } else if (process.argv[2] == 'delete') {
     if (process.argv.length != 4) {
         console.log('aos: usage: node manage.mjs upload remote/path/filename.mp3');

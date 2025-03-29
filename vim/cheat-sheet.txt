@@ -1,0 +1,14 @@
+insert mode
+use 'v' to visual mode
+in visual mode
+   'd' to cut
+   'y' to copy (yank)
+   'p' to paste
+   '<esc>' to quit
+
+:tabnew [filename] to create new tab
+   or tabe
+   :tabn to goto next tab
+   :tabp to goto previous tab
+   gt to go to next tab, gT to goto previous tab
+   :tabfirst and :tablast
