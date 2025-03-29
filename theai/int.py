@@ -47,7 +47,7 @@ client = openai.OpenAI(api_key=api_key, base_url='https://api.deepseek.com')
 # #    stop: normal finish,
 # #    length: token count limit exceed,
 # #    content_filter: content filtered,
-# #    tool_calls TODO what is tool,
+# #    tool_calls,
 # #    insufficient_system_resource: insufficient system resource
 # # response.choices[0].message.reasoning_content: the reasoning content
 # # response.choices[0].message.content: the response
