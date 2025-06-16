@@ -1185,7 +1185,8 @@ class Inferrer {
             // 0x1, 0x10 is not 2 items, exclude all selected
             for (let b = 3; b < (1 << cells.length) - 1; b += 1) {
                 const x = b.toString(2).padStart(cells.length, '0');
-                const selection = new Array(x.length).fill(0).map((_, i) => x[i] == '1' ? cells[i] : null).filter(x => x) as unknown as Cell[];
+                // `x` represents a binary string where '1' indicates selected cells.
+                const selection = new Array(x.length).fill(0).map((_, i) => x[i] == '1' ? cells[i] : null).filter(cell => cell) as unknown as Cell[];
                 if (selection.length <= 1) {
                     continue;
                 }
