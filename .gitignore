@@ -7,3 +7,4 @@ target
 /theai/lib
 /theai/lib64
 /theai/pyvenv.cfg
+node_modules

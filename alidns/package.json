@@ -1,0 +1,14 @@
+{
+  "name": "alidns",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+  },
+  "dependencies": {
+    "@alicloud/alidns20150109": "^3.4.9",
+    "@alicloud/credentials": "^2.4.3",
+    "@alicloud/openapi-client": "^0.4.14",
+    "@alicloud/tea-util": "^1.4.10"
+  }
+}
