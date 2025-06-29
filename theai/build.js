@@ -127,6 +127,7 @@ await client.connect({
 });
 
 await client.fastPut('index.html', path.join(config.webroot, 'static/chat/index.html'));
+await client.fastPut('share.html', path.join(config.webroot, 'static/chat/share.html'));
 await client.put(Buffer.from(minifyResult1.code), path.join(config.webroot, 'static/chat/index.js'));
 await client.put(Buffer.from(minifyResult2.code), path.join(config.webroot, 'servers/chat.js'));
 client.end();

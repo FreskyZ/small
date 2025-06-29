@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import mysql from 'mysql2/promise';
+import type * as I from './shared.js';
 
 // npx tsc --project tsconfig.json
 
@@ -81,42 +82,6 @@ const pool = mysql.createPool({
 type QueryResult<T> = T & mysql.RowDataPacket;
 // result of insert/update/delete, which is data Manipulatation language Result
 type ManipulateResult = mysql.ResultSetHeader;
-
-namespace I {
-    export interface LookupSession {
-        id: number,
-        name: string,
-        comment: string,
-        createTime: string,
-    }
-    export interface SessionDirectory {
-        id: number, // 0 for the virtual root directory
-        name: string,
-        directories: SessionDirectory[],
-        sessions: LookupSession[],
-    }
-    export interface Session {
-        id: number,
-        name: string,
-        comment: string,
-        versions: SessionVersion[],
-    }
-    export interface SessionVersion {
-        version: number,
-        comment: string,
-        createTime: string,
-        promptTokenCount: number,
-        completionTokenCount: number,
-        messages: Message[],
-    }
-    export interface Message {
-        role: string,
-        content: string,
-    }
-    export interface ShareResult {
-        id: string, // SharedSession.Id guid
-    }
-}
 
 namespace D {
     export interface Session {
@@ -240,7 +205,9 @@ async function createSession(ax: ActionContext): Promise<I.Session> {
         'INSERT INTO `Session` (`UserId`, `Name`) VALUES (?, ?)', [ax.userId, dayjs.utc().format('[s]-YYYYMMDD-HHmmss')]);
     await pool.execute<ManipulateResult>(
         'INSERT INTO `SessionVersion` (`SessionId`, `Version`) VALUES (?, 1)', [insertResult.insertId]);
-    
+    await pool.execute<ManipulateResult>(
+        "INSERT INTO `Message` (`SessionId`, `Version`, `Sequence`, `Role`, `Content`) VALUES (?, 1, 1, 'system', 'You are a helpful assistant.')", [insertResult.insertId]);
+
     return await getSession(ax, insertResult.insertId);
 }
 // POST /update-session/:id body Session update comment
@@ -507,23 +474,26 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const result: DispatchResult = {};
     try {
         let match: RegExpExecArray;
+        // TODO change parameters to query!
         if (!ctx.state.public) {
-            if (ctx.method == 'GET' && ctx.path == '/v1/sessions') { result.body = await getSessions(ax); }
+            if (ctx.method == 'GET' && ctx.path == '/v1/sessions') { result.body = await getSessions(ax); return result; }
             match = /\/v1\/session\/(?<id>\d+)/.exec(ctx.path);
-            if (ctx.method == 'GET' && match) { result.body = await getSession(ax, parseInt(match.groups.id)); }
-            if (ctx.method == 'POST' && ctx.path == '/v1/create-session') { result.body = await createSession(ax); }
+            if (ctx.method == 'GET' && match) { result.body = await getSession(ax, parseInt(match.groups.id)); return result; }
+            if (ctx.method == 'POST' && ctx.path == '/v1/create-session') { result.body = await createSession(ax); return result; }
             match = /\/v1\/update-messages\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await updateMessages(ax, parseInt(match.groups.id), parseInt(match.groups.version), ctx.body); }
+            if (ctx.method == 'POST' && match) { result.body = await updateMessages(ax, parseInt(match.groups.id), parseInt(match.groups.version), ctx.body); return result; }
             match = /\/v1\/completions\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await generateCompletion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); }
+            if (ctx.method == 'POST' && match) { result.body = await generateCompletion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
             match = /\/v1\/share-version\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await ShareSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); }
+            if (ctx.method == 'POST' && match) { result.body = await ShareSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
         } else {
             match = /\/v1\/version\/(?<guid>[a-fA-F0-9-]+)/.exec(ctx.path);
-            if (ctx.method == 'GET' && match) { result.body = await getReadonlySessionVersion(ax, match.groups.guid); }
+            if (ctx.method == 'GET' && match) { result.body = await getReadonlySessionVersion(ax, match.groups.guid); return result; }
         }
     } catch (error) {
         result.error = error;
+        return result;
     }
+    result.error = new FineError('not-found', 'invalid invocation');
     return result;
 }
