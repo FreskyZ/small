@@ -4,5 +4,24 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+  },
+  "dependencies": {
+    "dayjs": "^1.11.13",
+    "mysql2": "^3.14.1"
+  },
+  "devDependencies": {
+    "@emotion/react": "^11.14.0",
+    "@types/node": "^24.0.3",
+    "@types/koa": "2.15.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@types/ssh2-sftp-client": "^9.0.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "ssh2-sftp-client": "^12.0.1",
+    "terser": "^5.43.1",
+    "typescript": "^5.8.3",
+    "chalk": "^5.4.1",
+    "chalk-template": "^1.1.0"
   }
 }
