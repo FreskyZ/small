@@ -156,6 +156,9 @@ async function getSessions(ax: ActionContext): Promise<I.SessionDirectory> {
     }
     return directoryMap.get(0)!;
 }
+// POST /create-directory { name: string }
+// POST /move-directory { directoryId?: number, sessionId?: number, parentDirectoryId: number }
+
 // GET /session/:id return Session
 async function getSession(ax: ActionContext, sessionId: number): Promise<I.Session> {
 
@@ -198,7 +201,6 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
         versions: versions,
     };
 }
-
 // POST /create-session return Session
 async function createSession(ax: ActionContext): Promise<I.Session> {
     const [insertResult] = await pool.execute<ManipulateResult>(
@@ -251,16 +253,62 @@ async function getReadonlySessionVersion(ax: ActionContext, id: string): Promise
         })),
     };
 }
-// POST /create-version/:id return SessionVersion fork a version
-async function createSessionVersion(ax: ActionContext, sessionId: number) {
+// POST /duplicate-version/:id/:version return I.SessionVersion
+async function duplicateSessionVersion(ax: ActionContext, sessionId: number, fromVersionNumber: number): Promise<I.SessionVersion> {
+    // Check if the session and version exist and belong to the user
+    const [[session]] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?', [sessionId, ax.userId]);
+    if (!session) {
+        throw new FineError('not-found', 'session not found');
+    }
+    const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
+        'SELECT `Version` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?', [sessionId, fromVersionNumber]);
+    if (!dbVersion) {
+        throw new FineError('not-found', 'session version not found');
+    }
 
+    // Find the next version number
+    const [[maxVersionRow]] = await pool.query<QueryResult<{ maxVersion: number }>[]>(
+        'SELECT MAX(`Version`) as maxVersion FROM `SessionVersion` WHERE `SessionId` = ?', [sessionId]);
+    const newVersionNumber = (maxVersionRow?.maxVersion ?? 0) + 1;
+
+    // Duplicate SessionVersion
+    await pool.execute(
+        'INSERT INTO `SessionVersion` (`SessionId`, `Version`) VALUES (?, ?)', [sessionId, newVersionNumber]);
+
+    // Duplicate Messages
+    await pool.execute(
+        'INSERT INTO `Message` (`SessionId`, `Version`, `Sequence`, `Role`, `Content`) ' +
+        'SELECT `SessionId`, ?, `Sequence`, `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ?',
+        [newVersionNumber, sessionId, fromVersionNumber]);
+
+    // Return the new SessionVersion (with messages)
+    const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
+        'SELECT `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC',
+        [sessionId, newVersionNumber]
+    );
+    const [[newDbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
+        'SELECT `Version`, `Comment`, `CreateTime`, `PromptTokenCount`, `CompletionTokenCount` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
+        [sessionId, newVersionNumber]
+    );
+    return {
+        version: newDbVersion.Version,
+        comment: newDbVersion.Comment ?? '',
+        createTime: newDbVersion.CreateTime,
+        promptTokenCount: newDbVersion.PromptTokenCount,
+        completionTokenCount: newDbVersion.CompletionTokenCount,
+        messages: dbMessages.map(m => ({
+            role: m.Role,
+            content: m.Content,
+        })),
+    };
 }
 // POST /update-version/:id/:version body SessionVersion update comment
 async function updateSessionVersion(ax: ActionContext, sessionId: number, version: number, sessionVersion: I.SessionVersion) {
 
 }
 // POST /update-messages/:id/:version body Message[] update replace messages
-async function updateMessages(ax: ActionContext, sessionId: number, version: number, messages: I.Message[]) {
+async function updateMessages(ax: ActionContext, sessionId: number, version: number, messages: I.Message[]): Promise<void> {
     // Fetch existing messages for this session/version
     const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
         'SELECT `MessageId`, `Sequence`, `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC',
@@ -289,17 +337,17 @@ async function updateMessages(ax: ActionContext, sessionId: number, version: num
     }
 
     // discard other db messages
-    const needDeleteMessageIds = dbMessages.filter(m => !sameMessageIds.includes(m.MessageId));
+    const needDeleteMessageIds = dbMessages.filter(m => !sameMessageIds.includes(m.MessageId)).map(m => m.MessageId);
     if (needDeleteMessageIds.length > 0) {
         const placeholders = needDeleteMessageIds.map(() => '?').join(', ');
         await pool.execute(`DELETE FROM \`Message\` WHERE \`MessageId\` IN (${placeholders})`, needDeleteMessageIds);
     }
 
     if (messages.length > sameMessageIds.length) {
-        let maxSequence = dbMessages[sameMessageIds.length - 1].Sequence;
+        const maxSequence = dbMessages[sameMessageIds.length - 1].Sequence;
         const values: any[] = [];
-        messages.forEach((m, i) => values.push(sessionId, version, maxSequence + i + 1, m.role, m.content));
-        const placeholders = messages.map(() => '(?, ?, ?, ?, ?)').join(', ');
+        messages.slice(sameMessageIds.length).forEach((m, i) => values.push(sessionId, version, maxSequence + i + 1, m.role, m.content));
+        const placeholders = messages.slice(sameMessageIds.length).map(() => '(?, ?, ?, ?, ?)').join(', ');
         await pool.execute(`INSERT INTO \`Message\` (\`SessionId\`, \`Version\`, \`Sequence\`, \`Role\`, \`Content\`) VALUES ${placeholders}`, values);
     }
 }
@@ -413,15 +461,20 @@ async function generateCompletion(ax: ActionContext, sessionId: number, version:
 }
 
 // POST /share-version/:id/:version return ShareResult
-async function ShareSessionVersion(ax: ActionContext, sessionId: number, version: number): Promise<I.ShareResult> {
-    const [result] = await pool.execute<ManipulateResult>(
+async function ShareSessionVersion(ax: ActionContext, sessionId: number, versionNumber: number): Promise<I.ShareResult> {
+    // Check if a shared session already exists for this session/version
+    const [[existingShared]] = await pool.query<QueryResult<D.SharedSession>[]>(
+        'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ? AND `Version` = ? AND `ExpireTime` > NOW() ORDER BY `CreateTime` DESC LIMIT 1',
+        [sessionId, versionNumber]);
+    if (existingShared) {
+        return { id: existingShared.ShareId };
+    }
+    await pool.execute<ManipulateResult>(
         'INSERT INTO `SharedSession` (`SessionId`, `Version`, `ExpireTime`) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
-        [sessionId, version]
-    );
+        [sessionId, versionNumber]);
     const [[shared]] = await pool.query<QueryResult<D.SharedSession>[]>(
         'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `CreateTime` DESC LIMIT 1',
-        [sessionId, version]
-    );
+        [sessionId, versionNumber]);
     if (!shared) {
         throw new FineError('internal', 'failed to create shared session');
     }
@@ -486,6 +539,8 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
             if (ctx.method == 'POST' && match) { result.body = await generateCompletion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
             match = /\/v1\/share-version\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
             if (ctx.method == 'POST' && match) { result.body = await ShareSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
+            match = /\/v1\/duplicate-version\/(?<id>\d+)\/(?<fromVersionNumber>\d+)/.exec(ctx.path);
+            if (ctx.method == 'POST' && match) { result.body = await duplicateSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.fromVersionNumber)); return result; }
         } else {
             match = /\/v1\/version\/(?<guid>[a-fA-F0-9-]+)/.exec(ctx.path);
             if (ctx.method == 'GET' && match) { result.body = await getReadonlySessionVersion(ax, match.groups.guid); return result; }
