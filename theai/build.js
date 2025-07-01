@@ -69,9 +69,9 @@ const databaseModel = rawDatabaseModel[1].database.map(c => ({
 
 // database.d.ts
 let sb = '';
-sb += '// ------------------------\n';
-sb += '// ATTENTION AUTO GENERATED\n';
-sb += '// ------------------------\n';
+sb += '// --------------------------------------\n';
+sb += '// ------ ATTENTION AUTO GENERATED ------\n';
+sb += '// --------------------------------------\n';
 sb += '\n';
 for (const table of databaseModel) {
     sb += `export interface ${table.name} {\n`;
@@ -93,9 +93,9 @@ await fs.writeFile('src/server/database.d.ts', sb);
 
 // database.sql
 sb = '';
-sb += '---------------------------\n';
-sb += '-- ATTENTION AUTO GENERATED\n';
-sb += '---------------------------\n';
+sb += '--------------------------------------\n';
+sb += '------ ATTENTION AUTO GENERATED ------\n';
+sb += '--------------------------------------\n';
 sb += '\n';
 sb += '-- -- first, mysql -u root -p:\n'
 sb += `-- CREATE DATABASE '${databaseName}';\n`;
@@ -129,6 +129,105 @@ for (const table of databaseModel) {
     sb += `);\n`;
 }
 await fs.writeFile('src/server/database.sql', sb);
+
+console.log('code generation web interface');
+const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
+// console.log(JSON.stringify(rawActions, undefined, 2));
+/**
+ * @typedef {Object} WebInterfaceActionParameter
+ * @property {string} name
+ * @property {'id'} type for now only id
+ * @property {boolean} optional
+ */
+/**
+ * @typedef {Object} WebInterfaceAction
+ * @property {string} name
+ * @property {boolean} public
+ * @property {string} method method is calculated when read config, because both side need it
+ * @property {string} path path is calculated when read config, because both side need it
+ * @property {WebInterfaceActionParameter[]} parameters
+ * @property {string?} body body type name
+ * @property {string?} return return type name
+ */
+/**
+ * @typedef {Object} WebInterfaceActionField
+ * @property {string} name
+ * @property {'id' | 'int' | 'string' | 'datetime' | string} type
+ * @property {boolean} nullable
+ */
+/**
+ * @typedef {Object} WebInterfaceActionType
+ * @property {string} name
+ * @property {WebInterfaceActionField[]} fields
+ */
+/** @type {WebInterfaceAction[]} */
+const actions = [];
+/** @type {WebInterfaceActionType[]} */
+const actionTypes = [];
+rawWebInterfaces[1].api.forEach(c => {
+    if ('type' in c) {
+        actionTypes.push({
+            name: c[':@'].name,
+            fields: c.type.map(f => ({
+                name: f[':@'].name,
+                type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
+                optional: f[':@'].type.endsWith('?'),
+            })),
+        });
+    } else {
+        const name = c[':@'].name;
+        const $public = !!c[':@'].public;
+        const nameWithoutPublic = $public ? name.substring(6) : name;
+        const method = nameWithoutPublic.startsWith('Get') ? 'GET'
+            : nameWithoutPublic.startsWith('Add') ? 'PUT'
+            : nameWithoutPublic.startsWith('Remove') ? 'DELETE' : 'POST';
+        const nameWithoutGet = nameWithoutPublic.startsWith('Get') ? nameWithoutPublic.substring(3) : nameWithoutPublic;
+        const path = nameWithoutGet.replace(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+        const body = c[':@'].body;
+        const $return = c[':@'].return;
+        const parameters = [1, 2, 3, 4].map(i => c[':@'][`a${i}`]).filter(x => x).map(r => {
+            // NOTE for now not support nullable and not id type
+            return { name: r, type: 'id', optional: false };
+        });
+        actions.push({ name, public: $public, method, path, body, return: $return, parameters });
+    }
+});
+// console.log(JSON.stringify(actionTypes, undefined, 2), actions);
+
+sb = '';
+sb += '// --------------------------------------\n';
+sb += '// ------ ATTENTION AUTO GENERATED ------\n';
+sb += '// --------------------------------------\n';
+sb += '\n';
+for (const type of actionTypes) {
+    sb += `export interface ${type.name} {\n`;
+    for (const field of type.fields) {
+        const type = {
+            'id': 'number',
+            'int': 'number',
+            'datetime': 'string',
+            'string': 'string',
+        }[field.type] ?? field.type;
+        sb += `    ${field.name}${field.nullable ? '?': ''}: ${type},\n`;
+    }
+    sb += '}\n';
+}
+await fs.writeFile('src/shared/api.d.ts', sb);
+
+sb = await fs.readFile('src/server/index.ts', 'utf-8');
+sb = sb.substring(sb.indexOf('// AUTOGEN'));
+sb += '// AUTOGEN\n';
+sb += '// --------------------------------------\n';
+sb += '// ------ ATTENTION AUTO GENERATED ------\n';
+sb += '// --------------------------------------\n';
+sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
+sb += `    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };\n`;
+sb += `    try {\n`;
+sb += `        const key = \`\${ctx.method} \${ctx.state.public ? '/public' : ''}\${ctx.path}\`;\n`;
+sb += `        let match: RegExpExecArray;\n`;
+for (const action of actions) {
+    // TODO use query for parameters
+}
 
 process.exit(0);
 

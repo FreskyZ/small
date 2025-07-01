@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 // import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
-import * as I from './shared.js';
+import * as I from '../shared/api.js';
 
 const notificationElement = document.querySelector<HTMLSpanElement>('span#notification');
 // const modalMaskElement = document.querySelector<HTMLDivElement>('div#modal-mask');
@@ -160,6 +160,10 @@ const pageStyles = {
         float: 'left',
         height: 'calc(100vh - 50px)',
         width: '220px',
+        // TODO
+        '@media (max-width: 600px)': {
+
+        },
     }),
     sessionContainer: css({
         label: 'session-container',

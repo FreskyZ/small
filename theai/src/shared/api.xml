@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<api version="1">
+  <type name="Session">
+    <field name="id" type="id" />
+    <field name="name" type="string" />
+    <field name="comment" type="string" />
+    <!-- datetime is utc and iso8601 -->
+    <field name="createTime" type="datetime" />
+    <!-- the virtual root of message tree -->
+    <field name="messageRoot" type="Message" />
+  </type>
+  <type name="Message">
+    <field name="id" type="id" />
+    <!-- null for parent is root -->
+    <field name="parentId" type="id?" />
+    <field name="role" type="string" />
+    <field name="content" type="string" />
+    <field name="promptTokenCount" type="int?" />
+    <field name="completionTokenCount" type="int?" />
+  </type>
+  <!-- this is share result, only contain the id -->
+  <type name="SharedSession">
+    <field name="id" type="string" />
+  </type>
+  <!-- this returned entity does not contain messages -->
+  <action name="GetSessions" return="Session[]" />
+  <action name="GetSession" a1="sessionId" return="Session" />
+  <!-- for public api, path logic will exclude the Public prefix in name,
+    generated backend function call and front end function wrapper will include the Public -->
+  <action name="PublicGetSession" public="true" a1="shareId" return="Session" />
+  <!-- use body.name as name, or generate a name if not provided -->
+  <!-- creates a initial system message: You are a helpful assistant. -->
+  <action name="AddSession" body="Session" return="Session" />
+  <!-- rename session or update comment -->
+  <action name="UpdateSession" body="Session" return="Session" />
+  <action name="RemoveSession" a1="sessionId" />
+  <!-- add new message (role + content) to parentId, this validates role relationship -->
+  <action name="AddMessage" return="Message" />
+  <!-- remove message and all subsequent nodes -->
+  <action name="RemoveMessageTree" a1="messageId" />
+  <!-- when editing/updating existing message, it creates new branch
+    beside original message, which is new record with same parent message id -->
+  <action name="BranchMessage" body="Message" return="Message" />
+  <!-- complete! messageId can only be user, return generated assistant message -->
+  <action name="CompleteMessage" a1="messageId" return="Message" />
+  <!-- return shareid the guid -->
+  <action name="ShareSession" a1="sessionId" return="SharedSession" />
+  <action name="UnshareSession" a1="sessionId" />
+</api>

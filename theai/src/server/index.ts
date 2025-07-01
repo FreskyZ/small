@@ -434,3 +434,5 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     result.error = new MyError('not-found', 'invalid invocation');
     return result;
 }
+
+// AUTOGEN
