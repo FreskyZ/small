@@ -1,12 +1,136 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import chalk from 'chalk-template';
+import { XMLParser } from 'fast-xml-parser';
 import SFTPClient from 'ssh2-sftp-client';
 import { minify } from 'terser';
 import ts from 'typescript';
 
+// this is now the app server builder base template
+// - server side multiple file,
+//   currently for server side I'd like to keep it single file, because merge multiple file is very complex
+//   for now, the typecast parameter in createpool function is not likely to be used
+//   so the actual remaining adk js code is FineError, which is very small,
+//   and type definitions can be in another file and shared
+// - server side auto generated api dispatch,
+//   still needed, but seems no need to namespace, put 10 or 20 apis in one namespace should be ok
+//   I'd consider suggesting making app servers small and no need to be separated in namespace
+// - client side,
+//   for now this specific app is similar to user, single file, use react, no antd,
+//   I'd currently try to keep single file until some app want to user client side routing
+// - generated api,
+//   server side auto generated dispatch is needed, ai generate is not reliable, generate at end of server.ts
+//   client side is not quite needed, generate at end of client.ts
+
 const debug = 'AKARI_DEBUG' in process.env;
 const config = JSON.parse(await fs.readFile('akaric', 'utf-8'));
+
+console.log('code generation server side');
+const parser = new XMLParser({
+    preserveOrder: true,
+    ignoreAttributes: false,
+    attributeNamePrefix: '',
+    parseAttributeValue: true,
+});
+const rawDatabaseModel = parser.parse(await fs.readFile('src/server/database.xml'));
+/**
+ * @typedef {Object} DatabaseModelField
+ * @property {string} name
+ * @property {'id' | 'int' | 'string' | 'datetime' | 'guid' | 'text'} type
+ * @property {boolean} nullable
+ * @property {number} size string length
+ */
+/**
+ * @typedef {Object} DatabaseModelForeignKey
+ * @property {string} table foreign table
+ * @property {string} field
+ */
+/**
+ * @typedef {Object} DatabaseModelTable
+ * @property {string} name
+ * @property {string} primaryKey pk is required
+ * @property {DatabaseModelForeignKey[]} foreignKeys
+ * @property {DatabaseModelField[]} fields
+ */
+const databaseName = rawDatabaseModel[1][':@'].name;
+/** @type {DatabaseModelTable[]} */
+const databaseModel = rawDatabaseModel[1].database.map(c => ({
+    name: c[':@'].name,
+    primaryKey: c.table.find(f => 'primary-key' in f)[':@'].field,
+    foreignKeys: c.table.filter(f => 'foreign-key' in f).map(f => f[':@']),
+    fields: c.table.filter(f => 'field' in f).map(f => ({
+        name: f[':@'].name,
+        type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
+        nullable: f[':@'].type.endsWith('?'),
+        size: f[':@'].size ? parseInt(f[':@'].size) : null,
+    })),
+}));
+// console.log(JSON.stringify(databaseModel, undefined, 2));
+
+// database.d.ts
+let sb = '';
+sb += '// ------------------------\n';
+sb += '// ATTENTION AUTO GENERATED\n';
+sb += '// ------------------------\n';
+sb += '\n';
+for (const table of databaseModel) {
+    sb += `export interface ${table.name} {\n`;
+    for (const field of table.fields) {
+        const type = {
+            'id': 'number',
+            'int': 'number',
+            'datetime': 'string',
+            'guid': 'string',
+            'text': 'string',
+            'string': 'string',
+        }[field.type];
+        sb += `    ${field.name}${field.nullable ? '?' : ''}: ${type},\n`
+    }
+    sb += `    CreateTime: string,\n`;
+    sb += `}\n`;
+}
+await fs.writeFile('src/server/database.d.ts', sb);
+
+// database.sql
+sb = '';
+sb += '---------------------------\n';
+sb += '-- ATTENTION AUTO GENERATED\n';
+sb += '---------------------------\n';
+sb += '\n';
+sb += '-- -- first, mysql -u root -p:\n'
+sb += `-- CREATE DATABASE '${databaseName}';\n`;
+sb += `-- GRANT ALL PRIVILEGES ON \`${databaseName}\`.* TO 'fine'@'localhost';\n`;
+sb += '-- FLUSH PRIVILEGES;\n';
+sb += '-- -- then, mysql -p\n';
+sb += '\n';
+for (const table of databaseModel) {
+    sb += `CREATE TABLE \`${table.name}\` (\n`;
+    for (const field of table.fields) {
+        const type = {
+            'id': 'INT',
+            'int': 'INT',
+            'datetime': 'DATETIME',
+            'guid': 'VARCHAR(36)',
+            'text': 'TEXT',
+            'string': `VARCHAR(${field.size})`,
+        }[field.type];
+        const autoIncrement = table.primaryKey == field.name && field.type == 'id' ? ' AUTO_INCREMENT' : '';
+        const newGuid = table.primaryKey == field.name && field.type == 'guid' ? ' DEFAULT (UUID())' : '';
+        sb += `    \`${field.name}\` ${type} ${field.nullable ? 'NULL' : 'NOT NULL'}${autoIncrement}${newGuid},\n`;
+    }
+    sb += '    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n';
+    sb += `    CONSTRAINT \`PK_${table.name}\` PRIMARY KEY (\`${table.primaryKey}\`),\n`;
+    for (const fk of table.foreignKeys) {
+        const foreignTable = databaseModel.find(t => t.name == fk.table);
+        sb += `    CONSTRAINT \`FK_${table.name}_${fk.table}\``;
+        sb += ` FOREIGN KEY (\`${fk.field}\`) REFERENCES \`${fk.table}\`(\`${foreignTable.primaryKey}\`),\n`;
+    }
+    sb = sb.substring(0, sb.length - 2) + '\n';
+    sb += `);\n`;
+}
+await fs.writeFile('src/server/database.sql', sb);
+
+process.exit(0);
 
 console.log('transpiling');
 /** @type {ts.CompilerOptions} */
@@ -31,12 +155,12 @@ const sharedConfig = {
     removeComments: true,
     outDir: '/vbuild',
 }
-const clientProgram = ts.createProgram(['client.tsx'], {
+const clientProgram = ts.createProgram(['src/client.tsx'], {
     ...sharedConfig,
     lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
     jsx: ts.JsxEmit.ReactJSX,
 });
-const serverProgram = ts.createProgram(['server.ts'], {
+const serverProgram = ts.createProgram(['src/server.ts'], {
     ...sharedConfig,
     // TODO disable for now
     noUnusedLocals: false,
@@ -49,6 +173,9 @@ const emittedFiles = {};
 const emitResult1 = clientProgram.emit(undefined, (fileName, data) => {
     if (data) { emittedFiles[fileName] = data; }
 });
+const checker = clientProgram.getTypeChecker();
+// TODO 
+checker.getTypeFromTypeNode();
 const emitResult2 = serverProgram.emit(undefined, (fileName, data) => {
     if (data) { emittedFiles[fileName] = data; }
 });
@@ -60,9 +187,9 @@ const transpileErrors = ts
     if (diagnostic.file) {
         const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
         const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
-        return chalk`{red error}: ${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`;
+        return chalk`{red error} ${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`;
     } else {
-        return chalk`{red error}: ` + ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
+        return chalk`{red error} ` + ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
     }
 });
 for (const message of transpileErrors.filter((v, i, a) => a.indexOf(v) == i)) {

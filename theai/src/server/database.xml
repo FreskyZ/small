@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<database name="MyChat">
+  <table name="Session">
+    <primary-key field="SessionId" />
+    <field name="SessionId" type="id" />
+    <field name="UserId" type="int" />
+    <field name="Name" type="string" size="100" />
+    <field name="Comment" type="text?" />
+    <field name="Tags" type="string" size="200" />
+    <!-- NOTE don't forget CreateTime in generated code -->
+  </table>
+  <table name="Message">
+    <primary-key field="MessageId" />
+    <foreign-key field="SessionId" table="Session" />
+    <!-- no self reference fk for now, they are complex -->
+    <!-- <foreign-key field="ParentMessageId" table="Message" /> -->
+    <field name="MessageId" type="id" />
+    <field name="SessionId" type="id" />
+    <!-- first message is allowed to diverge, so need a virtual root and null for virtual root -->
+    <field name="ParentMessageId" type="id?" />
+    <field name="Role" type="string" size="32" />
+    <field name="Content" type="text" />
+    <!-- token count from root to this message, so only available for user message -->
+    <field name="PromptTokenCount" type="int?" />
+    <field name="CompletionTokenCount" type="int?" />
+  </table>
+  <table name="SharedSession">
+    <primary-key field="ShareId" />
+    <foreign-key field="SessionId" table="Session" />
+    <field name="ShareId" type="guid"/>
+    <field name="SessionId" type="int"/>
+    <field name="ExpireTime" type="datetime"/>
+  </table>
+</database>

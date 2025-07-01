@@ -1,126 +1,31 @@
+// TODO try validate runtime 3rd party dependency is same as core module, also package.json
 import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import mysql from 'mysql2/promise';
-import type * as I from './shared.js';
-
-// npx tsc --project tsconfig.json
+import type * as I from '../shared/api.js';
+import type * as D from './database.js';
+import type { MyErrorKind, ActionContext, DispatchContext, DispatchResult } from './dispatch.js';
 
 dayjs.extend(utc);
 
-/*
--- mysql -u root -p
--- GRANT ALL PRIVILEGES ON `MyChat`.* TO 'fine'@'localhost';
--- FLUSH PRIVILEGES;
--- mysql -p
-
-CREATE TABLE `SessionDirectory` (
-    `DirectoryId` INT NOT NULL AUTO_INCREMENT,
-    `ParentDirectoryId` INT NULL, -- NULL for in root directory
-    `Name` VARCHAR(100) NOT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_SessionDirectory` PRIMARY KEY (`DirectoryId`),
-    CONSTRAINT `FK_SessionDirectory_Parent` FOREIGN KEY (`ParentDirectoryId`) REFERENCES `SessionDirectory`(`DirectoryId`)
-);
-CREATE TABLE `Session` (
-    `SessionId` INT NOT NULL AUTO_INCREMENT,
-    `UserId` INT NOT NULL,
-    `Name` VARCHAR(100) NOT NULL,
-    `Comment` TEXT NULL,
-    `DirectoryId` INT NULL,  -- NULL for in root directory
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_Session` PRIMARY KEY (`SessionId`),
-    CONSTRAINT `FK_Session_Directory` FOREIGN KEY (`DirectoryId`) REFERENCES `SessionDirectory`(`DirectoryId`)
-);
-CREATE TABLE `SessionVersion` (
-    `SessionId` INT NOT NULL,
-    `Version` INT NOT NULL,
-    `Comment` TEXT NULL,
-    `PromptTokenCount` INT NULL,
-    `CompletionTokenCount` INT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_SessionVersion` PRIMARY KEY (`SessionId`, `Version`)
-);
-CREATE TABLE `Message` (
-    `MessageId` INT NOT NULL AUTO_INCREMENT,
-    `SessionId` INT NOT NULL,
-    `Version` INT NOT NULL,
-    `Sequence` INT NOT NULL,
-    `Role` VARCHAR(32) NOT NULL,
-    `Content` TEXT NOT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_Message` PRIMARY KEY (`MessageId`),
-    CONSTRAINT `FK_Message_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
-);
-CREATE TABLE `SharedSession` (
-    `ShareId` VARCHAR(36) NOT NULL DEFAULT (UUID()),
-    `SessionId` INT NOT NULL,
-    `Version` INT NOT NULL,
-    `ExpireTime` DATETIME NOT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_SharedSession` PRIMARY KEY (`ShareId`)
-);
-*/
+// this is the same config file as core module
 const config = (JSON.parse(await fs.readFile('config', 'utf-8')) as {
     aikey: string,
+    // so this is the connection options to connect to core module database
     database: mysql.PoolOptions,
 });
 
-const pool = mysql.createPool({
-    ...config.database,
-    database: 'MyChat',
-    typeCast: (field, next) => {
-        if (field.type == 'BIT' && field.length == 1) {
-            return field.buffer()![0] == 1;
-        }
-        return next();
-    },
-});
-// query function need RowDataPacket, but this makes 
-// the original type cannot be construct if use UserData extends RowDataPacket (missing required property),
-// so use this helper generic type alias
 type QueryResult<T> = T & mysql.RowDataPacket;
-// result of insert/update/delete, which is data Manipulatation language Result
 type ManipulateResult = mysql.ResultSetHeader;
+// so need to change database name to connect to this app's database
+const pool = mysql.createPool({ ...config.database, database: 'MyChat' });
 
-namespace D {
-    export interface Session {
-        SessionId: number,
-        UserId: number,
-        Name: string,
-        Comment: string | null,
-        DirectoryId: number,
-        CreateTime: string,
-    }
-    export interface SessionDirectory {
-        DirectoryId: number,
-        ParentDirectoryId: number | null,
-        Name: string,
-        CreateTime: string,
-    }
-    export interface SessionVersion {
-        SessionId: number,
-        Version: number,
-        Comment: string | null,
-        PromptTokenCount: number,
-        CompletionTokenCount: number,
-        CreateTime: string,
-    }
-    export interface Message {
-        MessageId: number,
-        SessionId: number,
-        Version: number,
-        Sequence: number,
-        Role: string,
-        Content: string,
-        CreateTime: string,
-    }
-    export interface SharedSession {
-        ShareId: string,
-        SessionId: number,
-        Version: number,
-        ExpireTime: string,
-        CreateTime: string,
+class MyError extends Error {
+    public readonly name: string;
+    public constructor(public readonly kind: MyErrorKind, message?: string) {
+        super(message);
+        this.name = 'FineError'; // file error middleware need this to know this is known error type
     }
 }
 
@@ -165,7 +70,7 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
     const [[session]] = await pool.query<QueryResult<D.Session>[]>(
         'SELECT `SessionId`, `Name`, `Comment` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?', [sessionId, ax.userId]);
     if (!session) {
-        throw new FineError('not-found', 'session not found');
+        throw new MyError('not-found', 'session not found');
     }
 
     const [dbVersions] = await pool.query<QueryResult<D.SessionVersion>[]>(
@@ -227,14 +132,14 @@ async function getReadonlySessionVersion(ax: ActionContext, id: string): Promise
     const [[shared]] = await pool.query<QueryResult<D.SharedSession>[]>(
         'SELECT `SessionId`, `Version` FROM `SharedSession` WHERE `ShareId` = ? AND `ExpireTime` > NOW()', [id]);
     if (!shared) {
-        throw new FineError('not-found', 'shared session not found or expired');
+        throw new MyError('not-found', 'shared session not found or expired');
     }
 
     const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
         'SELECT `Version`, `Comment`, `CreateTime`, `PromptTokenCount`, `CompletionTokenCount` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
         [shared.SessionId, shared.Version]);
     if (!dbVersion) {
-        throw new FineError('not-found', 'session version not found');
+        throw new MyError('not-found', 'session version not found');
     }
 
     const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
@@ -259,12 +164,12 @@ async function duplicateSessionVersion(ax: ActionContext, sessionId: number, fro
     const [[session]] = await pool.query<QueryResult<D.Session>[]>(
         'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?', [sessionId, ax.userId]);
     if (!session) {
-        throw new FineError('not-found', 'session not found');
+        throw new MyError('not-found', 'session not found');
     }
     const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
         'SELECT `Version` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?', [sessionId, fromVersionNumber]);
     if (!dbVersion) {
-        throw new FineError('not-found', 'session version not found');
+        throw new MyError('not-found', 'session version not found');
     }
 
     // Find the next version number
@@ -363,7 +268,7 @@ async function generateCompletion(ax: ActionContext, sessionId: number, version:
         'SELECT `Version`, `Comment`, `CreateTime` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
         [sessionId, version]);
     if (!dbVersion) {
-        throw new FineError('not-found', 'session version not found');
+        throw new MyError('not-found', 'session version not found');
     }
 
     const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
@@ -371,32 +276,32 @@ async function generateCompletion(ax: ActionContext, sessionId: number, version:
     const messages = dbMessages.map<I.Message>(m => ({ role: m.Role, content: m.Content }));
 
     if (!Array.isArray(messages) || messages.length == 0) {
-        throw new FineError('common', 'messages must be a non-empty array');
+        throw new MyError('common', 'messages must be a non-empty array');
     }
     const firstRole = messages[0].role;
     if (firstRole != 'system' && firstRole != 'user') {
-        throw new FineError('common', 'conversation must start with a system or user message');
+        throw new MyError('common', 'conversation must start with a system or user message');
     }
     for (let i = 0; i < messages.length; i++) {
         const { role, content } = messages[i];
         if (typeof content !== 'string' || content.trim().length === 0) {
-            throw new FineError('common', `message at index ${i} has empty content`);
+            throw new MyError('common', `message at index ${i} has empty content`);
         }
         if (i == 0) continue;
         const prevRole = messages[i - 1].role;
         if (role === prevRole) {
-            throw new FineError('common', `messages at index ${i - 1} and ${i} have the same role (${role})`);
+            throw new MyError('common', `messages at index ${i - 1} and ${i} have the same role (${role})`);
         }
         // Only allow 'system' as the very first message
         if (role == 'system' && i !== 0) {
-            throw new FineError('common', `'system' role can only appear as the first message (error at index ${i})`);
+            throw new MyError('common', `'system' role can only appear as the first message (error at index ${i})`);
         }
         if (!['user', 'assistant', 'system'].includes(role)) {
-            throw new FineError('common', `invalid role "${role}" at index ${i}`);
+            throw new MyError('common', `invalid role "${role}" at index ${i}`);
         }
     }
     if (messages[messages.length - 1].role !== 'user') {
-        throw new FineError('common', 'conversation must end with a user message');
+        throw new MyError('common', 'conversation must end with a user message');
     }
 
     let response: Response;
@@ -476,7 +381,7 @@ async function ShareSessionVersion(ax: ActionContext, sessionId: number, version
         'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `CreateTime` DESC LIMIT 1',
         [sessionId, versionNumber]);
     if (!shared) {
-        throw new FineError('internal', 'failed to create shared session');
+        throw new MyError('internal', 'failed to create shared session');
     }
     return { id: shared.ShareId };
 }
@@ -485,43 +390,20 @@ async function UnshareSessionVersion(ax: ActionContext, sessionId: number, versi
 
 }
 
-type FineErrorKind =
-    | 'common'
-    | 'not-found'
-    | 'auth'
-    | 'unreachable'
-    | 'rate-limit'
-    | 'method-not-allowed'
-    | 'internal'
-    | 'bad-gateway'
-    | 'service-not-available'
-    | 'gateway-timeout';
-class FineError {
-    public readonly name: string;
-    public constructor(
-        public readonly kind: FineErrorKind,
-        public readonly message?: string,
-    ) {
-        this.name = 'FineError';
+async function getUserBalance(ax: ActionContext) {
+    let response: Response;
+    try {
+        response = await fetch('https://api.deepseek.com/user/balance', {
+            headers: { 'Authorization': `Bearer ${config.aikey}` },
+        });
+    } catch (error) {
+        console.log('request error', error);
     }
+
+    const body: any = await response.json();
+    return { balance: body.balance_infos[0].total_balance };
 }
-interface DispatchContext {
-    method: string,
-    // GET api.domain.com/app1/v1/something
-    //           this part:   ^^^^^^^^^^^^^
-    path: string,
-    state: { public: boolean, user: { id: number, name: string } },
-    body: any,
-}
-interface DispatchResult {
-    status?: number,
-    body?: any,
-    error?: FineError,
-}
-interface ActionContext {
-    userId: number,
-    userName: string,
-}
+
 export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };
     const result: DispatchResult = {};
@@ -549,6 +431,6 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
         result.error = error;
         return result;
     }
-    result.error = new FineError('not-found', 'invalid invocation');
+    result.error = new MyError('not-found', 'invalid invocation');
     return result;
 }
