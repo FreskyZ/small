@@ -1,6 +1,6 @@
-// ------------------------
-// ATTENTION AUTO GENERATED
-// ------------------------
+// --------------------------------------
+// ------ ATTENTION AUTO GENERATED ------
+// --------------------------------------
 
 export interface Session {
     id: number,
@@ -19,4 +19,7 @@ export interface Message {
 }
 export interface SharedSession {
     id: string,
+}
+export interface AccountBalance {
+    balance: number,
 }

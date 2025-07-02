@@ -6,8 +6,10 @@ export interface RequestState {
 
 export interface DispatchContext {
     method: string,
-    // GET api.domain.com/app1/v1/something
-    //           this part:   ^^^^^^^^^^^^^
+    // GET api.example.com/app1/v1/something?param1=value1&param2=value2
+    //  this part, include query: ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    // GET api.example.com/app1/public/v1/something?param1=value1
+    //           not include /public: ^^^^^^^^^^^^^^^^^^^^^^^^^^^
     path: string,
     body: any,
     state: RequestState,

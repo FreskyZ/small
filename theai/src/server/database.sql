@@ -1,6 +1,6 @@
----------------------------
--- ATTENTION AUTO GENERATED
----------------------------
+--------------------------------------
+------ ATTENTION AUTO GENERATED ------
+--------------------------------------
 
 -- -- first, mysql -u root -p:
 -- CREATE DATABASE 'MyChat';

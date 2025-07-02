@@ -1,6 +1,6 @@
-// ------------------------
-// ATTENTION AUTO GENERATED
-// ------------------------
+// --------------------------------------
+// ------ ATTENTION AUTO GENERATED ------
+// --------------------------------------
 
 export interface Session {
     SessionId: number,

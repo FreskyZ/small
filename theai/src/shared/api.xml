@@ -22,6 +22,10 @@
   <type name="SharedSession">
     <field name="id" type="string" />
   </type>
+  <type name="AccountBalance">
+    <!-- this is floating point, but should work in current framework with little validation -->
+    <field name="balance" type="int" />
+  </type>
   <!-- this returned entity does not contain messages -->
   <action name="GetSessions" return="Session[]" />
   <action name="GetSession" a1="sessionId" return="Session" />
@@ -46,4 +50,6 @@
   <!-- return shareid the guid -->
   <action name="ShareSession" a1="sessionId" return="SharedSession" />
   <action name="UnshareSession" a1="sessionId" />
+  <!-- don't use up money -->
+  <action name="GetBalance" return="AccountBalance" />
 </api>

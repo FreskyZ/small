@@ -21,14 +21,6 @@ type ManipulateResult = mysql.ResultSetHeader;
 // so need to change database name to connect to this app's database
 const pool = mysql.createPool({ ...config.database, database: 'MyChat' });
 
-class MyError extends Error {
-    public readonly name: string;
-    public constructor(public readonly kind: MyErrorKind, message?: string) {
-        super(message);
-        this.name = 'FineError'; // file error middleware need this to know this is known error type
-    }
-}
-
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.SessionDirectory> {
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
@@ -390,7 +382,7 @@ async function UnshareSessionVersion(ax: ActionContext, sessionId: number, versi
 
 }
 
-async function getUserBalance(ax: ActionContext) {
+async function getBalance(ax: ActionContext): Promise<I.AccountBalance> {
     let response: Response;
     try {
         response = await fetch('https://api.deepseek.com/user/balance', {
@@ -404,35 +396,46 @@ async function getUserBalance(ax: ActionContext) {
     return { balance: body.balance_infos[0].total_balance };
 }
 
-export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
-    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };
-    const result: DispatchResult = {};
-    try {
-        let match: RegExpExecArray;
-        // TODO change parameters to query!
-        if (!ctx.state.public) {
-            if (ctx.method == 'GET' && ctx.path == '/v1/sessions') { result.body = await getSessions(ax); return result; }
-            match = /\/v1\/session\/(?<id>\d+)/.exec(ctx.path);
-            if (ctx.method == 'GET' && match) { result.body = await getSession(ax, parseInt(match.groups.id)); return result; }
-            if (ctx.method == 'POST' && ctx.path == '/v1/create-session') { result.body = await createSession(ax); return result; }
-            match = /\/v1\/update-messages\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await updateMessages(ax, parseInt(match.groups.id), parseInt(match.groups.version), ctx.body); return result; }
-            match = /\/v1\/completions\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await generateCompletion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
-            match = /\/v1\/share-version\/(?<id>\d+)\/(?<version>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await ShareSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.version)); return result; }
-            match = /\/v1\/duplicate-version\/(?<id>\d+)\/(?<fromVersionNumber>\d+)/.exec(ctx.path);
-            if (ctx.method == 'POST' && match) { result.body = await duplicateSessionVersion(ax, parseInt(match.groups.id), parseInt(match.groups.fromVersionNumber)); return result; }
-        } else {
-            match = /\/v1\/version\/(?<guid>[a-fA-F0-9-]+)/.exec(ctx.path);
-            if (ctx.method == 'GET' && match) { result.body = await getReadonlySessionVersion(ax, match.groups.guid); return result; }
-        }
-    } catch (error) {
-        result.error = error;
-        return result;
-    }
-    result.error = new MyError('not-found', 'invalid invocation');
-    return result;
-}
-
 // AUTOGEN
+// --------------------------------------
+// ------ ATTENTION AUTO GENERATED ------
+// --------------------------------------
+class MyError extends Error {
+    // file error middleware need this to know this is known error type
+    public readonly name: string = 'FineError';
+    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
+}
+class ParameterValidator {
+    public constructor(private readonly parameters: URLSearchParams) {}
+    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
+        if (!this.parameters.has(name)) {
+            if (optional) { return null; } else { throw new MyError('common', `missing required parameter ${name}`); }
+        }
+        const raw = this.parameters.get(name);
+        const result = convert(raw);
+        if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
+    }
+    public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
+    // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+}
+export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
+    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');
+    const v = new ParameterValidator(searchParams);
+    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };
+    const action = ({
+        'GET /v1/sessions': () => getSessions(ax),
+        'GET /v1/session': () => getSession(ax, v.id('sessionId')),
+        'GET /public/v1/session': () => publicGetSession(ax, v.id('shareId')),
+        'PUT /v1/add-session': () => addSession(ax, ctx.body),
+        'POST /v1/update-session': () => updateSession(ax, ctx.body),
+        'DELETE /v1/remove-session': () => removeSession(ax, v.id('sessionId')),
+        'PUT /v1/add-message': () => addMessage(ax),
+        'DELETE /v1/remove-message-tree': () => removeMessageTree(ax, v.id('messageId')),
+        'POST /v1/branch-message': () => branchMessage(ax, ctx.body),
+        'POST /v1/complete-message': () => completeMessage(ax, v.id('messageId')),
+        'POST /v1/share-session': () => shareSession(ax, v.id('sessionId')),
+        'POST /v1/unshare-session': () => unshareSession(ax, v.id('sessionId')),
+        'GET /v1/balance': () => getBalance(ax),
+    })[`${ctx.method} ${pathname}`];
+    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };
+}

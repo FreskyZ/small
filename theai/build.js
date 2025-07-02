@@ -215,19 +215,53 @@ for (const type of actionTypes) {
 await fs.writeFile('src/shared/api.d.ts', sb);
 
 sb = await fs.readFile('src/server/index.ts', 'utf-8');
-sb = sb.substring(sb.indexOf('// AUTOGEN'));
+sb = sb.substring(0, sb.indexOf('// AUTOGEN'));
 sb += '// AUTOGEN\n';
 sb += '// --------------------------------------\n';
 sb += '// ------ ATTENTION AUTO GENERATED ------\n';
 sb += '// --------------------------------------\n';
+
+sb += `class MyError extends Error {
+    // file error middleware need this to know this is known error type
+    public readonly name: string = 'FineError';
+    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
+}\n`;
+sb += `class ParameterValidator {
+    public constructor(private readonly parameters: URLSearchParams) {}
+    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
+        if (!this.parameters.has(name)) {
+            if (optional) { return null; } else { throw new MyError('common', \`missing required parameter \${name}\`); }
+        }
+        const raw = this.parameters.get(name);
+        const result = convert(raw);
+        if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
+    }
+    public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
+    // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+}\n`;
+
 sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
+// NOTE no need to wrap try in this function because it correctly throws into overall request error handler
+sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
+sb += `    const v = new ParameterValidator(searchParams);\n`
 sb += `    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };\n`;
-sb += `    try {\n`;
-sb += `        const key = \`\${ctx.method} \${ctx.state.public ? '/public' : ''}\${ctx.path}\`;\n`;
-sb += `        let match: RegExpExecArray;\n`;
+sb += `    const action = ({\n`;
 for (const action of actions) {
-    // TODO use query for parameters
+    const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
+    sb += `        '${action.method} ${action.public ? '/public' : ''}/v1/${action.path}': () => ${functionName}(ax, `;
+    for (const parameter of action.parameters) {
+        sb += `v.id('${parameter.name}'), `;
+    }
+    if (action.body) {
+        sb += 'ctx.body, ';
+    }
+    sb = sb.substring(0, sb.length - 2) + '),\n';
 }
+sb += '    })[\`\${ctx.method} \${pathname}\`];\n';
+sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
+sb += `}\n`;
+
+await fs.writeFile('src/server/index.ts', sb);
 
 process.exit(0);
 
