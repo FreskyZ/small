@@ -23,6 +23,7 @@ import ts from 'typescript';
 //   client side is not quite needed, generate at end of client.ts
 
 const debug = 'AKARI_DEBUG' in process.env;
+const nocodegen = 'AKARI_NOCG' in process.env; // manually change codegen part for debugging, etc.
 const config = JSON.parse(await fs.readFile('akaric', 'utf-8'));
 
 console.log('code generation server side');
@@ -89,7 +90,7 @@ for (const table of databaseModel) {
     sb += `    CreateTime: string,\n`;
     sb += `}\n`;
 }
-await fs.writeFile('src/server/database.d.ts', sb);
+if (!nocodegen) { await fs.writeFile('src/server/database.d.ts', sb); }
 
 // database.sql
 sb = '';
@@ -128,7 +129,7 @@ for (const table of databaseModel) {
     sb = sb.substring(0, sb.length - 2) + '\n';
     sb += `);\n`;
 }
-await fs.writeFile('src/server/database.sql', sb);
+if (!nocodegen) { await fs.writeFile('src/server/database.sql', sb); }
 
 console.log('code generation web interface');
 const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
@@ -218,7 +219,7 @@ for (const type of actionTypes) {
     }
     sb += '}\n';
 }
-await fs.writeFile('src/shared/api.d.ts', sb);
+if (!nocodegen) { await fs.writeFile('src/shared/api.d.ts', sb); }
 
 sb = await fs.readFile('src/server/index.ts', 'utf-8');
 sb = sb.substring(0, sb.indexOf('// AUTOGEN'));
@@ -226,7 +227,7 @@ sb += '// AUTOGEN\n';
 sb += '// --------------------------------------\n';
 sb += '// ------ ATTENTION AUTO GENERATED ------\n';
 sb += '// --------------------------------------\n';
-
+sb += '\n'
 sb += `class MyError extends Error {
     // file error middleware need this to know this is known error type
     public readonly name: string = 'FineError';
@@ -242,8 +243,8 @@ sb += `class ParameterValidator {
         const result = convert(raw);
         if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
     }
-    public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
-    // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
+    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }\n`;
 
@@ -251,7 +252,7 @@ sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchRes
 // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
 sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
 sb += `    const v = new ParameterValidator(searchParams);\n`
-sb += `    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };\n`;
+sb += `    const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user.id, userName: ctx.state.user.name };\n`;
 sb += `    const action = ({\n`;
 for (const action of actions) {
     const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
@@ -265,13 +266,72 @@ for (const action of actions) {
     }
     sb = sb.substring(0, sb.length - 2) + '),\n';
 }
-sb += '    })[\`\${ctx.method} \${pathname}\`];\n';
+sb += '    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n';
 sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
 sb += `}\n`;
 
-await fs.writeFile('src/server/index.ts', sb);
+if (!nocodegen) { await fs.writeFile('src/server/index.ts', sb); }
 
-process.exit(0);
+sb = await fs.readFile('src/client/index.tsx', 'utf-8');
+sb = sb.substring(0, sb.indexOf('// AUTOGEN'));
+sb += '// AUTOGEN\n';
+sb += '// --------------------------------------\n';
+sb += '// ------ ATTENTION AUTO GENERATED ------\n';
+sb += '// --------------------------------------\n';
+sb += '\n'
+
+sb += `async function sendRequest(method: string, path: string, parameters?: any, data?: any): Promise<any> {
+    const url = new URL(\`https://api.example.com/chat\${path}\`);
+    Object.entries(parameters || {}).forEach(p => url.searchParams.append(p[0], p[1].toString()));
+    const response = await fetch(url.toString(), data ? {
+        method,
+        body: JSON.stringify(data),
+        headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
+    } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
+
+    // normal/error both return json body, but void do not
+    const hasResponseBody = response.headers.has('content-Type')
+        && response.headers.get('content-Type').includes('application/json');
+    const responseData = hasResponseBody ? await response.json() : {};
+    return response.ok ? Promise.resolve(responseData)
+        : response.status >= 400 && response.status < 500 ? Promise.reject(responseData)
+        : response.status >= 500 ? Promise.reject({ message: 'internal error' })
+        : Promise.reject({ message: 'unknown error' });
+}\n`;
+sb += 'const api = {\n';
+for (const action of actions) {
+    const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
+    sb += `    ${functionName}: (`;
+    for (const parameter of action.parameters) {
+        const type = parameter.type == 'id' ? 'number' : 'string';
+        sb += `${parameter.name}: ${type}, `;
+    }
+    if (action.body) {
+        sb += `data: I.${action.body}, `;
+    }
+    if (sb.endsWith(', ')) {
+        sb = sb.substring(0, sb.length - 2);
+    }
+    sb += `): Promise<${action.return ? `I.${action.return}` : 'void'}> => `;
+
+    sb += `sendRequest('${action.method}', '${action.public ? '/public' : ''}/v1/${action.path}', `;
+    if (action.parameters.length) {
+        sb += `{ `;
+        for (const parameter of action.parameters) {
+            sb += `${parameter.name}, `;
+        }
+        sb = sb.substring(0, sb.length - 2);
+        sb += ` }, `;
+    } else if (action.body) {
+        sb += `{}, `;
+    }
+    if (action.body) {
+        sb += `data, `;
+    }
+    sb = sb.substring(0, sb.length - 2) + '),\n';
+}
+sb += '};\n';
+if (!nocodegen) { await fs.writeFile('src/client/index.tsx', sb); }
 
 console.log('transpiling');
 /** @type {ts.CompilerOptions} */
@@ -294,18 +354,19 @@ const sharedConfig = {
     strictBindCallApply: true,
     strictBuiltinIteratorReturn: true,
     removeComments: true,
-    outDir: '/vbuild',
 }
-const clientProgram = ts.createProgram(['src/client.tsx'], {
+const clientProgram = ts.createProgram(['src/client/index.tsx'], {
     ...sharedConfig,
     lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
     jsx: ts.JsxEmit.ReactJSX,
+    outDir: '/vbuild1',
 });
-const serverProgram = ts.createProgram(['src/server.ts'], {
+const serverProgram = ts.createProgram(['src/server/index.ts'], {
     ...sharedConfig,
     // TODO disable for now
     noUnusedLocals: false,
     noUnusedParameters: false,
+    outDir: '/vbuild2',
 });
 
 let hasError = false;
@@ -343,7 +404,7 @@ if (hasError) {
 }
 
 console.log('postprocessing');
-let clientJs = emittedFiles['/vbuild/client.js'];
+let clientJs = emittedFiles['/vbuild1/index.js'];
 clientJs = clientJs.replaceAll('example.com', config['main-domain']);
 const dependencies = {
     'react': 'https://esm.sh/react@19.1.0',
@@ -373,15 +434,17 @@ try {
     console.error(chalk`{red error} terser`, err, clientJs);
     process.exit(1);
 }
+
+const serverJs = emittedFiles['/vbuild2/index.js'];
 try {
-    minifyResult2 = await minify(emittedFiles['/vbuild/server.js'], {
+    minifyResult2 = await minify(serverJs, {
         sourceMap: false,
         module: true,
         compress: { ecma: 2022 },
         format: { max_line_len: 160 },
     });
 } catch (err) {
-    console.error(chalk`{red error} terser`, err, emittedFiles['/vbuild/server.js']);
+    console.error(chalk`{red error} terser`, err, serverJs);
     process.exit(1);
 }
 
@@ -394,9 +457,9 @@ await client.connect({
     passphrase: config.ssh.passphrase,
 });
 
-await client.fastPut('index.html', path.join(config.webroot, 'static/chat/index.html'));
-await client.fastPut('share.html', path.join(config.webroot, 'static/chat/share.html'));
+await client.fastPut('src/client/index.html', path.join(config.webroot, 'static/chat/index.html'));
+await client.fastPut('src/client/share.html', path.join(config.webroot, 'static/chat/share.html'));
 await client.put(Buffer.from(minifyResult1.code), path.join(config.webroot, 'static/chat/index.js'));
 await client.put(Buffer.from(minifyResult2.code), path.join(config.webroot, 'servers/chat.js'));
 client.end();
-console.log(`complete build chat page`);
+console.log(`complete build chat app`);

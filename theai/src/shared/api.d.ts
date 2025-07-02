@@ -8,6 +8,7 @@ export interface Session {
     comment?: string,
     createTime: string,
     tags: string[],
+    shareId?: string,
     messages: Message[],
 }
 export interface Message {

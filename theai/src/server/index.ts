@@ -24,8 +24,9 @@ const pool = mysql.createPool({ ...config.database, database: 'MyChat' });
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
 
-    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime` FROM `Session` WHERE `UserId` = ?',
+    const [sessions] = await pool.query<QueryResult<D.Session & { ShareId: string | null }>[]>(
+        'SELECT `Session`.`SessionId`, `Name`, `Comment`, `Tags`, `Session`.`CreateTime`, `SharedSession`.`ShareId`'
+        + ' FROM `Session` LEFT JOIN `SharedSession` ON `Session`.`SessionId` = `SharedSession`.`SessionId` WHERE `UserId` = ?',
         [ax.userId],
     );
     return sessions.map<I.Session>(s => ({
@@ -34,6 +35,7 @@ async function getSessions(ax: ActionContext): Promise<I.Session[]> {
         comment: s.Comment,
         createTime: s.CreateTime,
         tags: s.Tags?.split(',') ?? [],
+        shareId: s.ShareId,
         messages: [], // get list api does not include messages
     }));
 }
@@ -52,6 +54,7 @@ async function getSessionMessages(ax: ActionContext, sessionId: number): Promise
         'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
         [session.SessionId],
     );
+    messages.sort((a, b) => a.MessageId - b.MessageId);
 
     return messages.map<I.Message>(m => ({
         id: m.MessageId,
@@ -108,7 +111,7 @@ async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.
 // POST /create-session return Session
 async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Session> {
 
-    const newName = withName.name ?? dayjs.utc().format('[s]-YYYYMMDD-HHmmss');
+    const newName = withName.name ?? ax.now.format('[s]-YYYYMMDD-HHmmss');
     const [existingSessions] = await pool.query<QueryResult<D.Session>[]>(
         'SELECT `SessionId` FROM `Session` WHERE `UserId` = ? AND `Name` = ?',
         [ax.userId, newName],
@@ -129,7 +132,7 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
     return {
         id: insertResult.insertId,
         name: newName,
-        createTime: dayjs.utc().toISOString(),
+        createTime: ax.now.toISOString(),
         tags: [],
         messages: [{
             id: insertResult2.insertId,
@@ -222,19 +225,18 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
     };
 }
 
-async function updateMessage(ax: ActionContext, message: I.Message): Promise<I.Message> {
+async function updateMessage(ax: ActionContext, sessionId: number, message: I.Message): Promise<I.Message> {
 
     if (!message.id || typeof message.content != 'string') {
         throw new MyError('common', 'invalid message data');
     }
 
-    const [results] = await pool.query<QueryResult<{ MessageId: number }>[]>(
-        'SELECT `Message`.`MessageId` FROM `Message`'
-        + ' JOIN `Session` s ON `Message`.`SessionId` = `Session`.`SessionId` WHERE `Message`.`MessageId` = ? AND s.UserId = ?',
-        [message.id, ax.userId],
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
     );
-    if (!Array.isArray(results) || results.length == 0) {
-        throw new MyError('not-found', 'invalid message id');
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
     }
 
     await pool.execute(
@@ -407,7 +409,7 @@ async function shareSession(ax: ActionContext, sessionId: number): Promise<I.Sha
         [sessionId],
     );
     if (Array.isArray(existingSharedSessions) && existingSharedSessions.length > 0) {
-        if (dayjs(existingSharedSessions[0].ExpireTime).isAfter(dayjs.utc())) {
+        if (dayjs(existingSharedSessions[0].ExpireTime).isAfter(ax.now)) {
             return { id: existingSharedSessions[0].ShareId };
         } else {
             await pool.execute('DELETE FROM `SharedSession` WHERE `ShareId` = ?', [existingSharedSessions[0].ShareId]);
@@ -439,7 +441,7 @@ async function unshareSession(ax: ActionContext, sessionId: number) {
     await pool.execute('DELETE FROM `SharedSession` WHERE `SessionId` = ?', [sessionId]);
 }
 
-async function getBalance(ax: ActionContext): Promise<I.AccountBalance> {
+async function getAccountBalance(ax: ActionContext): Promise<I.AccountBalance> {
     let response: Response;
     try {
         response = await fetch('https://api.deepseek.com/user/balance', {
@@ -457,6 +459,7 @@ async function getBalance(ax: ActionContext): Promise<I.AccountBalance> {
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
+
 class MyError extends Error {
     // file error middleware need this to know this is known error type
     public readonly name: string = 'FineError';
@@ -472,14 +475,14 @@ class ParameterValidator {
         const result = convert(raw);
         if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
     }
-    public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
-    // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
+    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }
 export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');
     const v = new ParameterValidator(searchParams);
-    const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };
+    const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user.id, userName: ctx.state.user.name };
     const action = ({
         'GET /v1/sessions': () => getSessions(ax),
         'GET /v1/session-messages': () => getSessionMessages(ax, v.id('sessionId')),
@@ -488,12 +491,12 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
         'POST /v1/update-session': () => updateSession(ax, ctx.body),
         'DELETE /v1/remove-session': () => removeSession(ax, v.id('sessionId')),
         'PUT /v1/add-message': () => addMessage(ax, v.id('sessionId'), ctx.body),
-        'POST /v1/update-message': () => updateMessage(ax, ctx.body),
+        'POST /v1/update-message': () => updateMessage(ax, v.id('sessionId'), ctx.body),
         'DELETE /v1/remove-message-tree': () => removeMessageTree(ax, v.id('sessionId'), v.id('messageId')),
         'POST /v1/complete-message': () => completeMessage(ax, v.id('sessionId'), v.id('messageId')),
         'POST /v1/share-session': () => shareSession(ax, v.id('sessionId')),
         'POST /v1/unshare-session': () => unshareSession(ax, v.id('sessionId')),
-        'GET /v1/balance': () => getBalance(ax),
-    })[`${ctx.method} ${pathname}`];
+        'GET /v1/account-balance': () => getAccountBalance(ax),
+    } as Record<string, () => Promise<any>>)[`${ctx.method} ${pathname}`];
     return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };
 }

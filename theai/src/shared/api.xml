@@ -9,6 +9,7 @@
     <!-- NOTE currently not support array type,
       but this currently works as it regarded as a custom type -->
     <field name="tags" type="string[]" />
+    <field name="shareId" type="string?" />
     <field name="messages" type="Message[]" />
   </type>
   <type name="Message">
@@ -43,7 +44,7 @@
   <!-- add new message (role + content) to parentId, this validates role relationship -->
   <action name="AddMessage" a1="sessionId" body="Message" return="Message" />
   <!-- update message content -->
-  <action name="UpdateMessage" body="Message" return="Message" />
+  <action name="UpdateMessage" a1="sessionId" body="Message" return="Message" />
   <!-- remove message and all subsequent nodes -->
   <!-- cannot remove last real (not virtual) message -->
   <action name="RemoveMessageTree" a1="sessionId" a2="messageId" />
@@ -53,5 +54,5 @@
   <action name="ShareSession" a1="sessionId" return="SharedSession" />
   <action name="UnshareSession" a1="sessionId" />
   <!-- don't use up money -->
-  <action name="GetBalance" return="AccountBalance" />
+  <action name="GetAccountBalance" return="AccountBalance" />
 </api>

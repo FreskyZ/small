@@ -1,5 +1,7 @@
+import type { Dayjs } from "dayjs";
 
 export interface RequestState {
+    now: Dayjs,
     public: boolean,
     user: { id: number, name: string },
 }
@@ -21,6 +23,7 @@ export interface DispatchResult {
 }
 
 export interface ActionContext {
+    now: Dayjs,
     userId: number,
     userName: string,
 }
