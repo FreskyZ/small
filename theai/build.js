@@ -136,7 +136,7 @@ const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
 /**
  * @typedef {Object} WebInterfaceActionParameter
  * @property {string} name
- * @property {'id'} type for now only id
+ * @property {'id' | 'guid'} type for now only id and guid
  * @property {boolean} optional
  */
 /**
@@ -171,7 +171,7 @@ rawWebInterfaces[1].api.forEach(c => {
             fields: c.type.map(f => ({
                 name: f[':@'].name,
                 type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
-                optional: f[':@'].type.endsWith('?'),
+                nullable: f[':@'].type.endsWith('?'),
             })),
         });
     } else {
@@ -186,8 +186,14 @@ rawWebInterfaces[1].api.forEach(c => {
         const body = c[':@'].body;
         const $return = c[':@'].return;
         const parameters = [1, 2, 3, 4].map(i => c[':@'][`a${i}`]).filter(x => x).map(r => {
-            // NOTE for now not support nullable and not id type
-            return { name: r, type: 'id', optional: false };
+            // NOTE for now only support these
+            if (r.includes(':')) {
+                const name = r.substring(0, r.indexOf(':'));
+                const type = r.substring(r.indexOf(':') + 1);
+                return { name, type, optional: false };
+            } else {
+                return { name: r, type: 'id', optional: false };
+            }
         });
         actions.push({ name, public: $public, method, path, body, return: $return, parameters });
     }
@@ -238,6 +244,7 @@ sb += `class ParameterValidator {
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
     // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }\n`;
 
 sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
@@ -250,7 +257,8 @@ for (const action of actions) {
     const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
     sb += `        '${action.method} ${action.public ? '/public' : ''}/v1/${action.path}': () => ${functionName}(ax, `;
     for (const parameter of action.parameters) {
-        sb += `v.id('${parameter.name}'), `;
+        const method = parameter.type == 'id' ? 'id' : 'string';
+        sb += `v.${method}('${parameter.name}'), `;
     }
     if (action.body) {
         sb += 'ctx.body, ';

@@ -3,8 +3,8 @@ import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import mysql from 'mysql2/promise';
-import type * as I from '../shared/api.js';
-import type * as D from './database.js';
+import * as I from '../shared/api.js';
+import * as D from './database.js';
 import type { MyErrorKind, ActionContext, DispatchContext, DispatchResult } from './dispatch.js';
 
 dayjs.extend(utc);
@@ -22,292 +22,333 @@ type ManipulateResult = mysql.ResultSetHeader;
 const pool = mysql.createPool({ ...config.database, database: 'MyChat' });
 
 // GET /sessions return root SessionDirectory
-async function getSessions(ax: ActionContext): Promise<I.SessionDirectory> {
+async function getSessions(ax: ActionContext): Promise<I.Session[]> {
+
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `DirectoryId`, `CreateTime` FROM `Session` WHERE `UserId` = ?', [ax.userId]);
-    const [directories] = await pool.query<QueryResult<D.SessionDirectory>[]>(
-        'SELECT `DirectoryId`, `ParentDirectoryId`, `Name` FROM `SessionDirectory`;');
-
-    // Map DirectoryId to directory node
-    const directoryMap = new Map<number, I.SessionDirectory>();
-    // Create all directory nodes
-    for (const directory of directories) {
-        directoryMap.set(directory.DirectoryId, { id: directory.DirectoryId, name: directory.Name, directories: [], sessions: [] });
-    }
-    // Add virtual root directory (id: 0)
-    directoryMap.set(0, { id: 0, name: '', directories: [], sessions: [] });
-    // Build directory tree
-    for (const directory of directories) {
-        const parentId = directory.ParentDirectoryId ?? 0;
-        const parentDirectory = directoryMap.get(parentId);
-        if (parentDirectory) {
-            parentDirectory.directories.push(directoryMap.get(directory.DirectoryId)!);
-        }
-    }
-    // Assign sessions to directories
-    for (const session of sessions) {
-        const directory = directoryMap.get(session.DirectoryId ?? 0);
-        if (directory) {
-            directory.sessions.push({ id: session.SessionId, name: session.Name, comment: session.Comment ?? '', createTime: session.CreateTime });
-        }
-    }
-    return directoryMap.get(0)!;
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime` FROM `Session` WHERE `UserId` = ?',
+        [ax.userId],
+    );
+    return sessions.map<I.Session>(s => ({
+        id: s.SessionId,
+        name: s.Name,
+        comment: s.Comment,
+        createTime: s.CreateTime,
+        tags: s.Tags?.split(',') ?? [],
+        messages: [], // get list api does not include messages
+    }));
 }
-// POST /create-directory { name: string }
-// POST /move-directory { directoryId?: number, sessionId?: number, parentDirectoryId: number }
+async function getSessionMessages(ax: ActionContext, sessionId: number): Promise<I.Message[]> {
 
-// GET /session/:id return Session
-async function getSession(ax: ActionContext, sessionId: number): Promise<I.Session> {
-
-    const [[session]] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId`, `Name`, `Comment` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?', [sessionId, ax.userId]);
-    if (!session) {
-        throw new MyError('not-found', 'session not found');
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
     }
 
-    const [dbVersions] = await pool.query<QueryResult<D.SessionVersion>[]>(
-        'SELECT `Version`, `Comment`, `CreateTime`, `PromptTokenCount`, '
-        + '`CompletionTokenCount` FROM `SessionVersion` WHERE `SessionId` = ? ORDER BY `Version` ASC', [session.SessionId]);
-
-    // Query all messages for this session at once
-    const [allMessages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `Role`, `Content`, `Version` FROM `Message` WHERE `SessionId` = ? ORDER BY `Version` ASC, `Sequence` ASC',
-        [session.SessionId]
+    const session = sessions[0];
+    const [messages] = await pool.query<QueryResult<D.Message>[]>(
+        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
+        [session.SessionId],
     );
 
-    const versions: I.SessionVersion[] = [];
-    for (const dbVersion of dbVersions) {
-        const messages = allMessages.filter(m => m.Version === dbVersion.Version);
-        versions.push({
-            version: dbVersion.Version,
-            comment: dbVersion.Comment ?? '',
-            createTime: dbVersion.CreateTime,
-            promptTokenCount: dbVersion.PromptTokenCount,
-            completionTokenCount: dbVersion.CompletionTokenCount,
-            messages: messages.map(m => ({
-                role: m.Role,
-                content: m.Content,
-            })),
-        });
+    return messages.map<I.Message>(m => ({
+        id: m.MessageId,
+        parentId: m.ParentMessageId,
+        role: m.Role,
+        content: m.Content,
+        promptTokenCount: m.PromptTokenCount,
+        completionTokenCount: m.CompletionTokenCount,
+    }));
+}
+
+// NOTE no user info for public api, this ax parameter should never be used
+async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.Session> {
+
+    const [sharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
+        'SELECT `SessionId` FROM `SharedSession` WHERE `ShareId` = ? AND `ExpireTime` > NOW()',
+        [shareId],
+    );
+    if (!Array.isArray(sharedSessions) || sharedSessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
     }
+    
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime` FROM `Session` WHERE `SessionId` = ?',
+        [sharedSessions[0].SessionId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    const session = sessions[0];
+    const [messages] = await pool.query<QueryResult<D.Message>[]>(
+        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
+        [session.SessionId],
+    );
 
     return {
         id: session.SessionId,
         name: session.Name,
-        comment: session.Comment ?? '',
-        versions: versions,
+        comment: session.Comment,
+        createTime: session.CreateTime,
+        tags: session.Tags?.split(',') ?? [],
+        messages: messages.map<I.Message>(m => ({
+            id: m.MessageId,
+            parentId: m.ParentMessageId,
+            role: m.Role,
+            content: m.Content,
+            promptTokenCount: m.PromptTokenCount,
+            completionTokenCount: m.CompletionTokenCount,
+        })),
     };
 }
+
 // POST /create-session return Session
-async function createSession(ax: ActionContext): Promise<I.Session> {
+async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Session> {
+
+    const newName = withName.name ?? dayjs.utc().format('[s]-YYYYMMDD-HHmmss');
+    const [existingSessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `UserId` = ? AND `Name` = ?',
+        [ax.userId, newName],
+    );
+    if (existingSessions.length > 0) {
+        throw new MyError('common', 'session name already exists');
+    }
+
     const [insertResult] = await pool.execute<ManipulateResult>(
-        'INSERT INTO `Session` (`UserId`, `Name`) VALUES (?, ?)', [ax.userId, dayjs.utc().format('[s]-YYYYMMDD-HHmmss')]);
-    await pool.execute<ManipulateResult>(
-        'INSERT INTO `SessionVersion` (`SessionId`, `Version`) VALUES (?, 1)', [insertResult.insertId]);
-    await pool.execute<ManipulateResult>(
-        "INSERT INTO `Message` (`SessionId`, `Version`, `Sequence`, `Role`, `Content`) VALUES (?, 1, 1, 'system', 'You are a helpful assistant.')", [insertResult.insertId]);
-
-    return await getSession(ax, insertResult.insertId);
-}
-// POST /update-session/:id body Session update comment
-async function updateSession(ax: ActionContext, sessionId: number, session: I.Session) {
-
-}
-// POST /delete-session/:id/
-async function deleteSession(ax: ActionContext, sessionId: number) {
-
-}
-
-// GET /public/version/:guid return SessionVersion
-async function getReadonlySessionVersion(ax: ActionContext, id: string): Promise<I.SessionVersion> {
-
-    const [[shared]] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `SessionId`, `Version` FROM `SharedSession` WHERE `ShareId` = ? AND `ExpireTime` > NOW()', [id]);
-    if (!shared) {
-        throw new MyError('not-found', 'shared session not found or expired');
-    }
-
-    const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
-        'SELECT `Version`, `Comment`, `CreateTime`, `PromptTokenCount`, `CompletionTokenCount` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
-        [shared.SessionId, shared.Version]);
-    if (!dbVersion) {
-        throw new MyError('not-found', 'session version not found');
-    }
-
-    const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC',
-        [shared.SessionId, shared.Version]);
+        "INSERT INTO `Session` (`UserId`, `Name`, `Tags`) VALUES (?, ?, '')",
+        [ax.userId, newName],
+    );
+    const [insertResult2] = await pool.execute<ManipulateResult>(
+        "INSERT INTO `Message` (`SessionId`, `Role`, `Content`) VALUES (?, 'system', 'You are a helpful assistant.')",
+        [insertResult.insertId],
+    );
 
     return {
-        version: dbVersion.Version,
-        comment: dbVersion.Comment ?? '',
-        createTime: dbVersion.CreateTime,
-        promptTokenCount: dbVersion.PromptTokenCount,
-        completionTokenCount: dbVersion.CompletionTokenCount,
-        messages: dbMessages.map(m => ({
-            role: m.Role,
-            content: m.Content,
-        })),
+        id: insertResult.insertId,
+        name: newName,
+        createTime: dayjs.utc().toISOString(),
+        tags: [],
+        messages: [{
+            id: insertResult2.insertId,
+            role: 'system',
+            content: 'You are a helpful assistant.',
+        }],
     };
 }
-// POST /duplicate-version/:id/:version return I.SessionVersion
-async function duplicateSessionVersion(ax: ActionContext, sessionId: number, fromVersionNumber: number): Promise<I.SessionVersion> {
-    // Check if the session and version exist and belong to the user
-    const [[session]] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?', [sessionId, ax.userId]);
-    if (!session) {
-        throw new MyError('not-found', 'session not found');
-    }
-    const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
-        'SELECT `Version` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?', [sessionId, fromVersionNumber]);
-    if (!dbVersion) {
-        throw new MyError('not-found', 'session version not found');
+async function updateSession(ax: ActionContext, session: I.Session): Promise<I.Session> {
+
+    if (!session.id || typeof session.name != 'string') {
+        throw new MyError('common', 'invalid session data');
     }
 
-    // Find the next version number
-    const [[maxVersionRow]] = await pool.query<QueryResult<{ maxVersion: number }>[]>(
-        'SELECT MAX(`Version`) as maxVersion FROM `SessionVersion` WHERE `SessionId` = ?', [sessionId]);
-    const newVersionNumber = (maxVersionRow?.maxVersion ?? 0) + 1;
-
-    // Duplicate SessionVersion
-    await pool.execute(
-        'INSERT INTO `SessionVersion` (`SessionId`, `Version`) VALUES (?, ?)', [sessionId, newVersionNumber]);
-
-    // Duplicate Messages
-    await pool.execute(
-        'INSERT INTO `Message` (`SessionId`, `Version`, `Sequence`, `Role`, `Content`) ' +
-        'SELECT `SessionId`, ?, `Sequence`, `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ?',
-        [newVersionNumber, sessionId, fromVersionNumber]);
-
-    // Return the new SessionVersion (with messages)
-    const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC',
-        [sessionId, newVersionNumber]
+    // validate session belongs to user
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [session.id, ax.userId],
     );
-    const [[newDbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
-        'SELECT `Version`, `Comment`, `CreateTime`, `PromptTokenCount`, `CompletionTokenCount` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
-        [sessionId, newVersionNumber]
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    const [existingSessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `UserId` = ? AND `Name` = ? AND `SessionId` != ?',
+        [ax.userId, session.name, session.id],
+    );
+    if (existingSessions.length > 0) {
+        throw new MyError('common', 'session name already exists');
+    }
+
+    await pool.execute(
+        'UPDATE `Session` SET `Name` = ?, `Comment` = ? WHERE `SessionId` = ?',
+        [session.name, session.comment, session.id],
+    );
+    return session;
+}
+async function removeSession(ax: ActionContext, sessionId: number) {
+    
+    // validate session belongs to user
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    await pool.execute('DELETE FROM `SharedSession` WHERE `SessionId` = ?', [sessionId]);
+    await pool.execute('DELETE FROM `Message` WHERE `SessionId` = ?', [sessionId]);
+    await pool.execute('DELETE FROM `Session` WHERE `SessionId` = ?', [sessionId]);
+}
+
+async function addMessage(ax: ActionContext, sessionId: number, message: I.Message): Promise<I.Message> {
+
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    if (message.parentId) {
+        const [parentMessages] = await pool.query<QueryResult<D.Message>[]>(
+            'SELECT `Role` FROM `Message` WHERE `MessageId` = ?',
+            [message.parentId],
+        );
+        if (!Array.isArray(parentMessages) || parentMessages.length == 0) {
+            throw new MyError('common', 'invalid parent id');
+        }
+        if ((parentMessages[0].Role == 'system' || parentMessages[0].Role == 'assistant') && message.role != 'user') {
+            throw new MyError('common', 'invalid relationship');
+        } else if (parentMessages[0].Role == 'user' && message.role != 'assistant') {
+            throw new MyError('common', 'invalid relationship');
+        }
+    } else if (message.role != 'assistant' && message.role != 'system') {
+        throw new MyError('common', 'invalid relationship');
+    }
+
+    const [insertResult] = await pool.execute<ManipulateResult>(
+        'INSERT INTO `Message` (`SessionId`, `ParentMessageId`, `Role`, `Content`) VALUES (?, ?, ?, ?)',
+        [sessionId, message.parentId, message.role, message.content],
     );
     return {
-        version: newDbVersion.Version,
-        comment: newDbVersion.Comment ?? '',
-        createTime: newDbVersion.CreateTime,
-        promptTokenCount: newDbVersion.PromptTokenCount,
-        completionTokenCount: newDbVersion.CompletionTokenCount,
-        messages: dbMessages.map(m => ({
-            role: m.Role,
-            content: m.Content,
-        })),
+        id: insertResult.insertId,
+        parentId: message.parentId,
+        role: message.role,
+        content: message.content,
     };
 }
-// POST /update-version/:id/:version body SessionVersion update comment
-async function updateSessionVersion(ax: ActionContext, sessionId: number, version: number, sessionVersion: I.SessionVersion) {
 
+async function updateMessage(ax: ActionContext, message: I.Message): Promise<I.Message> {
+
+    if (!message.id || typeof message.content != 'string') {
+        throw new MyError('common', 'invalid message data');
+    }
+
+    const [results] = await pool.query<QueryResult<{ MessageId: number }>[]>(
+        'SELECT `Message`.`MessageId` FROM `Message`'
+        + ' JOIN `Session` s ON `Message`.`SessionId` = `Session`.`SessionId` WHERE `Message`.`MessageId` = ? AND s.UserId = ?',
+        [message.id, ax.userId],
+    );
+    if (!Array.isArray(results) || results.length == 0) {
+        throw new MyError('not-found', 'invalid message id');
+    }
+
+    await pool.execute(
+        'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL WHERE `MessageId` = ?',
+        [message.content, message.id],
+    );
+    return message;
 }
-// POST /update-messages/:id/:version body Message[] update replace messages
-async function updateMessages(ax: ActionContext, sessionId: number, version: number, messages: I.Message[]): Promise<void> {
-    // Fetch existing messages for this session/version
-    const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `MessageId`, `Sequence`, `Role`, `Content` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC',
-        [sessionId, version]);
 
-    // collect same messages at the beginning,
-    const sameMessageIds: number[] = [];
+async function removeMessageTree(ax: ActionContext, sessionId: number, messageId: number) {
+
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    const [messages] = await pool.query<QueryResult<D.Message>[]>(
+        'SELECT `MessageId`, `ParentMessageId` FROM `Message` WHERE `SessionId` = ?',
+        [sessionId],
+    );
+
+    // Build a map of parent -> children
+    const childrenMap = new Map<number, number[]>();
     for (const message of messages) {
-        const dbMessage = dbMessages.find(m => m.Role == message.role && m.Content == message.content);
-        if (dbMessage) {
-            sameMessageIds.push(dbMessage.MessageId);
-        } else {
-            break;
+        if (!childrenMap.has(message.ParentMessageId)) {
+            childrenMap.set(message.ParentMessageId, []);
+        }
+        childrenMap.get(message.ParentMessageId).push(message.MessageId);
+    }
+
+    // Collect all descendant messageIds to delete using BFS
+    const toDelete = new Set<number>();
+    const queue = [messageId];
+    while (queue.length > 0) {
+        const current = queue.shift();
+        if (!toDelete.has(current)) {
+            toDelete.add(current);
+            const children = childrenMap.get(current) || [];
+            queue.push(...children);
         }
     }
 
-    let previousSequence = 0;
-    for (const messageId of sameMessageIds) {
-        const sequence = dbMessages.find(m => m.MessageId == messageId).Sequence;
-        if (sequence <= previousSequence) {
-            // abort keep some records
-            sameMessageIds.splice(0, sameMessageIds.length);
-            break;
-        }
-        previousSequence = sequence;
-    }
-
-    // discard other db messages
-    const needDeleteMessageIds = dbMessages.filter(m => !sameMessageIds.includes(m.MessageId)).map(m => m.MessageId);
-    if (needDeleteMessageIds.length > 0) {
-        const placeholders = needDeleteMessageIds.map(() => '?').join(', ');
-        await pool.execute(`DELETE FROM \`Message\` WHERE \`MessageId\` IN (${placeholders})`, needDeleteMessageIds);
-    }
-
-    if (messages.length > sameMessageIds.length) {
-        const maxSequence = dbMessages[sameMessageIds.length - 1].Sequence;
-        const values: any[] = [];
-        messages.slice(sameMessageIds.length).forEach((m, i) => values.push(sessionId, version, maxSequence + i + 1, m.role, m.content));
-        const placeholders = messages.slice(sameMessageIds.length).map(() => '(?, ?, ?, ?, ?)').join(', ');
-        await pool.execute(`INSERT INTO \`Message\` (\`SessionId\`, \`Version\`, \`Sequence\`, \`Role\`, \`Content\`) VALUES ${placeholders}`, values);
-    }
-}
-// POST /delete-version/:id/:version
-async function deleteSessionVersion(ax: ActionContext, sessionId: number, version: number) {
-
+    await pool.execute(
+        `DELETE FROM \`Message\` WHERE \`SessionId\` = ? AND \`MessageId\` IN (${[...toDelete].map(() => '?').join(',')})`,
+        [sessionId, ...toDelete],
+    );
 }
 
-// POST /completions/:id/:version return new SessionVersion
-async function generateCompletion(ax: ActionContext, sessionId: number, version: number): Promise<I.SessionVersion> {
+async function completeMessage(ax: ActionContext, sessionId: number, messageId: number): Promise<I.Message> {
 
-    const [[dbVersion]] = await pool.query<QueryResult<D.SessionVersion>[]>(
-        'SELECT `Version`, `Comment`, `CreateTime` FROM `SessionVersion` WHERE `SessionId` = ? AND `Version` = ?',
-        [sessionId, version]);
-    if (!dbVersion) {
-        throw new MyError('not-found', 'session version not found');
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
     }
 
-    const [dbMessages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `Role`, `Content`, `Sequence` FROM `Message` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `Sequence` ASC', [sessionId, version]);
-    const messages = dbMessages.map<I.Message>(m => ({ role: m.Role, content: m.Content }));
-
-    if (!Array.isArray(messages) || messages.length == 0) {
-        throw new MyError('common', 'messages must be a non-empty array');
+    const [messageRelationships] = await pool.query<QueryResult<D.Message>[]>(
+        'SELECT `MessageId`, `ParentMessageId` FROM `Message` WHERE `SessionId` = ?',
+        [sessionId],
+    );
+    if (!Array.isArray(messageRelationships) || !messageRelationships.some(r => r.MessageId == messageId)) {
+        throw new MyError('not-found', 'invalid message id');
     }
-    const firstRole = messages[0].role;
+
+    const messages: D.Message[] = [];
+    let currentMessage = messageRelationships.find(r => r.MessageId == messageId);
+    while (currentMessage.ParentMessageId) {
+        messages.push(currentMessage);
+        currentMessage = messageRelationships.find(r => r.MessageId == currentMessage.ParentMessageId);
+    }
+    messages.push(currentMessage);
+    messages.reverse();
+
+    const firstRole = messages[0].Role;
     if (firstRole != 'system' && firstRole != 'user') {
         throw new MyError('common', 'conversation must start with a system or user message');
     }
     for (let i = 0; i < messages.length; i++) {
-        const { role, content } = messages[i];
-        if (typeof content !== 'string' || content.trim().length === 0) {
+        const { Role, Content } = messages[i];
+        if (typeof Content != 'string' || Content.trim().length === 0) {
             throw new MyError('common', `message at index ${i} has empty content`);
         }
         if (i == 0) continue;
-        const prevRole = messages[i - 1].role;
-        if (role === prevRole) {
-            throw new MyError('common', `messages at index ${i - 1} and ${i} have the same role (${role})`);
+        const prevRole = messages[i - 1].Role;
+        if (Role == prevRole) {
+            throw new MyError('common', `messages at index ${i - 1} and ${i} have the same role (${Role})`);
         }
         // Only allow 'system' as the very first message
-        if (role == 'system' && i !== 0) {
+        if (Role == 'system' && i != 0) {
             throw new MyError('common', `'system' role can only appear as the first message (error at index ${i})`);
         }
-        if (!['user', 'assistant', 'system'].includes(role)) {
-            throw new MyError('common', `invalid role "${role}" at index ${i}`);
+        if (!['user', 'assistant', 'system'].includes(Role)) {
+            throw new MyError('common', `invalid role "${Role}" at index ${i}`);
         }
     }
-    if (messages[messages.length - 1].role !== 'user') {
+    if (messages[messages.length - 1].Role != 'user') {
         throw new MyError('common', 'conversation must end with a user message');
     }
 
-    let response: Response;
-    try {
-        response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${config.aikey}`,
-            },
-            body: JSON.stringify({ model: 'deepseek-chat', messages }),
-        });
-    } catch (error) {
-        console.log('request error', error);
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.aikey}`,
+        },
+        body: JSON.stringify({ model: 'deepseek-chat', messages }),
+    });
+    if (response.status != 200) {
+        throw new MyError('internal', 'failed to get response');
     }
 
     const responseBody = await response.json() as {
@@ -325,8 +366,8 @@ async function generateCompletion(ax: ActionContext, sessionId: number, version:
             total_tokens: number,
         };
     };
-    const responseMessage = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.content : '(no response)';
-    const processedMessage = responseMessage.trim()
+    const responseContent = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.content : '(no response)';
+    const processedContent = responseContent.trim()
         .replace(/\r?\n\r?\n/g, '\n') // remove empty line
         .split('\n').map(v => v.trim()).join('\n') // trim each line
         // additional refinements if need
@@ -334,52 +375,68 @@ async function generateCompletion(ax: ActionContext, sessionId: number, version:
         .replaceAll('...', '……') // replace ... with full width …
         .replaceAll('**', '') // remove markdown bold
 
-    dbVersion.PromptTokenCount = responseBody.usage.prompt_tokens;
-    dbVersion.CompletionTokenCount = responseBody.usage.completion_tokens;
-    await pool.execute(
-        'UPDATE `SessionVersion` SET `PromptTokenCount` = ?, `CompletionTokenCount` = ? WHERE `SessionId` = ? AND `Version` = ?;', 
-        [dbVersion.PromptTokenCount, dbVersion.CompletionTokenCount, sessionId, version]);
-
-    messages.push({ role: 'assistant', content: processedMessage });
-    messages.push({ role: 'user', content: '' });
-    const sequence = dbMessages[messages.length - 3].Sequence;
-    await pool.execute(
-        'INSERT INTO `Message` (`SessionId`, `Version`, `Sequence`, `Role`, `Content`) VALUES (?, ?, ?, ?, ?)',
-        [sessionId, version, sequence, 'assistant', processedMessage]);
+    const promptTokenCount =  responseBody.usage.prompt_tokens;
+    const completionTokenCount = responseBody.usage.completion_tokens;
+    const [insertResult] = await pool.execute<ManipulateResult>(
+        'INSERT INTO `Message` (`SessionId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, ?, ?, ?)',
+        [sessionId, 'assistant', processedContent, promptTokenCount, completionTokenCount]);
 
     return {
-        version: dbVersion.Version,
-        comment: dbVersion.Comment ?? '',
-        createTime: dbVersion.CreateTime,
-        promptTokenCount: dbVersion.PromptTokenCount,
-        completionTokenCount: dbVersion.CompletionTokenCount,
-        messages,
+        id: insertResult.insertId,
+        parentId: messageId,
+        role: 'assistant',
+        content: processedContent,
+        promptTokenCount,
+        completionTokenCount,
     };
 }
 
-// POST /share-version/:id/:version return ShareResult
-async function ShareSessionVersion(ax: ActionContext, sessionId: number, versionNumber: number): Promise<I.ShareResult> {
-    // Check if a shared session already exists for this session/version
-    const [[existingShared]] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ? AND `Version` = ? AND `ExpireTime` > NOW() ORDER BY `CreateTime` DESC LIMIT 1',
-        [sessionId, versionNumber]);
-    if (existingShared) {
-        return { id: existingShared.ShareId };
-    }
-    await pool.execute<ManipulateResult>(
-        'INSERT INTO `SharedSession` (`SessionId`, `Version`, `ExpireTime`) VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 1 DAY))',
-        [sessionId, versionNumber]);
-    const [[shared]] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ? AND `Version` = ? ORDER BY `CreateTime` DESC LIMIT 1',
-        [sessionId, versionNumber]);
-    if (!shared) {
-        throw new MyError('internal', 'failed to create shared session');
-    }
-    return { id: shared.ShareId };
-}
-// POST /unshare-version/:id/:version
-async function UnshareSessionVersion(ax: ActionContext, sessionId: number, version: number) {
+async function shareSession(ax: ActionContext, sessionId: number): Promise<I.SharedSession> {
 
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    // Check if a shared session already exists for this session/version
+    const [existingSharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
+        'SELECT `ShareId`, `ExpireTime` FROM `SharedSession` WHERE `SessionId` = ?',
+        [sessionId],
+    );
+    if (Array.isArray(existingSharedSessions) && existingSharedSessions.length > 0) {
+        if (dayjs(existingSharedSessions[0].ExpireTime).isAfter(dayjs.utc())) {
+            return { id: existingSharedSessions[0].ShareId };
+        } else {
+            await pool.execute('DELETE FROM `SharedSession` WHERE `ShareId` = ?', [existingSharedSessions[0].ShareId]);
+            // and goes to create new
+        }
+    }
+
+    await pool.execute<ManipulateResult>(
+        "INSERT INTO `SharedSession` (`SessionId`, `ExpireTime`) VALUES (?, '2100-12-31')",
+        [sessionId],
+    );
+    // insertResult.insertId is number, seems cannot get guid from that
+    const [newSharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
+        'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ?',
+        [sessionId],
+    );
+    return { id: newSharedSessions[0].ShareId };
+}
+async function unshareSession(ax: ActionContext, sessionId: number) {
+
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        [sessionId, ax.userId],
+    );
+    if (!Array.isArray(sessions) || sessions.length == 0) {
+        throw new MyError('not-found', 'invalid session id');
+    }
+
+    await pool.execute('DELETE FROM `SharedSession` WHERE `SessionId` = ?', [sessionId]);
 }
 
 async function getBalance(ax: ActionContext): Promise<I.AccountBalance> {
@@ -417,6 +474,7 @@ class ParameterValidator {
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => isNaN(v) || v <= 0); }
     // public idopt(name: string) { return this.validate(name, true, parseInt, v => isNaN(v) || v <= 0); }
+    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }
 export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');
@@ -424,15 +482,15 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const ax: ActionContext = { userId: ctx.state.user.id, userName: ctx.state.user.name };
     const action = ({
         'GET /v1/sessions': () => getSessions(ax),
-        'GET /v1/session': () => getSession(ax, v.id('sessionId')),
-        'GET /public/v1/session': () => publicGetSession(ax, v.id('shareId')),
+        'GET /v1/session-messages': () => getSessionMessages(ax, v.id('sessionId')),
+        'GET /public/v1/session': () => publicGetSession(ax, v.string('shareId')),
         'PUT /v1/add-session': () => addSession(ax, ctx.body),
         'POST /v1/update-session': () => updateSession(ax, ctx.body),
         'DELETE /v1/remove-session': () => removeSession(ax, v.id('sessionId')),
-        'PUT /v1/add-message': () => addMessage(ax),
-        'DELETE /v1/remove-message-tree': () => removeMessageTree(ax, v.id('messageId')),
-        'POST /v1/branch-message': () => branchMessage(ax, ctx.body),
-        'POST /v1/complete-message': () => completeMessage(ax, v.id('messageId')),
+        'PUT /v1/add-message': () => addMessage(ax, v.id('sessionId'), ctx.body),
+        'POST /v1/update-message': () => updateMessage(ax, ctx.body),
+        'DELETE /v1/remove-message-tree': () => removeMessageTree(ax, v.id('sessionId'), v.id('messageId')),
+        'POST /v1/complete-message': () => completeMessage(ax, v.id('sessionId'), v.id('messageId')),
         'POST /v1/share-session': () => shareSession(ax, v.id('sessionId')),
         'POST /v1/unshare-session': () => unshareSession(ax, v.id('sessionId')),
         'GET /v1/balance': () => getBalance(ax),

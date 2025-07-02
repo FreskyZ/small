@@ -5,17 +5,18 @@
 export interface Session {
     id: number,
     name: string,
-    comment: string,
+    comment?: string,
     createTime: string,
-    messageRoot: Message,
+    tags: string[],
+    messages: Message[],
 }
 export interface Message {
     id: number,
-    parentId: number,
+    parentId?: number,
     role: string,
     content: string,
-    promptTokenCount: number,
-    completionTokenCount: number,
+    promptTokenCount?: number,
+    completionTokenCount?: number,
 }
 export interface SharedSession {
     id: string,
