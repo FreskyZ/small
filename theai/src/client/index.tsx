@@ -175,6 +175,7 @@ function App() {
                 {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles.messageContainer}>
                     <span>{m.role}</span>
                     {/* TODO https://marked.js.org/#usage */}
+                    {/* TODO allow rerun assistant message, that is use last user message to complete */}
                     <textarea value={m.content} cols={100} rows={4}
                         onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
                     <button onClick={() => handleNavigateToSibling(m, false)}>PREV</button>
@@ -287,6 +288,16 @@ const pageStyles = {
 
 let accessToken: string;
 async function startup() {
+    // TODO save access token when developing, stop save access token after developing
+    if (localStorage['access-token']) {
+        accessToken = localStorage['access-token'];
+        const response = await fetch(`https://api.example.com/user-credential`, { headers: { authorization: 'Bearer ' + accessToken } });
+        if (response.ok) {
+            createRoot(document.querySelector('main')).render(<App />);
+            return;
+        }
+        // else goto signin
+    }
     const authorizationCode = new URLSearchParams(window.location.search).get('code');
     if (!authorizationCode) {
         window.location.assign(`https://id.example.com?return=https://chat.example.com`);
@@ -299,6 +310,7 @@ async function startup() {
             notification('Something went wrong. (1)');
         } else {
             accessToken = (await response.json()).accessToken;
+            localStorage['access-token'] = accessToken;
             createRoot(document.querySelector('main')).render(<App />);
         }
     }

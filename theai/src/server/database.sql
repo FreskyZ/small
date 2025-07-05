@@ -14,6 +14,8 @@ CREATE TABLE `Session` (
     `Name` VARCHAR(100) NOT NULL,
     `Comment` TEXT NULL,
     `Tags` VARCHAR(200) NOT NULL,
+    `Shared` BIT NOT NULL,
+    `ShareId` VARCHAR(36) NOT NULL,
     `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT `PK_Session` PRIMARY KEY (`SessionId`)
 );
@@ -28,12 +30,4 @@ CREATE TABLE `Message` (
     `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT `PK_Message` PRIMARY KEY (`MessageId`),
     CONSTRAINT `FK_Message_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
-);
-CREATE TABLE `SharedSession` (
-    `ShareId` VARCHAR(36) NOT NULL DEFAULT (UUID()),
-    `SessionId` INT NOT NULL,
-    `ExpireTime` DATETIME NOT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_SharedSession` PRIMARY KEY (`ShareId`),
-    CONSTRAINT `FK_SharedSession_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
 );

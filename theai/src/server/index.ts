@@ -1,4 +1,5 @@
 // TODO try validate runtime 3rd party dependency is same as core module, also package.json
+import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
@@ -67,25 +68,22 @@ async function getSessionMessages(ax: ActionContext, sessionId: number): Promise
 }
 
 // NOTE no user info for public api, this ax parameter should never be used
-async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.Session> {
+async function publicGetSession(ax: ActionContext, shareId: string): Promise<I.Session> {
 
-    const [sharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `SessionId` FROM `SharedSession` WHERE `ShareId` = ? AND `ExpireTime` > NOW()',
+    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
+        'SELECT `SessionId`, `UserId`, `Name`, `Comment`, `Tags`, `Shared`, `CreateTime` FROM `Session` WHERE `ShareId` = ?',
         [shareId],
     );
-    if (!Array.isArray(sharedSessions) || sharedSessions.length == 0) {
-        throw new MyError('not-found', 'invalid session id');
-    }
-    
-    const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime` FROM `Session` WHERE `SessionId` = ?',
-        [sharedSessions[0].SessionId],
-    );
+    console.log('public get session', sessions);
     if (!Array.isArray(sessions) || sessions.length == 0) {
-        throw new MyError('not-found', 'invalid session id');
+        throw new MyError('not-found', 'invalid share id');
     }
 
     const session = sessions[0];
+    if (session.UserId != ax.userId || !session.Shared) {
+        throw new MyError('not-found', 'invalid share id');
+    }
+
     const [messages] = await pool.query<QueryResult<D.Message>[]>(
         'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
         [session.SessionId],
@@ -396,37 +394,29 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
 async function shareSession(ax: ActionContext, sessionId: number): Promise<I.SharedSession> {
 
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        'SELECT `SessionId`, `Shared`, `ShareId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
         [sessionId, ax.userId],
     );
     if (!Array.isArray(sessions) || sessions.length == 0) {
         throw new MyError('not-found', 'invalid session id');
     }
+    console.log('share session', sessions);
+    const session = sessions[0];
 
-    // Check if a shared session already exists for this session/version
-    const [existingSharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `ShareId`, `ExpireTime` FROM `SharedSession` WHERE `SessionId` = ?',
-        [sessionId],
-    );
-    if (Array.isArray(existingSharedSessions) && existingSharedSessions.length > 0) {
-        if (dayjs(existingSharedSessions[0].ExpireTime).isAfter(ax.now)) {
-            return { id: existingSharedSessions[0].ShareId };
-        } else {
-            await pool.execute('DELETE FROM `SharedSession` WHERE `ShareId` = ?', [existingSharedSessions[0].ShareId]);
-            // and goes to create new
-        }
+    if (session.Shared) {
+        return { id: session.ShareId };
     }
-
-    await pool.execute<ManipulateResult>(
-        "INSERT INTO `SharedSession` (`SessionId`, `ExpireTime`) VALUES (?, '2100-12-31')",
-        [sessionId],
-    );
-    // insertResult.insertId is number, seems cannot get guid from that
-    const [newSharedSessions] = await pool.query<QueryResult<D.SharedSession>[]>(
-        'SELECT `ShareId` FROM `SharedSession` WHERE `SessionId` = ?',
-        [sessionId],
-    );
-    return { id: newSharedSessions[0].ShareId };
+    
+    if (!session.ShareId) {
+        session.ShareId = crypto.randomUUID();
+        await pool.execute(
+            'UPDATE `Session` SET `Shared` = 1, `ShareId` = ? WHERE `SessionId` = ?',
+            [session.ShareId, sessionId],
+        );
+    } else {
+        await pool.execute('UPDATE `Session` SET `Shared` = 1 WHERE `SessionId` = ?', [sessionId]);
+    }
+    return { id: session.ShareId };
 }
 async function unshareSession(ax: ActionContext, sessionId: number) {
 
@@ -438,10 +428,10 @@ async function unshareSession(ax: ActionContext, sessionId: number) {
         throw new MyError('not-found', 'invalid session id');
     }
 
-    await pool.execute('DELETE FROM `SharedSession` WHERE `SessionId` = ?', [sessionId]);
+    await pool.execute('UPDATE `Session` SET `Shared` = 0 WHERE `SessionId` = ?', [sessionId]);
 }
 
-async function getAccountBalance(ax: ActionContext): Promise<I.AccountBalance> {
+async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> {
     let response: Response;
     try {
         response = await fetch('https://api.deepseek.com/user/balance', {
@@ -461,7 +451,7 @@ async function getAccountBalance(ax: ActionContext): Promise<I.AccountBalance> {
 // --------------------------------------
 
 class MyError extends Error {
-    // file error middleware need this to know this is known error type
+    // fine error middleware need this to know this is known error type
     public readonly name: string = 'FineError';
     public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
 }

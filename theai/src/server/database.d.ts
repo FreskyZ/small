@@ -8,6 +8,8 @@ export interface Session {
     Name: string,
     Comment?: string,
     Tags: string,
+    Shared: boolean,
+    ShareId: string,
     CreateTime: string,
 }
 export interface Message {
@@ -18,11 +20,5 @@ export interface Message {
     Content: string,
     PromptTokenCount?: number,
     CompletionTokenCount?: number,
-    CreateTime: string,
-}
-export interface SharedSession {
-    ShareId: string,
-    SessionId: number,
-    ExpireTime: string,
     CreateTime: string,
 }

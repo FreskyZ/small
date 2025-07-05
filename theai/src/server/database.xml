@@ -7,7 +7,8 @@
     <field name="Name" type="string" size="100" />
     <field name="Comment" type="text?" />
     <field name="Tags" type="string" size="200" />
-    <!-- NOTE don't forget CreateTime in generated code -->
+    <field name="Shared" type="bool" />
+    <field name="ShareId" type="string" size="36" />
   </table>
   <table name="Message">
     <primary-key field="MessageId" />
@@ -23,12 +24,5 @@
     <!-- token count from root to this message, so only available for user message -->
     <field name="PromptTokenCount" type="int?" />
     <field name="CompletionTokenCount" type="int?" />
-  </table>
-  <table name="SharedSession">
-    <primary-key field="ShareId" />
-    <foreign-key field="SessionId" table="Session" />
-    <field name="ShareId" type="guid"/>
-    <field name="SessionId" type="int"/>
-    <field name="ExpireTime" type="datetime"/>
   </table>
 </database>
