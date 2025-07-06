@@ -163,8 +163,8 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
     }
 
     await pool.execute(
-        'UPDATE `Session` SET `Name` = ?, `Comment` = ? WHERE `SessionId` = ?',
-        [session.name, session.comment, session.id],
+        'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ? WHERE `SessionId` = ?',
+        [session.name, session.comment, session.tags.join(','), session.id],
     );
     return session;
 }

@@ -37,15 +37,6 @@ tls.createSecureContext = options => {
     return originalResult;
 };
 
-const sftpclient = new SFTPClient();
-await sftpclient.connect({
-    host: config['main-domain'],
-    username: config.ssh.user,
-    privateKey: await fs.readFile(config.ssh.identity),
-    passphrase: config.ssh.passphrase,
-});
-console.log('sftp connected');
-
 async function generateForDatabaseModel() {
     console.log('code generation database model');
 
@@ -528,9 +519,16 @@ async function buildAndDeploy() {
     console.log(`complete build`);
 
     console.log(`uploading`);
+    // ??? cannot reuse the client ???
+    const sftpclient = new SFTPClient();
+    await sftpclient.connect({
+        host: config['main-domain'],
+        username: config.ssh.user,
+        privateKey: await fs.readFile(config.ssh.identity),
+        passphrase: config.ssh.passphrase,
+    });
     await sftpclient.fastPut('src/client/index.html', path.join(config.webroot, 'static/chat/index.html'));
     await sftpclient.fastPut('src/client/share.html', path.join(config.webroot, 'static/chat/share.html'));
-    await new Promise(resolve => setTimeout(resolve)); // ? without this uploading hang?
     await sftpclient.put(Buffer.from(resultClientJs), path.join(config.webroot, 'static/chat/index.js'));
     await sftpclient.put(Buffer.from(resultServerJs), path.join(config.webroot, 'servers/chat.js'));
     console.log(`complete upload`);

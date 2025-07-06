@@ -1,5 +1,5 @@
 /** @jsxImportSource @emotion/react */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 // import { createPortal } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
@@ -30,13 +30,23 @@ function MenuFoldOutlined() {
 function ShareOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="share-alt" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M752 664c-28.5 0-54.8 10-75.4 26.7L469.4 540.8a160.68 160.68 0 000-57.6l207.2-149.9C697.2 350 723.5 360 752 360c66.2 0 120-53.8 120-120s-53.8-120-120-120-120 53.8-120 120c0 11.6 1.6 22.7 4.7 33.3L439.9 415.8C410.7 377.1 364.3 352 312 352c-88.4 0-160 71.6-160 160s71.6 160 160 160c52.3 0 98.7-25.1 127.9-63.8l196.8 142.5c-3.1 10.6-4.7 21.8-4.7 33.3 0 66.2 53.8 120 120 120s120-53.8 120-120-53.8-120-120-120zm0-476c28.7 0 52 23.3 52 52s-23.3 52-52 52-52-23.3-52-52 23.3-52 52-52zM312 600c-48.5 0-88-39.5-88-88s39.5-88 88-88 88 39.5 88 88-39.5 88-88 88zm440 236c-28.7 0-52-23.3-52-52s23.3-52 52-52 52 23.3 52 52-23.3 52-52 52z"></path></svg>;
 }
-// function EditOutlined() {
-//     return <svg viewBox="64 64 896 896" focusable="false" data-icon="edit" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z"></path></svg>;
-// }
+function EditOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="edit" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z"></path></svg>;
+}
+function ReloadOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="reload" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M909.1 209.3l-56.4 44.1C775.8 155.1 656.2 92 521.9 92 290 92 102.3 279.5 102 511.5 101.7 743.7 289.8 932 521.9 932c181.3 0 335.8-115 394.6-276.1 1.5-4.2-.7-8.9-4.9-10.3l-56.7-19.5a8 8 0 00-10.1 4.8c-1.8 5-3.8 10-5.9 14.9-17.3 41-42.1 77.8-73.7 109.4A344.77 344.77 0 01655.9 829c-42.3 17.9-87.4 27-133.8 27-46.5 0-91.5-9.1-133.8-27A341.5 341.5 0 01279 755.2a342.16 342.16 0 01-73.7-109.4c-17.9-42.4-27-87.4-27-133.9s9.1-91.5 27-133.9c17.3-41 42.1-77.8 73.7-109.4 31.6-31.6 68.4-56.4 109.3-73.8 42.3-17.9 87.4-27 133.8-27 46.5 0 91.5 9.1 133.8 27a341.5 341.5 0 01109.3 73.8c9.9 9.9 19.2 20.4 27.8 31.4l-60.2 47a8 8 0 003 14.1l175.6 43c5 1.2 9.9-2.6 9.9-7.7l.8-180.9c-.1-6.6-7.8-10.3-13-6.2z"></path></svg>;
+}
+function CaretRightOutlined() {
+    return <svg viewBox="0 0 1024 1024" focusable="false" data-icon="caret-right" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M715.8 493.5L335 165.1c-14.2-12.2-35-1.2-35 18.5v656.8c0 19.7 20.8 30.7 35 18.5l380.8-328.4c10.9-9.4 10.9-27.6 0-37z"></path></svg>;
+}
+function CopyOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="copy" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M832 64H296c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h496v688c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8V96c0-17.7-14.3-32-32-32zM704 192H192c-17.7 0-32 14.3-32 32v530.7c0 8.5 3.4 16.6 9.4 22.6l173.3 173.3c2.2 2.2 4.7 4 7.4 5.5v1.9h4.2c3.5 1.3 7.2 2 11 2H704c17.7 0 32-14.3 32-32V224c0-17.7-14.3-32-32-32zM350 856.2L263.9 770H350v86.2zM664 888H414V746c0-22.1-17.9-40-40-40H232V264h432v624z"></path></svg>;
+}
+function SaveOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="save" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M893.3 293.3L730.7 130.7c-7.5-7.5-16.7-13-26.7-16V112H144c-17.7 0-32 14.3-32 32v736c0 17.7 14.3 32 32 32h736c17.7 0 32-14.3 32-32V338.5c0-17-6.7-33.2-18.7-45.2zM384 184h256v104H384V184zm456 656H184V184h136v136c0 17.7 14.3 32 32 32h320c17.7 0 32-14.3 32-32V205.8l136 136V840zM512 442c-79.5 0-144 64.5-144 144s64.5 144 144 144 144-64.5 144-144-64.5-144-144-144zm0 224c-44.2 0-80-35.8-80-80s35.8-80 80-80 80 35.8 80 80-35.8 80-80 80z"></path></svg>;
+}
 
 function App() {
-    const styles = pageStyles;
-
     // this list does not include messages
     const [sessions, setSessions] = useState<I.Session[]>([]);
     // null for not selected, 0 for new?
@@ -45,8 +55,14 @@ function App() {
     const [messages, setMessages] = useState<I.Message[]>([]);
     // current displaying message id path, may contain 0 for the final adding message
     const [messagePath, setMessagePath] = useState<number[]>([]);
+    const [accountBalance, setAccountBalance] = useState<number>(null);
 
-    const [menuCollapsed, setMenuCollapsed] = useState(false);
+    const narrow = window.matchMedia('(max-width: 600px)').matches;
+    const [listCollapsed, setListCollapsed] = useState(narrow);
+    const styles1 = useMemo(() => createListStyles(listCollapsed), [listCollapsed]);
+    const [infoCollapsed, setInfoCollapsed] = useState(true);
+    const styles2 = useMemo(() => createSessionAuxiliaryStyles(listCollapsed, infoCollapsed), [listCollapsed, infoCollapsed]);
+    const styles3 = useMemo(() => createConversationStyles(listCollapsed), []);
 
     useEffect(() => {
         (async () => { setSessions(await api.getSessions()); })();
@@ -72,7 +88,7 @@ function App() {
     };
     const handleUpdateSession = async (sessionId: number) => {
         await api.updateSession(sessions.find(s => s.id == sessionId));
-        notification(`update complete`);
+        notification(`saved successfully`);
     };
     const handleDeleteSession = async (sessionId: number) => {
         if (confirm('delete session?')) {
@@ -139,72 +155,138 @@ function App() {
         setMessages(messages.concat(result));
         setMessagePath(messagePath.concat(result.id));
     };
+    const handleLoadBalance = async () => {
+        const result = await api.getAccountBalance();
+        setAccountBalance(result.balance);
+    }
 
     const session = sessions.find(s => s.id == sessionId);
     return <>
-        <div css={[styles.list, menuCollapsed && css({ width: '38px' })]}>
-            <div css={styles.listHeader}>
-                {!menuCollapsed && <button css={styles.newButton} onClick={() => handleAddSession()}>New Chat</button>}
-                <button css={[styles.collapseButton, menuCollapsed && css({ marginLeft: 0 })]}
-                    title='Collapse' onClick={() => setMenuCollapsed(!menuCollapsed)}><MenuFoldOutlined /></button>
+        <div css={styles1.list}>
+            <div>
+                <button css={styles1.addButton} onClick={() => handleAddSession()}>New Chat</button>
             </div>
-            {!menuCollapsed &&  sessions.map(s => <div key={s.id} css={styles.listItem}>
-                <span title={`${s.comment ?? ''}${s.tags.length > 0
-                    ? '\n' : ''}${s.tags.join(',')}\n${s.createTime}`}
-                    onClick={() => handleSelectSession(s.id)}>{s.name}</span>
-                <button onClick={() => handleDeleteSession(s.id)} title="Delete"><DeleteOutlined /></button>
-            </div>)}
+            <div css={styles1.itemContainer}>
+                {sessions.map(s => <div key={s.id} css={[styles1.listItem, sessionId == s.id && styles1.activeItem]}>
+                    <span onClick={() => handleSelectSession(s.id)}>{s.name}</span>
+                    <button onClick={() => handleDeleteSession(s.id)} title="Delete"><DeleteOutlined /></button>
+                </div>)}
+            </div>
+            <div css={styles1.listFooter}>
+                <button css={styles1.loadButton} onClick={handleLoadBalance} title="Click to Check Balance"><ReloadOutlined /></button>
+                <span>Balance: {accountBalance ?? '?'}</span>
+            </div>
         </div>
-        <div css={[styles.sessionContainer, css({ width: menuCollapsed ? 'calc(100vw - 120px)' : 'calc(100vw - 360px)' })]}>
-            {session ? <>
-                <div css={styles.sessionContainerHeader}>
-                    <label>Name</label>
-                    <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
-                    <button onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
-                    <label>Comment</label>
-                    <textarea value={session.comment} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
-                    <button onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
+        <button css={styles1.collapseButton}
+            title='Collapse' onClick={() => setListCollapsed(!listCollapsed)}><MenuFoldOutlined /></button>
+        <div css={styles2.sessionContainer}>
+            <div css={styles2.sessionNameContainer} onClick={() => session && setInfoCollapsed(!infoCollapsed)}>
+                <span css={styles2.sessionName}>{session?.name ?? 'New Chat'}</span>
+                <button css={styles2.collapseButton} disabled={!session} title='Collapse'><CaretRightOutlined /></button>
+            </div>
+            {!!session && <div css={styles2.sessionInfoContainer}>
+                <span css={styles2.label}>Name</span>
+                <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
+                <span css={styles2.label}>Comment</span>
+                <textarea value={session.comment} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
+                <span css={styles2.label}>Tags</span>
+                <input value={session.tags.join(',')} onChange={e => { session.tags = e.target.value.split(','); setSessions([...sessions]); }} />
+                <span css={styles2.saveLine}>
+                    <span css={styles2.label}>Created at {session.createTime}</span>
+                    <button css={styles2.saveButton} onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
+                </span>
+                <span css={styles2.shareLine}>
                     <button title={session.shareId ? 'Unshare' : 'Share'} onClick={handleShareClick}><ShareOutlined /></button>
                     <input value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} readOnly={true} />
-                    <button onClick={() => handleCopyShareLink()}>COPY</button>
-                </div>
-                <div css={css({  })}>
-                    <button onClick={handleAddMessage}>ADD</button>
-                    <button css={styles.completeButton} onClick={handleCompleteMessage}>COMPLETE!</button>
-                </div>
-                {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles.messageContainer}>
-                    <span>{m.role}</span>
+                    {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleCopyShareLink()}><CopyOutlined /></button>}
+                </span>
+            </div>}
+            {!!session ? <div css={styles3.sessionContentContainer}>
+                {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles3.messageContainer}>
+                    <div css={styles3.messageHeader}>
+                        <span css={styles3.role}>{m.role.toUpperCase()}:</span>
+                        <button css={[styles3.headerButton, styles3.prevButton]} title="Prev" onClick={() => handleNavigateToSibling(m, false)}><CaretRightOutlined /></button>
+                        <span css={styles3.pageDisplay}>1/5</span>
+                        <button css={styles3.headerButton} title='Next' onClick={() => handleNavigateToSibling(m, true)}><CaretRightOutlined /></button>
+                        <button css={styles3.headerButton} onClick={() => handleUpdateMessage(m)}><SaveOutlined /> AS UPDATE</button>
+                        <button css={styles3.headerButton} onClick={() => handleBranchMessage(m)}><EditOutlined /> AS BRANCH</button>
+                        <button css={styles3.headerButton} title="Delete this and following messages" onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined /></button>
+                    </div>
                     {/* TODO https://marked.js.org/#usage */}
                     {/* TODO allow rerun assistant message, that is use last user message to complete */}
-                    <textarea value={m.content} cols={100} rows={4}
+                    <textarea css={styles3.textarea} value={m.content}
                         onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
-                    <button onClick={() => handleNavigateToSibling(m, false)}>PREV</button>
-                    <button onClick={() => handleNavigateToSibling(m, true)}>NEXT</button>
-                    <button onClick={() => handleUpdateMessage(m)}>SAVE AS UPDATE</button>
-                    <button onClick={() => handleBranchMessage(m)}>SAVE AS BRANCH</button>
-                    <button title="delete this and following messages" onClick={() => handleDeleteMessage(m.id)}>DELETE</button>
                 </div>)}
-            </> : <div>TODO start new session</div>}
+                <div>
+                    <button onClick={handleAddMessage}>ADD</button>
+                    <button css={styles3.completeButton} onClick={handleCompleteMessage}>COMPLETE!</button>
+                </div>
+            </div> : <div>TODO start new session</div>}
         </div>
     </>;
 }
-const pageStyles = {
+
+const createListStyles = (collapsed: boolean) => ({
     list: css({
-        float: 'left',
-        height: 'calc(100vh - 88px)',
+        position: 'fixed',
+        top: 0,
+        right: collapsed ? '-280px' : 0,
+        height: '100vh',
         width: '280px',
         background: '#e7e7e7',
-        borderRadius: '10px',
         padding: '12px',
-        transition: 'width 0.2s',
+        boxSizing: 'border-box',
+        transition: 'right 0.2s',
         // TODO
-        '@media (max-width: 600px)': {
-        },
+        '@media (max-width: 600px)': {},
     }),
-    listHeader: css({
+    collapseButton: css({
+        position: 'fixed',
+        top: '12px',
+        right: '12px',
+        border: 'none',
+        background: 'none',
+        padding: '10px 11px 5px 11px',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        fontSize: '16px',
+        color: '#333',
+        rotate: collapsed ? '180deg' : '0',
+        '&:hover': {
+            background: '#ccc',
+        }
+    }),
+    itemContainer: css({
+        marginTop: '12px',
+        height: 'calc(100vh - 100px)',
+        overflowX: 'hidden',
+        overflowY: 'auto',
+    }),
+    listFooter: css({
         display: 'flex',
+        height: '24px',
+        flexDirection: 'row-reverse',
+        'span': {
+            cursor: 'default',
+            fontSize: '12px',
+            lineHeight: '24px',
+        }
     }),
-    newButton: css({
+    loadButton: css({
+        height: '24px',
+        padding: '4px',
+        fontSize: '12px',
+        color: '#333',
+        background: 'transparent',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        marginLeft: '8px',
+        '&:hover': {
+            background: '#aaa',
+        }
+    }),
+    addButton: css({
         padding: '8px 16px',
         fontSize: '16px',
         fontWeight: 'bold',
@@ -214,46 +296,32 @@ const pageStyles = {
         borderRadius: '6px',
         cursor: 'pointer',
         boxShadow: '0 2px 8px rgba(40, 46, 56, 0.15)',
-        transition: 'background 0.2s, box-shadow 0.2s, opacity 0.2s',
+        transition: 'background 0.2s, box-shadow 0.2s',
         '&:hover': {
             boxShadow: '0 3px 12px rgba(68, 74, 87, 0.25)',
         },
     }),
-    collapseButton: css({
-        marginLeft: '136px',
-        border: 'none',
-        background: 'none',
-        padding: '10px 11px 5px 11px',
-        borderRadius: '6px',
-        cursor: 'pointer',
-        fontSize: '16px',
-        color: '#333',
-        '&:hover': {
-            background: '#ccc',
-        }
-    }),
     listItem: css({
-        width: '276px',
-        borderRadius: '6px',
+        width: '248px',
+        borderRadius: '8px',
         padding: '0 0 0 8px',
         height: '36px',
         cursor: 'pointer',
         marginLeft: '-2px',
         display: 'flex',
-        transition: 'opacity 0.2s',
-        '&:nth-child(2)': {
-            marginTop: '8px',
-        },
         'span': {
             lineHeight: '36px',
-            width: '240px',
+            width: '212px',
             display: 'inline-block',
+            textOverflow: 'ellipsis',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
         },
         'button': {
             display: 'none',
             border: 'none',
             background: 'none',
-            padding: '10px 11px 5px 11px',
+            padding: '9px 11px 4px 11px',
             borderRadius: '6px',
             cursor: 'pointer',
             fontSize: '16px',
@@ -268,23 +336,151 @@ const pageStyles = {
             }
         }
     }),
-    sessionContainer: css({
-        float: 'left',
-        marginLeft: '12px',
-        height: 'calc(100vh - 50px)',
+    activeItem: css({
+        background: '#ccc',
+        'button': {
+            display: 'inline',
+        }
     }),
-    sessionContainerHeader: css({
-        display: 'grid',
+});
+const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean) => ({
+    sessionContainer: css({
+        width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
+        marginTop: '-50px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+    }),
+    sessionNameContainer: css({
+        marginTop: '4px',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        height: '24px',
+        display: 'flex',
+        padding: '2px 2px 2px 8px',
+        '&:hover': {
+            background: '#ccc',
+        },
+    }),
+    sessionName: css({
+        fontWeight: 'bold',
+        lineHeight: '24px',
+        marginRight: '4px',
+        userSelect: 'none',
+        maxWidth: '200px',
+        display: 'inline-block',
+        textOverflow: 'ellipsis',
+        overflow: 'hidden',
+        whiteSpace: 'nowrap',
+    }),
+    collapseButton: css({
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        fontSize: '14px',
+        cursor: 'pointer',
+        rotate: collapsed ? '90deg' : '-90deg',
+        // transformOrigin: '13px 9px',
+    }),
+    sessionInfoContainer: css({
+        background: '#eee',
+        borderRadius: '8px',
+        boxShadow: '0 4px 4px rgba(40, 46, 56, 0.15)',
+        padding: collapsed ? 0 : '8px',
+        height: collapsed ? 0 : undefined,
+        overflow: 'hidden',
+        marginTop: '12px',
+        width: '100%',
+        maxWidth: '400px',
+        display: 'flex',
+        flexDirection: 'column',
+        boxSizing: 'border-box',
+        'textarea': {
+            resize: 'vertical',
+        },
+    }),
+    label: css({
+        fontSize: '12px',
+        color: '#333',
+    }),
+    saveLine: css({
+        marginTop: '4px',
+    }),
+    saveButton: css({
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        borderRadius: '4px',
+        fontSize: '16px',
+        padding: '4px 12px 2px 12px',
+        float: 'right',
+        cursor: 'pointer',
+        '&:hover': {
+            background: '#ccc',
+        },
+    }),
+    shareLine: css({
+        display: 'flex',
         gap: '4px',
-        gridTemplateRows: '24px 24px 24px',
-        gridTemplateColumns: '36px 160px 60px',
+        marginTop: '4px',
+        button: {
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            borderRadius: '4px',
+            fontSize: '14px',
+            padding: '6px 4px 2px 4px',
+            cursor: 'pointer',
+            '&:hover': {
+                background: '#ccc',
+            },
+        },
+        input: {
+            width: '100%',
+        },
+    }),
+});
+const createConversationStyles = (listCollapsed: boolean) => ({
+    sessionContentContainer: css({
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
+    }),
+    messageContainer: css({
+    }),
+    messageHeader: css({
+        display: 'flex',
+        gap: '8px',
+        padding: '4px',
+        marginTop: '12px',
+    }),
+    role: css({
+
+    }),
+    pageDisplay: css({
+
+    }),
+    headerButton: css({
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        padding: '4px',
+        fontSize: '12px',
+        '&:hover': {
+            background: '#eee',
+        }
+    }),
+    prevButton: css({
+        rotate: '180deg',
     }),
     completeButton: css({
         // TODO this is major button
     }),
-    messageContainer: css({
+    textarea: css({
+        resize: 'vertical',
+        width: '96%',
     }),
-};
+});
 
 let accessToken: string;
 async function startup() {
