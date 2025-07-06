@@ -8,7 +8,7 @@
     <field name="Comment" type="text?" />
     <field name="Tags" type="string" size="200" />
     <field name="Shared" type="bool" />
-    <field name="ShareId" type="string" size="36" />
+    <field name="ShareId" type="string?" size="36" />
   </table>
   <table name="Message">
     <primary-key field="MessageId" />

@@ -15,7 +15,7 @@ CREATE TABLE `Session` (
     `Comment` TEXT NULL,
     `Tags` VARCHAR(200) NOT NULL,
     `Shared` BIT NOT NULL,
-    `ShareId` VARCHAR(36) NOT NULL,
+    `ShareId` VARCHAR(36) NULL,
     `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT `PK_Session` PRIMARY KEY (`SessionId`)
 );

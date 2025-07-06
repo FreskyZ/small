@@ -285,7 +285,7 @@ async function generateForWebInterface() {
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
     sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
     sb += `    const v = new ParameterValidator(searchParams);\n`
-    sb += `    const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user.id, userName: ctx.state.user.name };\n`;
+    sb += `    const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user?.id, userName: ctx.state.user?.name };\n`;
     sb += `    const action = ({\n`;
     for (const action of actions) {
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
@@ -404,14 +404,22 @@ function transpile() {
         jsx: ts.JsxEmit.ReactJSX,
         outDir: '/vbuild1',
     });
+    const clientProgram2 = ts.createProgram(['src/client/share.tsx'], {
+        ...sharedConfig,
+        lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
+        jsx: ts.JsxEmit.ReactJSX,
+        outDir: '/vbuild3',
+    });
     const serverProgram = ts.createProgram(['src/server/index.ts'], {
         ...sharedConfig,
         outDir: '/vbuild2',
     });
 
-    
     const /** @type {Record<string, string>} */ files = {};
     const emitResult1 = clientProgram.emit(undefined, (fileName, data) => {
+        if (data) { files[fileName] = data; }
+    });
+    const emitResult3 = clientProgram2.emit(undefined, (fileName, data) => {
         if (data) { files[fileName] = data; }
     });
     // TODO what's the following todo todoing, I can get type information from ast type node, then?
@@ -424,6 +432,7 @@ function transpile() {
     const transpileErrors = ts
         .getPreEmitDiagnostics(clientProgram).concat(emitResult1.diagnostics)
         .concat(ts.getPreEmitDiagnostics(clientProgram)).concat(emitResult2.diagnostics)
+        .concat(ts.getPreEmitDiagnostics(clientProgram2)).concat(emitResult3.diagnostics)
         .map(diagnostic =>
     {
         if (diagnostic.file) {
@@ -442,13 +451,13 @@ function transpile() {
 
 /**
  * @param {string} clientJs
+ * @param {string} clientJs2
  * @param {string} serverJs
- * @return {Promise<[string, string]>} processed [clientJs, serverJs]
+ * @return {Promise<[string, string, string]>} processed [clientJs, clientJs2, serverJs]
  */
-async function postprocess(clientJs, serverJs) {
+async function postprocess(clientJs, clientJs2, serverJs) {
     console.log('postprocessing');
 
-    clientJs = clientJs.replaceAll('example.com', config['main-domain']);
     const dependencies = {
         'react': 'https://esm.sh/react@19.1.0',
         'react-dom': 'https://esm.sh/react-dom@19.1.0',
@@ -459,11 +468,17 @@ async function postprocess(clientJs, serverJs) {
         '@emotion/react': 'https://esm.sh/@emotion/react@11.14.0',
         '@emotion/react/jsx-runtime': 'https://esm.sh/@emotion/react@11.14.0/jsx-runtime',
     }
+    clientJs = clientJs.replaceAll('example.com', config['main-domain']);
     for (const [devModule, runtimeModule] of Object.entries(dependencies)) {
         clientJs = clientJs.replace(new RegExp(`from ['"]${devModule}['"]`), `from '${runtimeModule}'`);
     }
+    clientJs2 = clientJs2.replaceAll('example.com', config['main-domain']);
+    for (const [devModule, runtimeModule] of Object.entries(dependencies)) {
+        clientJs2 = clientJs2.replace(new RegExp(`from ['"]${devModule}['"]`), `from '${runtimeModule}'`);
+    }
 
     let resultClientJs;
+    let resultClientJs2;
     let resultServerJs;
     console.log(`minify`);
     try {
@@ -477,6 +492,17 @@ async function postprocess(clientJs, serverJs) {
     } catch (err) {
         console.error(chalk`{red error} terser`, err, clientJs);
     }
+    try {
+        const minifyResult = await minify(clientJs2, {
+            sourceMap: false,
+            module: true,
+            compress: { ecma: 2022 },
+            format: { max_line_len: 160 },
+        });
+        resultClientJs2 = minifyResult.code;
+    } catch (err) {
+        console.error(chalk`{red error} terser`, err, clientJs2);
+    }
 
     try {
         const minifyResult = await minify(serverJs, {
@@ -488,7 +514,7 @@ async function postprocess(clientJs, serverJs) {
     } catch (err) {
         console.error(chalk`{red error} terser`, err, serverJs);
     }
-    return [resultClientJs, resultServerJs];
+    return [resultClientJs, resultClientJs2, resultServerJs];
 }
 
 async function reportLocalBuildComplete(ok) {
@@ -513,9 +539,9 @@ async function buildAndDeploy() {
     ]);
     const transpileResult = transpile();
     if (!transpileResult) { console.log('there are error in transpiling'); return await reportLocalBuildComplete(false); }
-    const [resultClientJs, resultServerJs] = await postprocess(
-        transpileResult['/vbuild1/index.js'], transpileResult['/vbuild2/index.js']);
-    if (!resultClientJs || !resultServerJs) { console.log('there are error in postprocessing'); return await reportLocalBuildComplete(false); }
+    const [resultClientJs, resultClientJs2, resultServerJs] = await postprocess(
+        transpileResult['/vbuild1/index.js'], transpileResult['/vbuild3/share.js'], transpileResult['/vbuild2/index.js']);
+    if (!resultClientJs || !resultClientJs2 || !resultServerJs) { console.log('there are error in postprocessing'); return await reportLocalBuildComplete(false); }
     console.log(`complete build`);
 
     console.log(`uploading`);
@@ -530,6 +556,7 @@ async function buildAndDeploy() {
     await sftpclient.fastPut('src/client/index.html', path.join(config.webroot, 'static/chat/index.html'));
     await sftpclient.fastPut('src/client/share.html', path.join(config.webroot, 'static/chat/share.html'));
     await sftpclient.put(Buffer.from(resultClientJs), path.join(config.webroot, 'static/chat/index.js'));
+    await sftpclient.put(Buffer.from(resultClientJs2), path.join(config.webroot, 'static/chat/share.js'));
     await sftpclient.put(Buffer.from(resultServerJs), path.join(config.webroot, 'servers/chat.js'));
     console.log(`complete upload`);
 
@@ -563,4 +590,6 @@ function connectRemoteCommandCenter() {
         buildAndDeploy();
     });
 }
+
 connectRemoteCommandCenter();
+

@@ -9,7 +9,7 @@ export interface Session {
     Comment?: string,
     Tags: string,
     Shared: boolean,
-    ShareId: string,
+    ShareId?: string,
     CreateTime: string,
 }
 export interface Message {
