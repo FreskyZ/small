@@ -28,7 +28,7 @@ const pool = mysql.createPool({ ...config.database, database: 'MyChat', typeCast
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
 
     const [sessions] = await pool.query<QueryResult<D.Session & { ShareId: string | null }>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime`, `Shared`, `ShareId` FROM `Session` WHERE `UserId` = ?',
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime`, `Shared`, `ShareId` FROM `Session` WHERE `UserId` = ? ORDER BY `CreateTime` DESC',
         [ax.userId],
     );
     return sessions.map<I.Session>(s => ({

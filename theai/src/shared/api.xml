@@ -20,6 +20,8 @@
     <field name="content" type="string" />
     <field name="promptTokenCount" type="int?" />
     <field name="completionTokenCount" type="int?" />
+    <!-- TODO display datetime by the way with token -->
+    <field name="createTime" type="datetime" />
   </type>
   <!-- this is share result, only contain the id -->
   <type name="SharedSession">

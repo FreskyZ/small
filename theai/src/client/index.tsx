@@ -1,5 +1,5 @@
 /** @jsxImportSource @emotion/react */
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
 import * as I from '../shared/api.js';
@@ -45,6 +45,12 @@ function SaveOutlined() {
 function BranchOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="branches" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M740 161c-61.8 0-112 50.2-112 112 0 50.1 33.1 92.6 78.5 106.9v95.9L320 602.4V318.1c44.2-15 76-56.9 76-106.1 0-61.8-50.2-112-112-112s-112 50.2-112 112c0 49.2 31.8 91 76 106.1V706c-44.2 15-76 56.9-76 106.1 0 61.8 50.2 112 112 112s112-50.2 112-112c0-49.2-31.8-91-76-106.1v-27.8l423.5-138.7a50.52 50.52 0 0034.9-48.2V378.2c42.9-15.8 73.6-57 73.6-105.2 0-61.8-50.2-112-112-112zm-504 51a48.01 48.01 0 0196 0 48.01 48.01 0 01-96 0zm96 600a48.01 48.01 0 01-96 0 48.01 48.01 0 0196 0zm408-491a48.01 48.01 0 010-96 48.01 48.01 0 010 96z"></path></svg>;
 }
+function SearchOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="search" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M909.6 854.5L649.9 594.8C690.2 542.7 712 479 712 412c0-80.2-31.3-155.4-87.9-212.1-56.6-56.7-132-87.9-212.1-87.9s-155.5 31.3-212.1 87.9C143.2 256.5 112 331.8 112 412c0 80.1 31.3 155.5 87.9 212.1C256.5 680.8 331.8 712 412 712c67 0 130.6-21.8 182.7-62l259.7 259.6a8.2 8.2 0 0011.6 0l43.6-43.5a8.2 8.2 0 000-11.6zM570.4 570.4C528 612.7 471.8 636 412 636s-116-23.3-158.4-65.6C211.3 528 188 471.8 188 412s23.3-116.1 65.6-158.4C296 211.3 352.2 188 412 188s116.1 23.2 158.4 65.6S636 352.2 636 412s-23.3 116.1-65.6 158.4z"></path></svg>;
+}
+function CloseOutlined() {
+    return <svg fill-rule="evenodd" viewBox="64 64 896 896" focusable="false" data-icon="close" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M799.86 166.31c.02 0 .04.02.08.06l57.69 57.7c.04.03.05.05.06.08a.12.12 0 010 .06c0 .03-.02.05-.06.09L569.93 512l287.7 287.7c.04.04.05.06.06.09a.12.12 0 010 .07c0 .02-.02.04-.06.08l-57.7 57.69c-.03.04-.05.05-.07.06a.12.12 0 01-.07 0c-.03 0-.05-.02-.09-.06L512 569.93l-287.7 287.7c-.04.04-.06.05-.09.06a.12.12 0 01-.07 0c-.02 0-.04-.02-.08-.06l-57.69-57.7c-.04-.03-.05-.05-.06-.07a.12.12 0 010-.07c0-.03.02-.05.06-.09L454.07 512l-287.7-287.7c-.04-.04-.05-.06-.06-.09a.12.12 0 010-.07c0-.02.02-.04.06-.08l57.7-57.69c.03-.04.05-.05.07-.06a.12.12 0 01.07 0c.03 0 .05.02.09.06L512 454.07l287.7-287.7c.04-.04.06-.05.09-.06a.12.12 0 01.07 0z"></path></svg>;
+}
 
 // I'm a proffessional user, so I can use complex query syntax
 // "name=foo" for name include "foo"
@@ -52,6 +58,7 @@ function BranchOutlined() {
 // "name='foo bar'" for whitespace in search keyword
 // "name=foo and tag=bar" and "name=foo or tag=bar" for multiple conditions
 // "(name=foo or tag='bar baz') and (name=brown and (tag=fox or tag='jump over'))" for complex conditions
+// TODO try "not tag=hidden"
 
 type QueryNode = {
   kind: 'condition',
@@ -165,9 +172,9 @@ function parseExpression(tokens: string[]): QueryNode {
 function matchQueryNode(item: I.Session, node: QueryNode): boolean {
     if (node.kind == 'condition') {
         if (node.field == 'name') {
-            return item.name.includes(node.value);
+            return item.name.toLowerCase().includes(node.value.toLowerCase());
         } else if (node.field == 'tag') {
-            return item.tags.includes(node.value);
+            return item.tags.some(tag => tag.toLowerCase().includes(node.value.toLowerCase()));
         } else {
             return false; // should be unreachable
         }
@@ -194,16 +201,16 @@ function App() {
     const styles1 = useMemo(() => createListStyles(listCollapsed), [listCollapsed]);
     const [infoCollapsed, setInfoCollapsed] = useState(true);
     const styles2 = useMemo(() => createSessionAuxiliaryStyles(listCollapsed, infoCollapsed), [listCollapsed, infoCollapsed]);
-    const styles3 = useMemo(() => createConversationStyles(listCollapsed), []);
+    const styles3 = useMemo(() => createConversationStyles(listCollapsed, infoCollapsed), [listCollapsed, infoCollapsed]);
 
     // this list does not include messages
     const [sessionsLoading, setSessionsLoading] = useState(true);
     // TODO distinguish editing properties (name, comment, tags)
     const [sessions, setSessions] = useState<I.Session[]>([]);
 
-    // const [queryString, setQueryString] = useState<string>('');
-    // // only update this when clicking apply
-    // const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
+    const [queryString, setQueryString] = useState<string>('');
+    // only update this when clicking apply
+    const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
 
     // current selected session id
     const [sessionLoading, setSessionLoading] = useState(false);
@@ -219,6 +226,7 @@ function App() {
         (async () => {
             const sessions = await api.getSessions();
             setSessions(sessions);
+            setDisplaySessions(sessions);
             setSessionsLoading(false);
             const maybeSessionId = parseInt(window.location.pathname.substring(1));
             if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
@@ -231,9 +239,25 @@ function App() {
         })();
     }, []);
 
+    const handleQuery = () => {
+        try {
+            setDisplaySessions(executeQuery(sessions, queryString));
+        } catch {
+            notification('invalid search');
+        }
+    };
+    const handleClearQuery = () => {
+        setQueryString('');
+        setDisplaySessions(sessions);
+    };
+    useEffect(() => {
+        setQueryString('');
+        setDisplaySessions(sessions);
+    }, [sessions]);
+
     const handleAddSession = async () => {
         const result = await api.addSession({} as I.Session);
-        setSessions(sessions.concat(result));
+        setSessions([result].concat(sessions));
         setSessionId(result.id);
         setMessages(result.messages);
         setMessagePath([result.messages[0].id]);
@@ -269,7 +293,10 @@ function App() {
     };
 
     const handleUpdateSession = async (sessionId: number) => {
+        // trim and remove empty entry
+        session.tags = session.tags.map(t => t.trim()).filter(t => t);
         await api.updateSession(sessions.find(s => s.id == sessionId));
+        setSessions([...sessions]);
         notification(`saved successfully`);
     };
     const handleShareClick = async () => {
@@ -291,6 +318,19 @@ function App() {
             notification('Copied to clipboard!');
         }
     };
+
+    // NOTE before editing state, try auto height for all textareas while messages/messagePath change
+    useLayoutEffect(() => {
+        const container = document.querySelector<HTMLDivElement>('div#session-content-container');
+        const wasAtBottom = !container ? false : container.clientHeight + container.scrollTop >= container.scrollHeight - 10;
+        document.querySelectorAll<HTMLTextAreaElement>('textarea.major-content').forEach(e => {
+            e.style.height = '8px'; // if you don't shrink them, they will become higher and higher when rendering
+            e.style.height = e.scrollHeight + 'px';
+        });
+        if (wasAtBottom) {
+            container.scrollTo({ top: container.scrollHeight - container.clientHeight });
+        }
+    }, [messages, messagePath]);
 
     // to make things simple, add message directly add to db
     const handleAddMessage = async () => {
@@ -321,7 +361,7 @@ function App() {
         notification('branch message successfully');
     };
     const handleDeleteMessage = async (messageId: number) => {
-        
+
         // if have sibiling, place a sibling at current path
         let currentPositionNewMessageId: number;
         const message = messages.find(m => m.id == messageId);
@@ -368,11 +408,15 @@ function App() {
             <div>
                 <button css={styles1.addButton} disabled={sessionsLoading} onClick={() => handleAddSession()}>New Chat</button>
             </div>
-            {/* TODO search by name and/or tags */}
+            <div css={styles1.queryContainer}>
+                <input css={styles1.queryString} value={queryString} onChange={e => setQueryString(e.target.value)} />
+                <button title='Clear search' css={styles1.queryButton} onClick={handleClearQuery}><CloseOutlined /></button>
+                <button title='Search' css={styles1.queryButton} onClick={handleQuery}><SearchOutlined /></button>
+            </div>
             <div css={styles1.itemContainer}>
-                {sessions.map(s => <div key={s.id} css={[styles1.listItem, sessionId == s.id && styles1.activeItem]}>
+                {displaySessions.map(s => <div key={s.id} css={[styles1.listItem, sessionId == s.id && styles1.activeItem]}>
                     <span onClick={() => !sessionLoading && handleSelectSession(s.id)}>{s.name}</span>
-                    <button onClick={() => handleDeleteSession(s.id)} title="Delete"><DeleteOutlined /></button>
+                    <button title="Delete" onClick={() => handleDeleteSession(s.id)}><DeleteOutlined /></button>
                 </div>)}
             </div>
             <div css={styles1.listFooter}>
@@ -391,7 +435,7 @@ function App() {
                 <span css={styles2.label}>Name</span>
                 <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
                 <span css={styles2.label}>Comment</span>
-                <textarea value={session.comment} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
+                <textarea value={session.comment ?? ''} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
                 <span css={styles2.label}>Tags</span>
                 <input value={session.tags.join(',')} onChange={e => { session.tags = e.target.value.split(','); setSessions([...sessions]); }} />
                 <span css={styles2.saveLine}>
@@ -404,10 +448,13 @@ function App() {
                     {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleShareLinkCopy()}><CopyOutlined /></button>}
                 </span>
             </div>}
-            {!!session ? <div css={styles3.sessionContentContainer}>
+            {!!session ? <div id='session-content-container' css={styles3.sessionContentContainer}>
                 {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles3.messageContainer}>
                     <div css={styles3.messageHeader}>
-                        <span css={styles3.role}>{m.role.toUpperCase()}</span>
+                        <span css={styles3.role}
+                            title={m.promptTokenCount && m.completionTokenCount ? `${m.promptTokenCount}/${m.completionTokenCount}` : undefined}>
+                            {m.role.toUpperCase()}
+                        </span>
                         {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
                             css={[styles3.headerButton, styles3.prevButton]} title="Prev"
                             disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
@@ -429,7 +476,7 @@ function App() {
                             title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
                     </div>
                     {/* TODO https://marked.js.org/#usage */}
-                    <textarea css={styles3.textarea} value={m.content}
+                    <textarea className='major-content' css={styles3.textarea} value={m.content}
                         onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
                 </div>)}
                 <div>
@@ -470,9 +517,35 @@ const createListStyles = (collapsed: boolean) => ({
             background: '#ccc',
         }
     }),
+    queryContainer: css({
+        display: 'flex',
+        gap: '4px',
+        marginTop: '8px',
+        height: '28px',
+    }),
+    queryString: css({
+        border: 'none',
+        borderBottom: '1px solid gray',
+        height: '24px',
+        width: '188px',
+        background: 'transparent',
+    }),
+    queryButton: css({
+        height: '28px',
+        padding: '8px',
+        fontSize: '12px',
+        color: '#333',
+        background: 'transparent',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        '&:hover': {
+            background: '#ccc',
+        }
+    }),
     itemContainer: css({
         marginTop: '12px',
-        height: 'calc(100vh - 100px)',
+        height: 'calc(100vh - 128px)',
         overflowX: 'hidden',
         overflowY: 'auto',
     }),
@@ -654,13 +727,13 @@ const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean
         },
     }),
 });
-const createConversationStyles = (listCollapsed: boolean) => ({
+const createConversationStyles = (listCollapsed: boolean, infoCollapsed: boolean) => ({
     sessionContentContainer: css({
         overflowX: 'hidden',
         overflowY: 'auto',
         width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
         maxWidth: '800px',
-        maxHeight: 'calc(100vh - 60px)',
+        maxHeight: infoCollapsed ? 'calc(100vh - 60px)' : 'calc(100vh - 360px)',
     }),
     messageContainer: css({
     }),
