@@ -5,7 +5,7 @@
     <field name="name" type="string" />
     <field name="comment" type="string?" />
     <!-- datetime is utc and iso8601 -->
-    <field name="createTime" type="datetime" />
+    <field name="createTime" type="datetime?" />
     <!-- NOTE currently not support array type,
       but this currently works as it regarded as a custom type -->
     <field name="tags" type="string[]" />
@@ -21,7 +21,7 @@
     <field name="promptTokenCount" type="int?" />
     <field name="completionTokenCount" type="int?" />
     <!-- TODO display datetime by the way with token -->
-    <field name="createTime" type="datetime" />
+    <field name="createTime" type="datetime?" />
   </type>
   <!-- this is share result, only contain the id -->
   <type name="SharedSession">

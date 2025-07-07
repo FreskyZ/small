@@ -224,6 +224,7 @@ function App() {
 
     useEffect(() => {
         (async () => {
+            // TODO add error message display on all api invocations
             const sessions = await api.getSessions();
             setSessions(sessions);
             setDisplaySessions(sessions);
@@ -398,6 +399,7 @@ function App() {
 
     const handleCompleteMessage = async (messageId: number) => {
         const result = await api.completeMessage(sessionId, messageId);
+        // TODO messagepath is not displayed correctly
         setMessages(messages.concat(result));
         setMessagePath(messagePath.slice(0, messagePath.find(m => m == messageId) + 1).concat(result.id));
     };
@@ -409,7 +411,8 @@ function App() {
                 <button css={styles1.addButton} disabled={sessionsLoading} onClick={() => handleAddSession()}>New Chat</button>
             </div>
             <div css={styles1.queryContainer}>
-                <input css={styles1.queryString} value={queryString} onChange={e => setQueryString(e.target.value)} />
+                <input css={styles1.queryString} value={queryString}
+                    onKeyUp={e => { if (e.key == 'Enter') { handleQuery(); } } } onChange={e => setQueryString(e.target.value)} />
                 <button title='Clear search' css={styles1.queryButton} onClick={handleClearQuery}><CloseOutlined /></button>
                 <button title='Search' css={styles1.queryButton} onClick={handleQuery}><SearchOutlined /></button>
             </div>
@@ -431,6 +434,7 @@ function App() {
                 <span css={styles2.sessionName}>{session?.name ?? 'New Chat'}</span>
                 <button css={styles2.collapseButton} title='Collapse'><CaretRightOutlined /></button>
             </div>
+            {/* TODO let this panel float */}
             {!!session && <div css={styles2.sessionInfoContainer}>
                 <span css={styles2.label}>Name</span>
                 <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
@@ -476,6 +480,7 @@ function App() {
                             title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
                     </div>
                     {/* TODO https://marked.js.org/#usage */}
+                    {/* TODO https://github.com/remarkjs/react-markdown */}
                     <textarea className='major-content' css={styles3.textarea} value={m.content}
                         onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
                 </div>)}

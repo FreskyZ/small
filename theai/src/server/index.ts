@@ -165,7 +165,7 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
 
     await pool.execute(
         'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ? WHERE `SessionId` = ?',
-        [session.name, session.comment, session.tags.join(','), session.id],
+        [session.name, session.comment ?? null, session.tags.join(','), session.id],
     );
     return session;
 }
@@ -230,6 +230,8 @@ async function updateMessage(ax: ActionContext, sessionId: number, message: I.Me
 
 async function removeMessageTree(ax: ActionContext, sessionId: number, messageId: number) {
     await validateSessionUser(ax, sessionId);
+
+    // TODO should not delete last message
 
     const [messageRelationships] = await pool.query<QueryResult<Pick<D.Message, 'MessageId' | 'ParentMessageId'>>[]>(
         'SELECT `MessageId`, `ParentMessageId` FROM `Message` WHERE `SessionId` = ?',
