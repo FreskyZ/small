@@ -469,6 +469,8 @@ function App() {
                             css={styles3.headerButton} title='Next'
                             disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
                             onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
+                        {/* TODO change to dotdotdot popup menu in mobile page */}
+                        {/* TODO copy content button */}
                         <button css={styles3.headerButton}
                             title='Save current edit in this message record'
                             onClick={() => handleUpdateMessage(m)}><SaveOutlined />EDIT</button>
@@ -480,7 +482,19 @@ function App() {
                             title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
                     </div>
                     {/* TODO https://marked.js.org/#usage */}
-                    {/* TODO https://github.com/remarkjs/react-markdown */}
+                    {/* TODO https://github.com/remarkjs/react-markdown, NOTE react-markdown don't support ai's latex syntax, need something like const preprocessLaTeX = (content: string) => {
+                        // Replace block-level LaTeX delimiters \[ \] with $$ $$  
+                        const blockProcessedContent = content.replace(
+                            /\\\[(.*?)\\\]/gs,
+                            (_, equation) => `$$${equation}$$`,
+                        );
+                        // Replace inline LaTeX delimiters \( \) with $ $
+                        const inlineProcessedContent = blockProcessedContent.replace(
+                            /\\\((.*?)\\\)/gs,
+                            (_, equation) => `$${equation}$`,
+                        );
+                        return inlineProcessedContent;
+                        }; also see https://github.com/remarkjs/react-markdown/issues/785 */}
                     <textarea className='major-content' css={styles3.textarea} value={m.content}
                         onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
                 </div>)}
@@ -503,8 +517,8 @@ const createListStyles = (collapsed: boolean) => ({
         padding: '12px',
         boxSizing: 'border-box',
         transition: 'right 0.2s',
-        // TODO
-        '@media (max-width: 600px)': {},
+        // backup in case you need this
+        // '@media (max-width: 600px)': {},
     }),
     collapseButton: css({
         position: 'fixed',
