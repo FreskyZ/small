@@ -414,6 +414,20 @@ async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> 
     return { balance: body.balance_infos[0].total_balance };
 }
 
+async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
+    const [sessions] = await pool.query<QueryResult<I.dsession>[]>(
+        "SELECT `id`, `seq_id`, `title`, `inserted_at`, `updated_at` FROM `dsession`;",
+    )
+    return sessions;
+}
+async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dmessage[]> {
+    const [messages] = await pool.query<QueryResult<I.dmessage>[]>(
+        "SELECT `message_id`, `parent_id`, `role`, `content`, `thinking_content`, `accumulated_token_usage`, `inserted_at` FROM `dmessage` WHERE `session_id` = ?",
+        [sessionId],
+    );
+    return messages;
+}
+
 // AUTOGEN
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
@@ -456,6 +470,8 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
         'POST /v1/share-session': () => shareSession(ax, v.id('sessionId')),
         'POST /v1/unshare-session': () => unshareSession(ax, v.id('sessionId')),
         'GET /v1/account-balance': () => getAccountBalance(ax),
+        'GET /v1/dsessions': () => getDSessions(ax),
+        'GET /v1/dmessages': () => getDMessages(ax, v.string('id')),
     } as Record<string, () => Promise<any>>)[`${ctx.method} ${pathname}`];
     return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };
 }

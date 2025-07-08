@@ -864,7 +864,6 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
 const api = {
     getSessions: (): Promise<I.Session[]> => sendRequest('GET', '/v1/sessions'),
     getSessionMessages: (sessionId: number): Promise<I.Message[]> => sendRequest('GET', '/v1/session-messages', { sessionId }),
-    publicGetSession: (shareId: string): Promise<I.Session> => sendRequest('GET', '/public/v1/session', { shareId }),
     addSession: (data: I.Session): Promise<I.Session> => sendRequest('PUT', '/v1/add-session', {}, data),
     updateSession: (data: I.Session): Promise<I.Session> => sendRequest('POST', '/v1/update-session', {}, data),
     removeSession: (sessionId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-session', { sessionId }),

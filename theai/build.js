@@ -172,6 +172,7 @@ async function generateForWebInterface() {
      */
     /**
      * @typedef {Object} WebInterfaceAction
+     * @property {string} key finally you need something to group actions..., for now =main is main, =share is for share
      * @property {string} name
      * @property {boolean} public
      * @property {string} method method is calculated when read config, because both side need it
@@ -206,6 +207,7 @@ async function generateForWebInterface() {
                 })),
             });
         } else {
+            const key = c[':@'].key;
             const name = c[':@'].name;
             const $public = !!c[':@'].public;
             const nameWithoutPublic = $public ? name.substring(6) : name;
@@ -226,7 +228,7 @@ async function generateForWebInterface() {
                     return { name: r, type: 'id', optional: false };
                 }
             });
-            actions.push({ name, public: $public, method, path, body, return: $return, parameters });
+            actions.push({ key, name, public: $public, method, path, body, return: $return, parameters });
         }
     });
     // console.log(JSON.stringify(actionTypes, undefined, 2), actions);
@@ -335,7 +337,8 @@ async function generateForWebInterface() {
         : Promise.reject({ message: 'unknown error' });
 }\n`;
     sb += 'const api = {\n';
-    for (const action of actions) {
+    // for now now action.key only used here
+    for (const action of actions.filter(a => a.key == 'main')) {
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
         sb += `    ${functionName}: (`;
         for (const parameter of action.parameters) {

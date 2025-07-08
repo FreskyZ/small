@@ -32,29 +32,49 @@
     <field name="balance" type="int" />
   </type>
   <!-- this returned entity does not contain messages -->
-  <action name="GetSessions" return="Session[]" />
-  <action name="GetSessionMessages" a1="sessionId" return="Message[]" />
+  <action key="main" name="GetSessions" return="Session[]" />
+  <action key="main" name="GetSessionMessages" a1="sessionId" return="Message[]" />
   <!-- for public api, path logic will exclude the Public prefix in name,
     generated backend function call and front end function wrapper will include the Public -->
-  <action name="PublicGetSession" public="true" a1="shareId:guid" return="Session" />
+  <action key="share" name="PublicGetSession" public="true" a1="shareId:guid" return="Session" />
   <!-- use body.name as name, or generate a name if not provided -->
   <!-- creates a initial system message: You are a helpful assistant. -->
-  <action name="AddSession" body="Session" return="Session" />
+  <action key="main" name="AddSession" body="Session" return="Session" />
   <!-- rename session or update comment -->
-  <action name="UpdateSession" body="Session" return="Session" />
-  <action name="RemoveSession" a1="sessionId" />
+  <action key="main" name="UpdateSession" body="Session" return="Session" />
+  <action key="main" name="RemoveSession" a1="sessionId" />
   <!-- add new message (role + content) to parentId, this validates role relationship -->
-  <action name="AddMessage" a1="sessionId" body="Message" return="Message" />
+  <action key="main" name="AddMessage" a1="sessionId" body="Message" return="Message" />
   <!-- update message content -->
-  <action name="UpdateMessage" a1="sessionId" body="Message" return="Message" />
+  <action key="main" name="UpdateMessage" a1="sessionId" body="Message" return="Message" />
   <!-- remove message and all subsequent nodes -->
   <!-- cannot remove last real (not virtual) message -->
-  <action name="RemoveMessageTree" a1="sessionId" a2="messageId" />
+  <action key="main" name="RemoveMessageTree" a1="sessionId" a2="messageId" />
   <!-- complete! messageId can only be user, return generated assistant message -->
-  <action name="CompleteMessage" a1="sessionId" a2="messageId" return="Message" />
+  <action key="main" name="CompleteMessage" a1="sessionId" a2="messageId" return="Message" />
   <!-- return shareid the guid -->
-  <action name="ShareSession" a1="sessionId" return="SharedSession" />
-  <action name="UnshareSession" a1="sessionId" />
+  <action key="main" name="ShareSession" a1="sessionId" return="SharedSession" />
+  <action key="main" name="UnshareSession" a1="sessionId" />
   <!-- don't use up money -->
-  <action name="GetAccountBalance" return="AccountBalance" />
+  <action key="main" name="GetAccountBalance" return="AccountBalance" />
+  <!-- following are investigating -->
+  <!-- these 2 types are actually same as db and actually use in db query -->
+  <type name="dsession">
+    <field name="id" type="string" />
+    <field name="seq_id" type="number" />
+    <field name="title" type="string" />
+    <field name="inserted_at" type="datetime" />
+    <field name="updated_at" type="datetime" />
+  </type>
+  <type name="dmessage">
+    <field name="message_id" type="number" />
+    <field name="parent_id" type="number?" />
+    <field name="role" type="string" />
+    <field name="content" type="string" />
+    <field name="thinking_content" type="string?" />
+    <field name="accumulated_token_usage" type="number" />
+    <field name="inserted_at" type="datetime" />
+  </type>
+  <action key="temp" name="GetDSessions" return="dsession[]" />
+  <action key="temp" name="GetDMessages" a1="id:string" return="dmessage[]" />
 </api>
