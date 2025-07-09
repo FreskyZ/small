@@ -415,6 +415,7 @@ async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> 
 }
 
 async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
+    // TODO date is formatted as local timezone YYYY-MM-DD hh:mm:ss, fix that to be iso8601
     const [sessions] = await pool.query<QueryResult<I.dsession>[]>(
         "SELECT `id`, `seq_id`, `title`, `inserted_at`, `updated_at` FROM `dsession`;",
     )
