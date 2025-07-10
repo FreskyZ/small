@@ -259,6 +259,7 @@ function App() {
     const handleAddSession = async () => {
         const result = await api.addSession({} as I.Session);
         setSessions([result].concat(sessions));
+        // TODO id is not added to url after adding
         setSessionId(result.id);
         setMessages(result.messages);
         setMessagePath([result.messages[0].id]);
