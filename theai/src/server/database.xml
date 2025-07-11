@@ -11,16 +11,19 @@
     <field name="ShareId" type="string?" size="36" />
   </table>
   <table name="Message">
-    <primary-key field="MessageId" />
+    <primary-key field="SessionId,MessageId" />
     <foreign-key field="SessionId" table="Session" />
-    <!-- no self reference fk for now, they are complex -->
-    <!-- <foreign-key field="ParentMessageId" table="Message" /> -->
-    <field name="MessageId" type="id" />
     <field name="SessionId" type="id" />
-    <!-- first message is allowed to diverge, so need a virtual root and null for virtual root -->
+    <!-- this is session internal id, start from 1 -->
+    <field name="MessageId" type="int" />
+    <!-- first message does not have parent id -->
+    <!-- first message is also allowed to diverge,
+      so there maybe multiple messages with no parent id in a session -->
     <field name="ParentMessageId" type="id?" />
     <field name="Role" type="string" size="32" />
     <field name="Content" type="text" />
+    <!-- I currently only use non reasoning model, but still add this for future -->
+    <field name="ThinkingContent" type="text?" />
     <!-- token count from root to this message, so only available for user message -->
     <field name="PromptTokenCount" type="int?" />
     <field name="CompletionTokenCount" type="int?" />

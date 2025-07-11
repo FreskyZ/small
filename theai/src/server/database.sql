@@ -16,18 +16,21 @@ CREATE TABLE `Session` (
     `Tags` VARCHAR(200) NOT NULL,
     `Shared` BIT NOT NULL,
     `ShareId` VARCHAR(36) NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    `CreateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+    `UpdateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
     CONSTRAINT `PK_Session` PRIMARY KEY (`SessionId`)
 );
 CREATE TABLE `Message` (
-    `MessageId` INT NOT NULL AUTO_INCREMENT,
     `SessionId` INT NOT NULL,
+    `MessageId` INT NOT NULL,
     `ParentMessageId` INT NULL,
     `Role` VARCHAR(32) NOT NULL,
     `Content` TEXT NOT NULL,
+    `ThinkingContent` TEXT NULL,
     `PromptTokenCount` INT NULL,
     `CompletionTokenCount` INT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT `PK_Message` PRIMARY KEY (`MessageId`),
+    `CreateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+    `UpdateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+    CONSTRAINT `PK_Message` PRIMARY KEY (`SessionId`,`MessageId`),
     CONSTRAINT `FK_Message_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
 );

@@ -37,8 +37,27 @@ tls.createSecureContext = options => {
     return originalResult;
 };
 
-async function generateForDatabaseModel() {
+interface DatabaseModelField {
+    name: string,
+    type: 'id' | 'int' | 'string' | 'datetime' | 'guid' | 'text',
+    nullable: boolean,
+    size: number, // string size
+}
+interface DatabaseModelForeignKey {
+    table: string, // foreign table
+    field: string,
+}
+interface DatabaseModelTable {
+    name: string,
+    primaryKey: string[], // primary key field name, pk is required for now
+    foreignKeys: DatabaseModelForeignKey[],
+    fields: DatabaseModelField[],
+}
+
+// return true for ok, false for not ok
+async function generateForDatabaseModel(): Promise<boolean> {
     console.log('code generation database model');
+    let hasError = false;
 
     const parser = new XMLParser({
         preserveOrder: true,
@@ -46,33 +65,15 @@ async function generateForDatabaseModel() {
         attributeNamePrefix: '',
         parseAttributeValue: true,
     });
+    // the result of preserveOrder: boolean is too complex and not that worthy to type
     const rawDatabaseModel = parser.parse(await fs.readFile('src/server/database.xml'));
-    /**
-     * @typedef {Object} DatabaseModelField
-     * @property {string} name
-     * @property {'id' | 'int' | 'string' | 'datetime' | 'guid' | 'text'} type
-     * @property {boolean} nullable
-     * @property {number} size string length
-     */
-    /**
-     * @typedef {Object} DatabaseModelForeignKey
-     * @property {string} table foreign table
-     * @property {string} field
-     */
-    /**
-     * @typedef {Object} DatabaseModelTable
-     * @property {string} name
-     * @property {string} primaryKey pk is required
-     * @property {DatabaseModelForeignKey[]} foreignKeys
-     * @property {DatabaseModelField[]} fields
-     */
+
     const databaseName = rawDatabaseModel[1][':@'].name;
-    /** @type {DatabaseModelTable[]} */
-    const databaseModel = rawDatabaseModel[1].database.map(c => ({
+    const databaseModel = (rawDatabaseModel[1].database as any[]).map<DatabaseModelTable>(c => ({
         name: c[':@'].name,
-        primaryKey: c.table.find(f => 'primary-key' in f)[':@'].field,
-        foreignKeys: c.table.filter(f => 'foreign-key' in f).map(f => f[':@']),
-        fields: c.table.filter(f => 'field' in f).map(f => ({
+        primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
+        foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
+        fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
             name: f[':@'].name,
             type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
             nullable: f[':@'].type.endsWith('?'),
@@ -87,13 +88,15 @@ async function generateForDatabaseModel() {
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
     sb += '\n';
+    sb += `import type { Dayjs } from 'dayjs';\n`;
+    sb += '\n';
     for (const table of databaseModel) {
         sb += `export interface ${table.name} {\n`;
         for (const field of table.fields) {
             const type = {
                 'id': 'number',
                 'int': 'number',
-                'datetime': 'string',
+                'datetime': 'Dayjs',
                 'guid': 'string',
                 'text': 'string',
                 'string': 'string',
@@ -101,11 +104,12 @@ async function generateForDatabaseModel() {
             }[field.type];
             sb += `    ${field.name}${field.nullable ? '?' : ''}: ${type},\n`
         }
-        sb += `    CreateTime: string,\n`;
+        sb += `    CreateTime: Dayjs,\n`;
+        sb += `    UpdateTime: Dayjs,\n`;
         sb += `}\n`;
     }
     if (!nocodegen) {
-        console.log('write src/server/database.d.ts');
+        console.log('   write src/server/database.d.ts');
         await fs.writeFile('src/server/database.d.ts', sb);
     }
 
@@ -133,27 +137,68 @@ async function generateForDatabaseModel() {
                 'string': `VARCHAR(${field.size})`,
                 'bool': 'BIT',
             }[field.type];
-            const autoIncrement = table.primaryKey == field.name && field.type == 'id' ? ' AUTO_INCREMENT' : '';
-            const newGuid = table.primaryKey == field.name && field.type == 'guid' ? ' DEFAULT (UUID())' : '';
+            const autoIncrement = table.primaryKey.length == 1 && table.primaryKey[0] == field.name && field.type == 'id' ? ' AUTO_INCREMENT' : '';
+            const newGuid = table.primaryKey.length == 1 && table.primaryKey[0] == field.name && field.type == 'guid' ? ' DEFAULT (UUID())' : '';
             sb += `    \`${field.name}\` ${type} ${field.nullable ? 'NULL' : 'NOT NULL'}${autoIncrement}${newGuid},\n`;
         }
-        sb += '    `CreateTime` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,\n';
-        sb += `    CONSTRAINT \`PK_${table.name}\` PRIMARY KEY (\`${table.primaryKey}\`),\n`;
+        sb += '    `CreateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),\n';
+        sb += '    `UpdateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),\n';
+        sb += `    CONSTRAINT \`PK_${table.name}\` PRIMARY KEY (${table.primaryKey.map(k => `\`${k}\``).join(',')}),\n`;
         for (const fk of table.foreignKeys) {
             const foreignTable = databaseModel.find(t => t.name == fk.table);
+            if (foreignTable.primaryKey.length > 1) {
+                hasError = true;
+                console.error(chalk`{red error} table ${table.name} foreign key ${fk.field} cannot reference table ${fk.table} with composite primary key`);
+            }
+            const foreignTablePrimaryKey = foreignTable.primaryKey[0];
             sb += `    CONSTRAINT \`FK_${table.name}_${fk.table}\``;
-            sb += ` FOREIGN KEY (\`${fk.field}\`) REFERENCES \`${fk.table}\`(\`${foreignTable.primaryKey}\`),\n`;
+            sb += ` FOREIGN KEY (\`${fk.field}\`) REFERENCES \`${fk.table}\`(\`${foreignTablePrimaryKey}\`),\n`;
         }
         sb = sb.substring(0, sb.length - 2) + '\n';
         sb += `);\n`;
     }
     if (!nocodegen) {
-        console.log('write src/server/database.sql');
+        console.log('   write src/server/database.sql');
         await fs.writeFile('src/server/database.sql', sb);
     }
+    return !hasError;
 }
 
-async function generateForWebInterface() {
+interface WebInterfaceActionParameter {
+    name: string,
+    type: 'id' | 'guid', // for now only this
+    optional: boolean,
+}
+interface WebInterfaceAction{
+    // finally you need something to group actions
+    // for now =main is main, =share is for share page
+    // for now =temp is temporary investigating actions
+    key: string,
+    name: String,
+    public: boolean,
+    // method is not in config but comes from name
+    // GetXXX => GET, AddXXX => PUT, RemoveXXX => DELETE, other => POST
+    method: string,
+    // path is not in config but comes from name
+    // for GetXXX, remove the Get prefix, remaining part change from camel case to snake case
+    path: string,
+    parameters: WebInterfaceActionParameter[],
+    body?: string, // body type name
+    return?: string, // return type name
+}
+interface WebInterfaceActionTypeField {
+    name: string,
+    // primitive type or custom type
+    type: 'id' | 'int' | 'string' | 'datetime' | string,
+    nullable: boolean,
+}
+interface WebInterfaceActionType {
+    name: string,
+    fields: WebInterfaceActionTypeField[],
+}
+
+// return true for ok, false for not ok
+async function generateForWebInterface(): Promise<boolean> {
     console.log('code generation web interface');
     
     const parser = new XMLParser({
@@ -164,43 +209,15 @@ async function generateForWebInterface() {
     });
     const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
     // console.log(JSON.stringify(rawActions, undefined, 2));
-    /**
-     * @typedef {Object} WebInterfaceActionParameter
-     * @property {string} name
-     * @property {'id' | 'guid'} type for now only id and guid
-     * @property {boolean} optional
-     */
-    /**
-     * @typedef {Object} WebInterfaceAction
-     * @property {string} key finally you need something to group actions..., for now =main is main, =share is for share
-     * @property {string} name
-     * @property {boolean} public
-     * @property {string} method method is calculated when read config, because both side need it
-     * @property {string} path path is calculated when read config, because both side need it
-     * @property {WebInterfaceActionParameter[]} parameters
-     * @property {string?} body body type name
-     * @property {string?} return return type name
-     */
-    /**
-     * @typedef {Object} WebInterfaceActionField
-     * @property {string} name
-     * @property {'id' | 'int' | 'string' | 'datetime' | string} type
-     * @property {boolean} nullable
-     */
-    /**
-     * @typedef {Object} WebInterfaceActionType
-     * @property {string} name
-     * @property {WebInterfaceActionField[]} fields
-     */
-    /** @type {WebInterfaceAction[]} */
-    const actions = [];
-    /** @type {WebInterfaceActionType[]} */
-    const actionTypes = [];
-    rawWebInterfaces[1].api.forEach(c => {
+
+    const actions: WebInterfaceAction[] = [];
+    const actionTypes: WebInterfaceActionType[] = [];
+
+    rawWebInterfaces[1].api.forEach((c: any) => {
         if ('type' in c) {
             actionTypes.push({
                 name: c[':@'].name,
-                fields: c.type.map(f => ({
+                fields: c.type.map((f: any) => ({
                     name: f[':@'].name,
                     type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
                     nullable: f[':@'].type.endsWith('?'),
@@ -252,7 +269,7 @@ async function generateForWebInterface() {
         sb += '}\n';
     }
     if (!nocodegen) {
-        console.log('write src/shared/api.d.ts');
+        console.log('   write src/shared/api.d.ts');
         await fs.writeFile('src/shared/api.d.ts', sb);
     }
 
@@ -279,9 +296,10 @@ async function generateForWebInterface() {
         if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }\n`;
+    // append more helper methods if need
+    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
 
     sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
@@ -306,7 +324,7 @@ async function generateForWebInterface() {
     sb += `}\n`;
 
     if (!nocodegen) {
-        console.log('write partial src/server/index.ts');
+        console.log('   write partial src/server/index.ts');
         await fs.writeFile('src/server/index.ts', sb);
     }
 
@@ -371,17 +389,23 @@ async function generateForWebInterface() {
     }
     sb += '};\n';
     if (!nocodegen) {
-        console.log('write partial src/client/index.tsx');
+        console.log('   write partial src/client/index.tsx');
         await fs.writeFile('src/client/index.tsx', sb);
     }
+
+    return true; // no error for now
 }
-/**
- * @returns {Record<string, string>} transpile result files
- */
-function transpile() {
+
+interface ScriptAssets {
+    mainClient: string,
+    shareClient: string,
+    server: string,
+}
+// return null for has error
+function transpile(): ScriptAssets {
     console.log('transpiling');
-    /** @type {ts.CompilerOptions} */
-    const sharedConfig = {
+
+    const sharedConfig: ts.CompilerOptions = {
         lib: ['lib.esnext.d.ts'],
         target: ts.ScriptTarget.ESNext,
         module: ts.ModuleKind.NodeNext,
@@ -418,7 +442,7 @@ function transpile() {
         outDir: '/vbuild2',
     });
 
-    const /** @type {Record<string, string>} */ files = {};
+    const files: Record<string, string> = {};
     const emitResult1 = clientProgram.emit(undefined, (fileName, data) => {
         if (data) { files[fileName] = data; }
     });
@@ -426,6 +450,7 @@ function transpile() {
         if (data) { files[fileName] = data; }
     });
     // TODO what's the following todo todoing, I can get type information from ast type node, then?
+    // update: maybe is checking def-use chains and tree shaking?
     // TODO 
     // const checker = clientProgram.getTypeChecker();
     // checker.getTypeFromTypeNode();
@@ -449,78 +474,83 @@ function transpile() {
     for (const message of transpileErrors.filter((v, i, a) => a.indexOf(v) == i)) {
         console.log(message);
     }
-    return transpileErrors.length ? null : files;
+    return transpileErrors.length ? null : {
+        mainClient: files['/vbuild1/index.js'], 
+        shareClient: files['/vbuild3/share.js'], 
+        server: files['/vbuild2/index.js'],
+    };
 }
 
-/**
- * @param {string} clientJs
- * @param {string} clientJs2
- * @param {string} serverJs
- * @return {Promise<[string, string, string]>} processed [clientJs, clientJs2, serverJs]
- */
-async function postprocess(clientJs, clientJs2, serverJs) {
+// directly modify parameter member as result
+// return true for ok, false for not ok
+async function postprocess(assets: ScriptAssets): Promise<boolean> {
     console.log('postprocessing');
+    let hasError = false;
 
-    const dependencies = {
-        'react': 'https://esm.sh/react@19.1.0',
-        'react-dom': 'https://esm.sh/react-dom@19.1.0',
-        'react-dom/client': 'https://esm.sh/react-dom@19.1.0/client',
-        'dayjs': 'https://esm.sh/dayjs@1.11.13',
-        'dayjs/plugin/utc.js': 'https://esm.sh/dayjs@1.11.13/plugin/utc.js',
-        'dayjs/plugin/timezone.js': 'https://esm.sh/dayjs@1.11.13/plugin/timezone.js',
-        '@emotion/react': 'https://esm.sh/@emotion/react@11.14.0',
-        '@emotion/react/jsx-runtime': 'https://esm.sh/@emotion/react@11.14.0/jsx-runtime',
+    // example.com replacement
+    assets.mainClient = assets.mainClient.replaceAll('example.com', config['main-domain']);
+    assets.shareClient = assets.shareClient.replaceAll('example.com', config['main-domain']);
+
+    // TODO server side dependency version need to be validated with core module package.json dependencies (not devdependencies)
+    // dependency path replacement, change to cdn
+    interface ClientDependency {
+        name: string,
+        // available paths
+        // a normal plain package is always included `https://esm.sh/{name}@{version}`
+        // if path is required then source code `{name}{path}` becomes `https://esm.sh/{name}@{version}{path}`
+        pathnames: string[],
     }
-    clientJs = clientJs.replaceAll('example.com', config['main-domain']);
-    for (const [devModule, runtimeModule] of Object.entries(dependencies)) {
-        clientJs = clientJs.replace(new RegExp(`from ['"]${devModule}['"]`), `from '${runtimeModule}'`);
-    }
-    clientJs2 = clientJs2.replaceAll('example.com', config['main-domain']);
-    for (const [devModule, runtimeModule] of Object.entries(dependencies)) {
-        clientJs2 = clientJs2.replace(new RegExp(`from ['"]${devModule}['"]`), `from '${runtimeModule}'`);
+    const dependencies: ClientDependency[] = [
+        { name: 'react', pathnames: [] },
+        { name: 'react-dom', pathnames: ['/client'] },
+        { name: 'dayjs', pathnames: ['/plugin/utc.js', '/plugin/timezone.js'] },
+        { name: '@emotion/react', pathnames: ['/jsx-runtime'] }
+    ];
+    const projectConfig = JSON.parse(await fs.readFile('package.json', 'utf-8')) as {
+        dependencies: Record<string, string>,
+        devDependencies: Record<string, string>,
+    };
+    for (const dependency of dependencies) {
+        const projectDependency = Object
+            .entries(projectConfig.dependencies).find(d => d[0] == dependency.name)
+            || Object.entries(projectConfig.devDependencies).find(d => d[0] == dependency.name);
+        if (!projectDependency) {
+            hasError = true;
+            console.error(chalk`{red error} postprocess dependency ${dependency.name} not found in project config`);
+        }
+        const packageVersion = projectDependency[1].substring(1);
+        assets.mainClient = assets.mainClient.replace(
+            new RegExp(`from ['"]${dependency.name}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}'`);
+        for (const pathname of dependency.pathnames) {
+            assets.mainClient = assets.mainClient.replace(
+                new RegExp(`from ['"]${dependency.name}${pathname}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}${pathname}'`);
+        }
     }
 
-    let resultClientJs;
-    let resultClientJs2;
-    let resultServerJs;
     console.log(`minify`);
-    try {
-        const minifyResult = await minify(clientJs, {
-            sourceMap: false,
-            module: true,
-            compress: { ecma: 2022 },
-            format: { max_line_len: 160 },
-        });
-        resultClientJs = minifyResult.code;
-    } catch (err) {
-        console.error(chalk`{red error} terser`, err, clientJs);
+    async function tryminify(input: string) {
+        try {
+            const minifyResult = await minify(input, {
+                sourceMap: false,
+                module: true,
+                compress: { ecma: 2022 as any },
+                format: { max_line_len: 160 },
+            });
+            return minifyResult.code;
+        } catch (err) {
+            console.error(chalk`{red error} terser`, err, input);
+            return null;
+        }
     }
-    try {
-        const minifyResult = await minify(clientJs2, {
-            sourceMap: false,
-            module: true,
-            compress: { ecma: 2022 },
-            format: { max_line_len: 160 },
-        });
-        resultClientJs2 = minifyResult.code;
-    } catch (err) {
-        console.error(chalk`{red error} terser`, err, clientJs2);
-    }
+    assets.mainClient = await tryminify(assets.mainClient);
+    assets.shareClient = await tryminify(assets.shareClient);
+    assets.server = await tryminify(assets.server);
+    if (!assets.mainClient || !assets.shareClient || !assets.server) { hasError = true; }
 
-    try {
-        const minifyResult = await minify(serverJs, {
-            module: true,
-            compress: { ecma: 2022 },
-            format: { max_line_len: 160 },
-        });
-        resultServerJs = minifyResult.code;
-    } catch (err) {
-        console.error(chalk`{red error} terser`, err, serverJs);
-    }
-    return [resultClientJs, resultClientJs2, resultServerJs];
+    return !hasError;
 }
 
-async function reportLocalBuildComplete(ok) {
+async function reportLocalBuildComplete(ok: boolean) {
     const response = await fetch(`https://${config['main-domain']}:8001/local-build-complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -535,16 +565,16 @@ async function reportLocalBuildComplete(ok) {
 
 async function buildAndDeploy() {
 
-    await Promise.all([
+    const [ok1, ok2] = await Promise.all([
         // TODO by the way, the files inside these function can also parallel
         await generateForWebInterface(),
         await generateForDatabaseModel(),
     ]);
-    const transpileResult = transpile();
-    if (!transpileResult) { console.log('there are error in transpiling'); return await reportLocalBuildComplete(false); }
-    const [resultClientJs, resultClientJs2, resultServerJs] = await postprocess(
-        transpileResult['/vbuild1/index.js'], transpileResult['/vbuild3/share.js'], transpileResult['/vbuild2/index.js']);
-    if (!resultClientJs || !resultClientJs2 || !resultServerJs) { console.log('there are error in postprocessing'); return await reportLocalBuildComplete(false); }
+    if (!ok1 || !ok2) { console.log('there are error in code generation'); return await reportLocalBuildComplete(false); }
+    const assets = transpile();
+    if (!assets) { console.log('there are error in transpiling'); return await reportLocalBuildComplete(false); }
+    const ok3 = await postprocess(assets);
+    if (!ok3) { console.log('there are error in postprocessing'); return await reportLocalBuildComplete(false); }
     console.log(`complete build`);
 
     console.log(`uploading`);
@@ -558,9 +588,9 @@ async function buildAndDeploy() {
     });
     await sftpclient.fastPut('src/client/index.html', path.join(config.webroot, 'static/chat/index.html'));
     await sftpclient.fastPut('src/client/share.html', path.join(config.webroot, 'static/chat/share.html'));
-    await sftpclient.put(Buffer.from(resultClientJs), path.join(config.webroot, 'static/chat/index.js'));
-    await sftpclient.put(Buffer.from(resultClientJs2), path.join(config.webroot, 'static/chat/share.js'));
-    await sftpclient.put(Buffer.from(resultServerJs), path.join(config.webroot, 'servers/chat.js'));
+    await sftpclient.put(Buffer.from(assets.mainClient), path.join(config.webroot, 'static/chat/index.js'));
+    await sftpclient.put(Buffer.from(assets.shareClient), path.join(config.webroot, 'static/chat/share.js'));
+    await sftpclient.put(Buffer.from(assets.server), path.join(config.webroot, 'servers/chat.js'));
     console.log(`complete upload`);
 
     await reportLocalBuildComplete(true);

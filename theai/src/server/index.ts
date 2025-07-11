@@ -1,4 +1,3 @@
-// TODO try validate runtime 3rd party dependency is same as core module, also package.json
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
@@ -20,31 +19,34 @@ const config = (JSON.parse(await fs.readFile('config', 'utf-8')) as {
 type QueryResult<T> = T & mysql.RowDataPacket;
 type ManipulateResult = mysql.ResultSetHeader;
 // so need to change database name to connect to this app's database
-const pool = mysql.createPool({ ...config.database, database: 'MyChat', typeCast: (field, next) => {
-    return field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1 : next();
-} });
+const pool = mysql.createPool({ ...config.database, database: 'MyChat', typeCast: (field, next) =>
+    field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1
+    : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss') 
+    : next(),
+});
 
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
 
     const [sessions] = await pool.query<QueryResult<D.Session & { ShareId: string | null }>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime`, `Shared`, `ShareId` FROM `Session` WHERE `UserId` = ? ORDER BY `CreateTime` DESC',
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime`, `UpdateTime`, `Shared`, `ShareId` FROM `Session` WHERE `UserId` = ? ORDER BY `CreateTime` DESC',
         [ax.userId],
     );
     return sessions.map<I.Session>(s => ({
         id: s.SessionId,
         name: s.Name,
-        comment: s.Comment,
-        createTime: s.CreateTime,
-        tags: s.Tags?.split(',') ?? [],
+        comment: s.Comment ?? '',
+        tags: s.Tags?.split(',')?.filter(x => x) ?? [],
         shareId: s.Shared ? s.ShareId : null,
+        createTime: s.CreateTime.toISOString(),
+        updateTime: s.UpdateTime.toISOString(),
         messages: [], // get list api does not include messages
     }));
 }
-async function getSessionMessages(ax: ActionContext, sessionId: number): Promise<I.Message[]> {
+async function getSession(ax: ActionContext, sessionId: number): Promise<I.Session> {
 
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `CreateTime`, `UpdateTime`, `Shared`, `ShareId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
         [sessionId, ax.userId],
     );
     if (!Array.isArray(sessions) || sessions.length == 0) {
@@ -53,26 +55,38 @@ async function getSessionMessages(ax: ActionContext, sessionId: number): Promise
 
     const session = sessions[0];
     const [messages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
+        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent`, `PromptTokenCount`, `CompletionTokenCount`, `CreateTime`, `UpdateTime` FROM `Message` WHERE `SessionId` = ?',
         [session.SessionId],
     );
     messages.sort((a, b) => a.MessageId - b.MessageId);
 
-    return messages.map<I.Message>(m => ({
-        id: m.MessageId,
-        parentId: m.ParentMessageId,
-        role: m.Role,
-        content: m.Content,
-        promptTokenCount: m.PromptTokenCount,
-        completionTokenCount: m.CompletionTokenCount,
-    }));
+    return {
+        id: sessionId,
+        name: session.Name,
+        comment: session.Comment ?? '',
+        tags: session.Tags?.split(',')?.filter(x => x) ?? [],
+        shareId: session.Shared ? session.ShareId : null,
+        createTime: session.CreateTime.toISOString(),
+        updateTime: session.UpdateTime.toISOString(),
+        messages: messages.map<I.Message>(m => ({
+            id: m.MessageId,
+            parentId: m.ParentMessageId,
+            role: m.Role,
+            content: m.Content,
+            thinkingContent: m.ThinkingContent,
+            promptTokenCount: m.PromptTokenCount,
+            completionTokenCount: m.CompletionTokenCount,
+            createTime: m.CreateTime.toISOString(),
+            updateTime: m.UpdateTime.toISOString(),
+        })),
+    };
 }
 
 // ATTENTION no user info for public api, this ax parameter should never be used
 async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.Session> {
 
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
-        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `Shared`, `CreateTime` FROM `Session` WHERE `ShareId` = ?',
+        'SELECT `SessionId`, `Name`, `Comment`, `Tags`, `Shared` FROM `Session` WHERE `ShareId` = ?',
         [shareId],
     );
     if (!Array.isArray(sessions) || sessions.length == 0) {
@@ -84,29 +98,28 @@ async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.
     }
 
     const [messages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount` FROM `Message` WHERE `SessionId` = ?',
+        'SELECT `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent` FROM `Message` WHERE `SessionId` = ?',
         [session.SessionId],
     );
 
+    // the public api does not return createtime, updatetime, tags, shareid and tokencount
     return {
         id: session.SessionId,
         name: session.Name,
-        comment: session.Comment,
+        comment: session.Comment ?? '',
         tags: [],
-        createTime: '',
         messages: messages.map<I.Message>(m => ({
             id: m.MessageId,
             parentId: m.ParentMessageId,
             role: m.Role,
             content: m.Content,
-            promptTokenCount: m.PromptTokenCount,
-            completionTokenCount: m.CompletionTokenCount,
+            thinkingContent: m.ThinkingContent,
         })),
     };
 }
 
 async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Session> {
-    const newName = withName.name ?? ax.now.format('[s]-YYYYMMDD-HHmmss');
+    const newName = withName.name ?? ax.now.format('YYYYMMDD-HHmmss');
 
     // NOTE session name should not duplicate in userid (can duplicate in different users)
     const [existingSessions] = await pool.query<QueryResult<D.Session>[]>(
@@ -121,8 +134,8 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
         "INSERT INTO `Session` (`UserId`, `Name`, `Tags`, `Shared`) VALUES (?, ?, '', 0)",
         [ax.userId, newName],
     );
-    const [insertResult2] = await pool.execute<ManipulateResult>(
-        "INSERT INTO `Message` (`SessionId`, `Role`, `Content`) VALUES (?, 'system', 'You are a helpful assistant.')",
+    await pool.execute<ManipulateResult>(
+        "INSERT INTO `Message` (`SessionId`, `MessageId`, `Role`, `Content`) VALUES (?, 1, 'system', 'You are a helpful assistant.')",
         [insertResult.insertId],
     );
 
@@ -130,11 +143,14 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
         id: insertResult.insertId,
         name: newName,
         createTime: ax.now.toISOString(),
+        updateTime: ax.now.toISOString(),
         tags: [],
         messages: [{
-            id: insertResult2.insertId,
+            id: 1,
             role: 'system',
             content: 'You are a helpful assistant.',
+            createTime: ax.now.toISOString(),
+            updateTime: ax.now.toISOString(),
         }],
     };
 }
@@ -164,22 +180,16 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
     }
 
     await pool.execute(
-        'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ? WHERE `SessionId` = ?',
-        [session.name, session.comment ?? null, session.tags.join(','), session.id],
+        'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ?, `UpdateTime` = ? WHERE `SessionId` = ?',
+        [session.name, session.comment ?? null, session.tags.join(','), ax.now.format('YYYY-MM-DD HH:mm:ss'), session.id],
     );
+    session.updateTime = ax.now.toISOString();
     return session;
 }
 async function removeSession(ax: ActionContext, sessionId: number) {
+    // TODO if indexed, cannot remove
+
     await validateSessionUser(ax, sessionId);
-
-    const [messages] = await pool.query<QueryResult<D.Message>[]>(
-        'SELECT `MessageId` FROM `Message` WHERE `SessionId` = ?',
-        [sessionId],
-    );
-    if (messages.length <= 1) {
-        throw new MyError('common', 'cannot delete last message');
-    }
-
     await pool.execute('DELETE FROM `Message` WHERE `SessionId` = ?', [sessionId]);
     await pool.execute('DELETE FROM `Session` WHERE `SessionId` = ?', [sessionId]);
 }
@@ -189,8 +199,8 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
 
     if (message.parentId) {
         const [parentMessages] = await pool.query<QueryResult<D.Message>[]>(
-            'SELECT `Role` FROM `Message` WHERE `MessageId` = ?',
-            [message.parentId],
+            'SELECT `Role` FROM `Message` WHERE `SessionId` = ? AND `MessageId` = ?',
+            [sessionId, message.parentId],
         );
         if (!Array.isArray(parentMessages) || parentMessages.length == 0) {
             throw new MyError('not-found', 'invalid parent message id');
@@ -206,15 +216,22 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
         throw new MyError('common', 'invalid role');
     }
 
-    const [insertResult] = await pool.execute<ManipulateResult>(
-        'INSERT INTO `Message` (`SessionId`, `ParentMessageId`, `Role`, `Content`) VALUES (?, ?, ?, ?)',
-        [sessionId, message.parentId, message.role, message.content],
+    const [maxMessages] = await pool.query<QueryResult<{ MaxMessageId: number }>[]>(
+        "SELECT MAX(`MessageId`) FROM `Message` GROUP BY `SessionId` HAVING `SessionId` = ?",
+        [sessionId],
+    );
+    const messageId = maxMessages[0].MaxMessageId + 1;
+    await pool.execute<ManipulateResult>(
+        'INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`) VALUES (?, ?, ?, ?)',
+        [sessionId, messageId, message.parentId, message.role, message.content],
     );
     return {
-        id: insertResult.insertId,
+        id: messageId,
         parentId: message.parentId,
         role: message.role,
         content: message.content,
+        createTime: ax.now.toISOString(),
+        updateTime: ax.now.toISOString(),
     };
 }
 
@@ -222,21 +239,24 @@ async function updateMessage(ax: ActionContext, sessionId: number, message: I.Me
     await validateSessionUser(ax, sessionId);
 
     await pool.execute(
-        'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL WHERE `MessageId` = ?',
-        [message.content, message.id],
+        'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL, `UpdateTime` = ? WHERE `MessageId` = ?',
+        [message.content, ax.now.format('YYYY-MM-DD HH:mm:ss'), message.id],
     );
+    message.updateTime = ax.now.toISOString();
     return message;
 }
 
 async function removeMessageTree(ax: ActionContext, sessionId: number, messageId: number) {
     await validateSessionUser(ax, sessionId);
-
-    // TODO should not delete last message
+    // TODO should not remove when any of the message is indexes
 
     const [messageRelationships] = await pool.query<QueryResult<Pick<D.Message, 'MessageId' | 'ParentMessageId'>>[]>(
         'SELECT `MessageId`, `ParentMessageId` FROM `Message` WHERE `SessionId` = ?',
         [sessionId],
     );
+    if (messageRelationships.length <= 1) {
+        throw new MyError('common', 'cannot delete last message');
+    }
 
     const remainingIds = [messageId];
     const shouldDeleteIds = [] as number[];
@@ -325,6 +345,7 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
             message: {
                 role: string,
                 content: string,
+                reasoning_content: string,
             },
             finish_reason: string,
         }[],
@@ -336,6 +357,7 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
     }
     const responseBody = await response.json() as CompletionAPIResponse;
     const responseContent = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.content : '(no response)';
+    const responseReasoningContent = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.reasoning_content : '(no response)';
     const processedContent = responseContent.trim()
         // .replace(/\r?\n\r?\n/g, '\n') // remove empty line
         // .split('\n').map(v => v.trim()).join('\n') // trim each line
@@ -348,22 +370,25 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
     const completionTokenCount = responseBody.usage.completion_tokens;
 
     // complete message works as external service is adding message
-    const [insertResult] = await pool.execute<ManipulateResult>(
-        "INSERT INTO `Message` (`SessionId`, `ParentMessageId`, `Role`, `Content`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, 'assistant', ?, ?, ?)",
-        [sessionId, messageId, processedContent, promptTokenCount, completionTokenCount],
+    const newMessageId = messageRelationships.reduce((acc, r) => Math.max(acc, r.MessageId), 0) + 1;
+    await pool.execute<ManipulateResult>(
+        "INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, 'assistant', ?, ?, ?, ?)",
+        [sessionId, newMessageId, messageId, processedContent, responseReasoningContent, promptTokenCount, completionTokenCount],
     );
 
     return {
-        id: insertResult.insertId,
+        id: newMessageId,
         parentId: messageId,
         role: 'assistant',
         content: processedContent,
         promptTokenCount,
         completionTokenCount,
+        createTime: ax.now.toISOString(),
+        updateTime: ax.now.toISOString(),
     };
 }
 
-async function shareSession(ax: ActionContext, sessionId: number): Promise<I.SharedSession> {
+async function shareSession(ax: ActionContext, sessionId: number): Promise<I.ShareSessionResult> {
 
     const [sessions] = await pool.query<QueryResult<D.Session>[]>(
         'SELECT `SessionId`, `Shared`, `ShareId` FROM `Session` WHERE `SessionId` = ? AND `UserId` = ?',
@@ -415,18 +440,24 @@ async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> 
 }
 
 async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
-    // TODO date is formatted as local timezone YYYY-MM-DD hh:mm:ss, fix that to be iso8601
     const [sessions] = await pool.query<QueryResult<I.dsession>[]>(
         "SELECT `id`, `seq_id`, `title`, `inserted_at`, `updated_at` FROM `dsession`;",
     )
-    return sessions;
+    return sessions.map(s => ({
+        ...s,
+        inserted_at: (s.inserted_at as unknown as dayjs.Dayjs).toISOString(),  
+        updated_at: (s.updated_at as unknown as dayjs.Dayjs).toISOString(),  
+    }));
 }
 async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dmessage[]> {
     const [messages] = await pool.query<QueryResult<I.dmessage>[]>(
         "SELECT `message_id`, `parent_id`, `role`, `content`, `thinking_content`, `accumulated_token_usage`, `inserted_at` FROM `dmessage` WHERE `session_id` = ?",
         [sessionId],
     );
-    return messages;
+    return messages.map(m => ({
+        ...m,
+        inserted_at: (m.inserted_at as unknown as dayjs.Dayjs).toISOString(),
+    }));
 }
 
 // AUTOGEN
@@ -450,7 +481,6 @@ class ParameterValidator {
         if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }
 export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
@@ -459,7 +489,7 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
     const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user?.id, userName: ctx.state.user?.name };
     const action = ({
         'GET /v1/sessions': () => getSessions(ax),
-        'GET /v1/session-messages': () => getSessionMessages(ax, v.id('sessionId')),
+        'GET /v1/session': () => getSession(ax, v.id('sessionId')),
         'GET /public/v1/session': () => publicGetSession(ax, v.string('shareId')),
         'PUT /v1/add-session': () => addSession(ax, ctx.body),
         'POST /v1/update-session': () => updateSession(ax, ctx.body),

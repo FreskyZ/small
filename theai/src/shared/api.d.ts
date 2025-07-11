@@ -7,6 +7,7 @@ export interface Session {
     name: string,
     comment?: string,
     createTime?: string,
+    updateTime?: string,
     tags: string[],
     shareId?: string,
     messages: Message[],
@@ -16,11 +17,13 @@ export interface Message {
     parentId?: number,
     role: string,
     content: string,
+    thinkingContent?: string,
     promptTokenCount?: number,
     completionTokenCount?: number,
     createTime?: string,
+    updateTime?: string,
 }
-export interface SharedSession {
+export interface ShareSessionResult {
     id: string,
 }
 export interface AccountBalance {

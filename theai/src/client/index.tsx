@@ -268,7 +268,7 @@ function App() {
         setSessionLoading(true);
         setInfoCollapsed(true);
         // TODO update session properties when selecting session (name, comment, tags, shared)
-        const messages = await api.getSessionMessages(sessionId);
+        const messages = (await api.getSession(sessionId)).messages;
         // session's message list cannot be empty, so this find must have result
         const messagePath: number[] = [messages.find(m => !m.parentId).id];
         while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
@@ -864,7 +864,7 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
 }
 const api = {
     getSessions: (): Promise<I.Session[]> => sendRequest('GET', '/v1/sessions'),
-    getSessionMessages: (sessionId: number): Promise<I.Message[]> => sendRequest('GET', '/v1/session-messages', { sessionId }),
+    getSession: (sessionId: number): Promise<I.Session> => sendRequest('GET', '/v1/session', { sessionId }),
     addSession: (data: I.Session): Promise<I.Session> => sendRequest('PUT', '/v1/add-session', {}, data),
     updateSession: (data: I.Session): Promise<I.Session> => sendRequest('POST', '/v1/update-session', {}, data),
     removeSession: (sessionId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-session', { sessionId }),
@@ -872,7 +872,7 @@ const api = {
     updateMessage: (sessionId: number, data: I.Message): Promise<I.Message> => sendRequest('POST', '/v1/update-message', { sessionId }, data),
     removeMessageTree: (sessionId: number, messageId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-message-tree', { sessionId, messageId }),
     completeMessage: (sessionId: number, messageId: number): Promise<I.Message> => sendRequest('POST', '/v1/complete-message', { sessionId, messageId }),
-    shareSession: (sessionId: number): Promise<I.SharedSession> => sendRequest('POST', '/v1/share-session', { sessionId }),
+    shareSession: (sessionId: number): Promise<I.ShareSessionResult> => sendRequest('POST', '/v1/share-session', { sessionId }),
     unshareSession: (sessionId: number): Promise<void> => sendRequest('POST', '/v1/unshare-session', { sessionId }),
     getAccountBalance: (): Promise<I.AccountBalance> => sendRequest('GET', '/v1/account-balance'),
 };
