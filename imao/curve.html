@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Obfuscation Investigation</title>
+  <style>
+    .text-btn{min-width:4rem;height:2rem;line-height:2rem;font-size:1rem;padding:0 0.5rem;margin:0 0.5rem;border:0;border-radius:6px;display:inline-block;position:relative;vertical-align:middle;color:#fff;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <div style="text-align:center;">
+    <input type="number" id="width" value="30"></input>
+    <input type="number" id="height" value="30"></input>
+    <button class="text-btn" style="background-color:#4f1787" onclick="handleReset()">RESET</button>
+    <button class="text-btn" style="background-color:#eb3678" onclick="handleSingleStep()">STEP</button>
+    <button class="text-btn" style="background-color:#fb773c" onclick="handleAutoStep()">AUTO</button>
+    <div style="margin-top:12px"><canvas width="600" height="600"></canvas></div>
+    <div><pre id="logs"></pre></div>
+  </div>
+  <script>
+    const state = {
+      size: [0, 0], // width, height
+      coordinates: [],  // [number, number][]
+      lastBatchSize: 0, // last new coordinates batch size
+      stack: [],    // [x, y, ax, ay, bx, by, level][]
+      logs: [],     // string[]
+    };
+    const canvasElement = document.querySelector('canvas');
+
+    function drawState() {
+      // for current purpose, always draw a square
+      const canvasSize = [canvasElement.width, canvasElement.height];
+      const context = canvasElement.getContext('2d');
+      context.clearRect(0, 0, canvasSize[0], canvasSize[1]);
+  
+      // draw cells
+      let cellWidth = canvasSize[0] / state.size[0];
+      let cellHeight = canvasSize[1] / state.size[1];
+
+      // temp solution to make cells always square
+      // this hack requires that canvasSize is not used after this
+      cellHeight = cellWidth = Math.min(cellWidth, cellHeight);
+
+      context.strokeStyle = '#ddd';
+      context.lineWidth = 1;
+      // Draw vertical lines
+      for (let i = 0; i <= state.size[0]; i++) {
+        const x = i * cellWidth;
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, cellHeight * state.size[1]);
+        context.stroke();
+      }
+      // Draw horizontal lines
+      for (let i = 0; i <= state.size[1]; i++) {
+        const y = i * cellHeight;
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(cellWidth * state.size[0], y);
+        context.stroke();
+      }
+
+      // draw stack
+      // const colors = [
+      //   "#ff0000", // red
+      //   "#00ff00", // green
+      //   "#0000ff", // blue
+      //   "#ffff00", // yellow
+      //   "#00ffff", // cyan
+      //   "#ff00ff", // magenta
+      //   "#ff8800", // orange
+      //   "#0088ff", // light blue
+      // ];
+      const colors = [
+        "#002255",
+        "#002288",
+        "#0022aa",
+        "#0022dd",
+        "#005522",
+        "#008822",
+        "#00aa22",
+        "#00dd22",
+      ];
+      for (const frame of state.stack) {
+        const color = colors[frame[6] % 8];
+        // TODO understand why add this offset makes things beautiful
+        const offset = frame[2] + frame[3] < 0 ? 1 : 0;
+        const [x, y, w, h] = [frame[0] + offset, frame[1] + offset, frame[2] + frame[4], frame[3] + frame[5]];
+
+        context.fillStyle = color + "44";
+        context.strokeStyle = color + 'aa'; // make border opaque
+        context.lineWidth = 2;
+
+        const rectX = x * cellWidth;
+        const rectY = y * cellHeight;
+        const rectWidth = w * cellWidth;
+        const rectHeight = h * cellHeight;
+
+        context.fillRect(rectX, rectY, rectWidth, rectHeight);
+        context.strokeRect(rectX, rectY, rectWidth, rectHeight);
+
+        function arrowline(x1, y1, x2, y2, color) {
+          if (x1 == x2 && y1 == y2) { return; } 
+          const centerX1 = (x1 + 0.5) * cellWidth;
+          const centerY1 = (y1 + 0.5) * cellHeight;
+          const centerX2 = (x2 + 0.5) * cellWidth;
+          const centerY2 = (y2 + 0.5) * cellHeight;
+
+          context.strokeStyle = color;
+          context.lineWidth = 2;
+          context.beginPath();
+          context.moveTo(centerX1, centerY1);
+          context.lineTo(centerX2, centerY2);
+          context.stroke();
+
+          // Draw arrowhead
+          const angle = Math.atan2(centerY2 - centerY1, centerX2 - centerX1);
+          const arrowLength = 8;
+          const arrowAngle = Math.PI / 6;
+
+          context.beginPath();
+          context.moveTo(centerX2, centerY2);
+          context.lineTo(
+            centerX2 - arrowLength * Math.cos(angle - arrowAngle),
+            centerY2 - arrowLength * Math.sin(angle - arrowAngle)
+          );
+          context.moveTo(centerX2, centerY2);
+          context.lineTo(
+            centerX2 - arrowLength * Math.cos(angle + arrowAngle),
+            centerY2 - arrowLength * Math.sin(angle + arrowAngle)
+          );
+          context.stroke();
+        }
+        arrowline(frame[0], frame[1], frame[0] + frame[2] - Math.sign(frame[2]), frame[1] + frame[3] - Math.sign(frame[3]), '#a30');
+        arrowline(frame[0], frame[1], frame[0] + frame[4] - Math.sign(frame[4]), frame[1] + frame[5] - Math.sign(frame[5]), '#630');
+      }
+      
+      // draw path
+      for (let i = 0; i < state.coordinates.length - 1; i++) {
+        const [[x1, y1], [x2, y2]] = [state.coordinates[i], state.coordinates[i + 1]];
+        const centerX1 = (x1 + 0.5) * cellWidth;
+        const centerY1 = (y1 + 0.5) * cellHeight;
+        const centerX2 = (x2 + 0.5) * cellWidth;
+        const centerY2 = (y2 + 0.5) * cellHeight;
+
+        context.strokeStyle = i >= state.coordinates.length - state.lastBatchSize - 1 ? '#888' : '#111';
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(centerX1, centerY1);
+        context.lineTo(centerX2, centerY2);
+        context.stroke();
+      }
+
+      document.querySelector('pre#logs').innerText = state.logs.join("\n");
+    }
+
+    function handleReset() {
+      state.size[0] = parseInt(document.querySelector('input#width').value);
+      state.size[1] = parseInt(document.querySelector('input#height').value);
+      state.coordinates = [];
+      state.stack = [];
+      state.logs = [];
+      if (width >= height) {
+        state.stack.push([0, 0, state.size[0], 0, 0, state.size[1], 0]);
+      } else {
+        state.stack.push([0, 0, 0, state.size[1], state.size[0], 0, 0]);
+      }
+      requestAnimationFrame(drawState);
+    }
+
+    let autointerval;
+    function handleSingleStep() {
+      if (state.stack.length) {
+        const frame = state.stack.pop();
+        generateHilbertCurveImpl(...frame);
+        requestAnimationFrame(drawState);
+      } else if (autointerval) {
+        clearInterval(autointerval);
+        autointerval = null;
+      }
+    }
+    function handleAutoStep() {
+      if (autointerval) {
+        clearInterval(autointerval);
+        autointerval = null;
+      } else {
+        autointerval = setInterval(handleSingleStep, 333);
+      }
+    }
+
+    function addlog(content) {
+      state.logs.push(content);
+      if (state.logs.length > 8) {
+        state.logs.shift();
+      }
+    }
+
+    // according to observation,
+    // (x, y) is the cell number to start the rectangle (the line starts at the cell in the rectangle), or more accurately (x - sign(ax + ay), y - sign(ax + ay))
+    // vector a and vector b is always vertical or horizontal (either x is 0 or y is 0), but will not be 0 vector (both x and y are 0)
+    // vector a, if start from start point of this rectangle, points to end point of this rectangle (the line ends at this cell in rectangle)
+    // vector b is always orthogonol (angle between a and b is 90deg) to vector a, represents the other length of this rectangle
+    // for large than 2 width/height rectangles, the start point is always left-top-most or right-bottom-most
+    // 
+    // according to current observation,
+    // the parameters of one step may be better arranged as (start point, end point and thickness)
+    // thickness is positive for thick at right side, negative for thick at left side 
+    function generateHilbertCurveImpl(x, y, ax, ay, bx, by, level) {      
+
+      // knowledge validations
+      // if (ax != 0 && ay != 0) { console.log("vector a neither vertical nor horizontal"); }
+      // if (bx != 0 && by != 0) { console.log("vector b neither vertical nor horizontal"); }
+      // if (ax == 0 && ay == 0) { console.log('vector a is 0'); }
+      // if (bx == 0 && by == 0) { console.log('vector b is 0'); }
+      // // vector a + b seems always point to first or third quadrant if both are not zero
+      // // (ATTENTION that x axis point to screen right and y axis point to screen bottom)
+      // // based on the previous assertion, this validation can be write like this
+      // if ((ax + ay) * (bx + by) < 0) {
+      //   console.log(`vector a + b unexpectedly point to 2nd/4th quadrant, ${ax}, ${ay}, ${bx}, ${by}`);
+      // }
+
+      const regionWidth = Math.abs(ax + ay);
+      const regionHeight = Math.abs(bx + by);
+
+      const axSign = Math.sign(ax), aySign = Math.sign(ay); // unit major direction
+      const bxSign = Math.sign(bx), bySign = Math.sign(by); // unit orthogonal direction
+
+      if (regionHeight == 1) {
+        addlog(`[${x}, ${y}, ${ax}, ${ay}, ${bx}, ${by}] trivial row fill`);
+        for (let i = 0; i < regionWidth; i++) {
+          state.coordinates.push([x, y]);
+          x += axSign;
+          y += aySign;
+        }
+        state.lastBatchSize = regionWidth;
+        return;
+      }
+
+      if (regionWidth == 1) {
+        addlog(`[${x}, ${y}, ${ax}, ${ay}, ${bx}, ${by}] trivial column fill`);
+        for (let i = 0; i < regionHeight; i++) {
+          state.coordinates.push([x, y]);
+          x += bxSign;
+          y += bySign;
+        }
+        state.lastBatchSize = regionHeight;
+        return;
+      }
+      state.lastBatchSize = 0;
+
+      let axHalf = Math.floor(ax / 2), ayHalf = Math.floor(ay / 2);
+      let bxHalf = Math.floor(bx / 2), byHalf = Math.floor(by / 2);
+
+      const regionWidthHalf = Math.abs(axHalf + ayHalf);
+      const regionHeightHalf = Math.abs(bxHalf + byHalf);
+
+      if (2 * regionWidth > 3 * regionHeight) {
+        addlog(`[${x}, ${y}, ${ax}, ${ay}, ${bx}, ${by}] long rectangle`);
+        if ((regionWidthHalf % 2) && (regionWidth > 2)) {
+          // prefer even steps
+          axHalf += axSign;
+          ayHalf += aySign;
+        }
+
+        // long case: split in two parts only
+        // generateHibertCurveImpl(x, y, axHalf, ayHalf, bx, by);
+        // generateHibertCurveImpl(x + axHalf, y + ayHalf, ax - axHalf, ay - ayHalf, bx, by);
+
+        // NOTE for DFS this is reverse
+        state.stack.push([x + axHalf, y + ayHalf, ax - axHalf, ay - ayHalf, bx, by, level + 1]);
+        state.stack.push([x, y, axHalf, ayHalf, bx, by, level + 1]);
+      } else {
+        addlog(`[${x}, ${y}, ${ax}, ${ay}, ${bx}, ${by}] standard case`);
+        if ((regionHeightHalf % 2) && (regionHeight > 2)) {
+          // prefer even steps
+          bxHalf += bxSign;
+          byHalf += bySign;
+        }
+
+        // standard case: one step up, one long horizontal, one step down
+        // generateHibertCurveImpl(x, y, bxHalf, byHalf, axHalf, ayHalf);
+        // generateHibertCurveImpl(x + bxHalf, y + byHalf, ax, ay, bx - bxHalf, by - byHalf);
+        // generateHibertCurveImpl(x + (ax - axSign) + (bxHalf - bxSign), y + (ay - aySign) + (byHalf - bySign), -bxHalf, -byHalf, -(ax - axHalf), -(ay - ayHalf));
+
+        // NOTE for DFS this is reverse
+        state.stack.push([x + (ax - axSign) + (bxHalf - bxSign), y + (ay - aySign) + (byHalf - bySign), -bxHalf, -byHalf, -(ax - axHalf), -(ay - ayHalf), level + 1]);
+        state.stack.push([x + bxHalf, y + byHalf, ax, ay, bx - bxHalf, by - byHalf, level + 1]);
+        state.stack.push([x, y, bxHalf, byHalf, axHalf, ayHalf, level + 1]);
+      }
+    }
+  </script>
+</body>
+</html>
