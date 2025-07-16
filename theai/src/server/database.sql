@@ -3,8 +3,8 @@
 --------------------------------------
 
 -- -- first, mysql -u root -p:
--- CREATE DATABASE 'MyChat';
--- GRANT ALL PRIVILEGES ON `MyChat`.* TO 'fine'@'localhost';
+-- CREATE DATABASE 'YALA';
+-- GRANT ALL PRIVILEGES ON `YALA`.* TO 'fine'@'localhost';
 -- FLUSH PRIVILEGES;
 -- -- then, mysql -p
 
@@ -16,8 +16,8 @@ CREATE TABLE `Session` (
     `Tags` VARCHAR(200) NOT NULL,
     `Shared` BIT NOT NULL,
     `ShareId` VARCHAR(36) NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
-    `UpdateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+    `CreateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
+    `UpdateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
     CONSTRAINT `PK_Session` PRIMARY KEY (`SessionId`)
 );
 CREATE TABLE `Message` (
@@ -29,8 +29,8 @@ CREATE TABLE `Message` (
     `ThinkingContent` TEXT NULL,
     `PromptTokenCount` INT NULL,
     `CompletionTokenCount` INT NULL,
-    `CreateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
-    `UpdateTime` DATETIME NOT NULL DEFAULT UTC_TIMESTAMP(),
+    `CreateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
+    `UpdateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
     CONSTRAINT `PK_Message` PRIMARY KEY (`SessionId`,`MessageId`),
     CONSTRAINT `FK_Message_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
 );

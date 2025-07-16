@@ -219,6 +219,9 @@
       }
     }
 
+    // TODO although the original version (curve.html) comes from another place
+    // but that code actually comes from this https://github.com/jakubcerveny/gilbert/blob/master/gilbert2d.py
+
     // begin point is coordinate regarding top left cell as (0, 0), x towards right, y towards bottom
     // begin point is inclusive inclusive
     // axis is { direction: top | bottom | left | right, length }, length will not be zero
@@ -249,6 +252,7 @@
 
       // there is exactly no way to work with axis length 3, thickness length 2, simple floor seems not enough
       // test cases 31x17, 30x20, 32x32, 23x31, 41x5
+      // TODO 15x12, 16x17, 4x5 it seems impossible to guarantee no diagnal lines
       const half = full => Math.floor(full / 2) % 2 && full > 2 ? Math.floor(full / 2) + 1 : Math.floor(full / 2);
 
       if (axis.length / thickness.length > 1.5) {

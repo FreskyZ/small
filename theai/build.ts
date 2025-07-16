@@ -430,6 +430,9 @@ function transpile(): ScriptAssets {
         lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
         jsx: ts.JsxEmit.ReactJSX,
         outDir: '/vbuild1',
+        // disable for now
+        noUnusedLocals: false,
+        noUnusedParameters: false,
     });
     const clientProgram2 = ts.createProgram(['src/client/share.tsx'], {
         ...sharedConfig,
@@ -625,4 +628,3 @@ function connectRemoteCommandCenter() {
 }
 
 connectRemoteCommandCenter();
-

@@ -19,6 +19,7 @@ function App() {
 
     useEffect(() => {
         (async () => {
+            // TODO redirect to /404 if not found
             const shareId = window.location.pathname.substring(7);
             if (shareId) {
                 const session = await api.publicGetSession(shareId);

@@ -14,7 +14,12 @@
 // into more technical details, the embedding data is stored with (message id + update time) considering I support full edit on any message,
 // if message branch is embedded, I'd consider not allow this message to be deleted, don't forget delete message tree
 // the embedding data, f32x1000, is simply a BINARY(4096) data column
+
 // add a noembedding tag to indicate this session is not worthy embedding (like low quality) or should not be embedded (like template)
+// add another title column to `dession` table to distinguish original title and my generated title?
+// add another title to `Session` table to distinguish suggested title and user title?, add an column for conversation abstract?
+// my conversations have branch, except normal full path embedding or shared path + distinct path embedding,
+// ai is also suggesting turn by turn embedding, I'd like to try that
 
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};

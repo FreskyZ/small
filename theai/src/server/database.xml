@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<database name="MyChat">
+<database name="YALA">
   <table name="Session">
     <primary-key field="SessionId" />
     <field name="SessionId" type="id" />

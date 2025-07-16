@@ -253,7 +253,7 @@ const config = JSON.parse(await fs.readFile('../config', 'utf-8')) as {
 
 type QueryResult<T> = T & mysql.RowDataPacket;
 type ManipulateResult = mysql.ResultSetHeader;
-const connection = await mysql.createConnection({ ...config.database, database: 'MyChat' });
+const connection = await mysql.createConnection({ ...config.database, database: 'YALA' });
 
 // no transaction here, so should check both sessionid and messageid existance
 const [dbSessions] = await connection.query<QueryResult<{ id: string }>[]>(

@@ -1,5 +1,5 @@
 /** @jsxImportSource @emotion/react */
-import { useState, useEffect, useMemo, useLayoutEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
 import * as I from '../shared/api.js';
@@ -15,7 +15,7 @@ function notification(message: string) {
     notificationElement.innerText = message;
     notificationTimer = setTimeout(() => {
         notificationElement.style.display = 'none';
-    }, 5000);
+    }, 10_000);
 }
 
 function DeleteOutlined() {
@@ -53,63 +53,56 @@ function CloseOutlined() {
 }
 
 // I'm a proffessional user, so I can use complex query syntax
-// "name=foo" for name include "foo"
-// "tag=bar" for tag include bar, which match tags = [bar, baz], not match tags = [foo, barbaz]
-// "name='foo bar'" for whitespace in search keyword
-// "name=foo and tag=bar" and "name=foo or tag=bar" for multiple conditions
-// "(name=foo or tag='bar baz') and (name=brown and (tag=fox or tag='jump over'))" for complex conditions
-// TODO try "not tag=hidden"
+// `name = foo` for name include "foo"
+// `tag = bar` for tag include bar, which match tags = [bar, baz], not match tags = [foo, barbaz]
+// `name = 'foo bar'` for whitespace/punctuations in search keyword
+// `name = foo and tag = bar` and `name = foo or tag = bar` for combined conditions
+// `(name = foo or tag = ' bar baz') and (name = brown and (tag = fox or tag = 'jump over'))` for complex conditions
+// `not name = foor` and `not tag = 'bar'` for negative condition
 
 type QueryNode = {
-  kind: 'condition',
-  field: 'name' | 'tag',
-  value: string,
+    kind: 'condition',
+    field: 'name' | 'tag',
+    value: string,
 } | {
-  kind: 'and' | 'or',
-  left: QueryNode,
-  right: QueryNode,
+    kind: 'not',
+    expr: QueryNode,
+} | {
+    kind: 'and' | 'or',
+    left: QueryNode,
+    right: QueryNode,
 };
 
-// return array of
-// leftparen (as '('), rightparen (as ')'),
-// and (as 'and'), or (as 'or')
-// condition ('name=foo', etc.)
+// token can be
+// - punctuation: '='
+// - parenthesis: '(', ')'
+// - keyword or word: 'name', 'tag', 'not', 'foo', 'bar'
+// - quoted content is removed quote and regard as single word
 function tokenize(queryString: string): string[] {
     const tokens: string[] = [];
     let i = 0;
-    
     while (i < queryString.length) {
         const char = queryString[i];
         if (char == ' ') {
             i++;
-            continue;
-        }
-        if (char == '(' || char == ')') {
+        } else if (char == '(' || char == ')' || char == '=') {
+            i++;
             tokens.push(char);
-            i++;
-            continue;
-        }
-        if (char == "'" || char == '"') {
-            const quote = char;
-            i++; // skip opening quote
-            let value = '';
-            while (i < queryString.length && queryString[i] != quote) {
-                value += queryString[i];
-                i++;
+        } else if (char == "'" || char == '"') {
+            const endIndex = queryString.indexOf(char, i + 1);
+            if (endIndex < 0) {
+                throw new Error(`invalid syntax: expect end quote from positon ${i}, meet EOL`);
             }
-            i++; // skip closing quote
-            tokens.push(value);
-            continue;
-        }
-
-        // Read word or condition
-        let word = '';
-        while (i < queryString.length && ![' ', '(', ')', "'", '"'].includes(queryString[i])) {
-            word += queryString[i];
-            i++;
-        }
-        if (word) {
-            tokens.push(word);
+            tokens.push(queryString.substring(i + 1, endIndex));
+            i = endIndex + 1; // skip closing quote
+        } else {
+            const match = /^([\p{L}\d]+)/u.exec(queryString.substring(i));
+            if (match) {
+                tokens.push(match[0]);
+                i += match[0].length;
+            } else {
+                throw new Error(`invalid syntax: expect word at position ${i}`);
+            }
         }
     }
     return tokens;
@@ -117,41 +110,48 @@ function tokenize(queryString: string): string[] {
 
 function parsePrimaryExpression(tokens: string[]): QueryNode {
     if (tokens.length == 0) {
-        throw new Error('Unexpected end of query');
+        // this seems will not happen after wrapped by parseunaryexpr
+        throw new Error(`invalid syntax: expect primary expression, meet EOL`);
     }
     if (tokens[0] == '(') {
         tokens.shift(); // consume '('
         const expr = parseExpression(tokens);
         // @ts-ignore -- tokens have shifted, this is false positive
         if (tokens.length == 0 || tokens[0] != ')') {
-            throw new Error('Missing closing parenthesis');
+            throw new Error('invalid syntax: expect end paren, meet EOL');
         }
         tokens.shift(); // consume ')'
         return expr;
     }
     
-    // Parse condition like "name=foo" or "tag=bar"
-    const condition = tokens.shift()!;
-    const parts = condition.split('=');
-    if (parts.length !== 2) {
-        throw new Error(`Invalid condition: ${condition}`);
+    // Parse condition like "name = foo" or "tag = bar"
+    if (tokens[0] != 'name' && tokens[0] != 'tag') {
+        throw new Error(`invalid syntax: expect name or tag, meet ${tokens[0]}`);
     }
-    const field = parts[0];
-    let value = parts[1];
-    // If the value part is empty and next token exists, it might be a quoted value
-    if (!value && tokens.length > 0 && !['and', 'or', '(', ')'].includes(tokens[0])) {
-        value = tokens.shift()!;
+    const field = tokens.shift() as 'name' | 'tag';
+    // @ts-ignore -- tokens have shifted, this is false positive, again
+    if (tokens[0] != '=') {
+        throw new Error(`invalid syntax: expect equal mark, meet ${tokens[0]}`);
     }
-    if (field != 'name' && field != 'tag') {
-        throw new Error(`Invalid field: ${field}`);
-    }
+    tokens.shift(); // skip equal mark
+    // everything at this position is keyword, include '=', '(' and ')'?
+    const value = tokens.shift();
     return { kind: 'condition', field, value };
 }
-function parseAndExpression(tokens: string[]): QueryNode {
+function parseUnaryExpression(tokens: string[]): QueryNode {
+    if (tokens.length == 0) {
+        throw new Error(`invalid syntax: expect unary expression, meet EOL`);
+    }
+    let not = tokens[0] == 'not';
+    if (not) { tokens.shift(); }
     let node = parsePrimaryExpression(tokens);
+    return not ? { kind: 'not', expr: node } : node;
+}
+function parseAndExpression(tokens: string[]): QueryNode {
+    let node = parseUnaryExpression(tokens);
     while (tokens.length > 0 && tokens[0] == 'and') {
         tokens.shift(); // consume 'and'
-        const right = parsePrimaryExpression(tokens);
+        const right = parseUnaryExpression(tokens);
         node = { kind: 'and', left: node, right };
     }
     return node;
@@ -168,6 +168,123 @@ function parseOrExpression(tokens: string[]): QueryNode {
 function parseExpression(tokens: string[]): QueryNode {
     return parseOrExpression(tokens);
 }
+// (window as any)['parseExpressionTest'] = () => {
+//     function testcase(input: string, expect: QueryNode) {
+//         function compareNode(actual: QueryNode, expect: QueryNode, path: string) {
+//             if (actual.kind != expect.kind) {
+//                 throw new Error(`${path}: kind mismatch, actual ${actual.kind} expect ${expect.kind}`);
+//             } else if (actual.kind == 'condition' && expect.kind == 'condition') {
+//                 if (actual.field != expect.field) { throw new Error(`${path}: field mismatch, actual ${actual.field} expect ${expect.field}`); }
+//                 if (actual.value != expect.value) { throw new Error(`${path}: field mismatch, actual ${actual.value} expect ${expect.value}`); }
+//             } else if (actual.kind == 'not' && expect.kind == 'not') {
+//                 compareNode(actual.expr, expect.expr, path + ':not');
+//             } else if ((actual.kind == 'and' || actual.kind == 'or') && (expect.kind == 'and' || expect.kind == 'or')) {
+//                 compareNode(actual.left, expect.left, path + `:${actual.kind}-left`);
+//                 compareNode(actual.right, expect.right, path + `:${actual.kind}-right`);
+//             }
+//         }
+//         compareNode(parseExpression(tokenize(input)), expect, 'root');
+//     }
+//     testcase('name=abc', { kind: 'condition', field: 'name', value: 'abc' });
+//     testcase('name=123', { kind: 'condition', field: 'name', value: '123' });
+//     testcase('tag=work', { kind: 'condition', field: 'tag', value: 'work' });
+//     testcase('name = abc', { kind: 'condition', field: 'name', value: 'abc' });
+//     testcase('name= 123', { kind: 'condition', field: 'name', value: '123' });
+//     testcase('tag =work', { kind: 'condition', field: 'tag', value: 'work' });
+//     testcase("name='foo bar'", { kind: 'condition', field: 'name', value: 'foo bar' });
+//     testcase('name = "hello(+)world"', { kind: 'condition', field: 'name', value: 'hello(+)world' });
+    
+//     // Test AND operations
+//     testcase('name=foo and tag=bar', {
+//         kind: 'and',
+//         left: { kind: 'condition', field: 'name', value: 'foo' },
+//         right: { kind: 'condition', field: 'tag', value: 'bar' }
+//     });
+//     testcase('name = foo and tag = bar', {
+//         kind: 'and',
+//         left: { kind: 'condition', field: 'name', value: 'foo' },
+//         right: { kind: 'condition', field: 'tag', value: 'bar' }
+//     });
+    
+//     // Test OR operations
+//     testcase('name=foo or tag=bar', {
+//         kind: 'or',
+//         left: { kind: 'condition', field: 'name', value: 'foo' },
+//         right: { kind: 'condition', field: 'tag', value: 'bar' }
+//     });
+    
+//     // Test NOT operations
+//     testcase('not name=foo', {
+//         kind: 'not',
+//         expr: { kind: 'condition', field: 'name', value: 'foo' }
+//     });
+//     testcase('not tag = bar', {
+//         kind: 'not',
+//         expr: { kind: 'condition', field: 'tag', value: 'bar' }
+//     });
+    
+//     // Test parentheses
+//     testcase('(name=foo)', { kind: 'condition', field: 'name', value: 'foo' });
+//     testcase('(name=foo or tag=bar)', {
+//         kind: 'or',
+//         left: { kind: 'condition', field: 'name', value: 'foo' },
+//         right: { kind: 'condition', field: 'tag', value: 'bar' }
+//     });
+    
+//     // Test complex nested expressions
+//     testcase('(name=foo or tag=bar) and name = baz', {
+//         kind: 'and',
+//         left: {
+//             kind: 'or',
+//             left: { kind: 'condition', field: 'name', value: 'foo' },
+//             right: { kind: 'condition', field: 'tag', value: 'bar' }
+//         },
+//         right: { kind: 'condition', field: 'name', value: 'baz' }
+//     });
+    
+//     // Test operator precedence (AND has higher precedence than OR)
+//     testcase('name = a or name = b and tag = c', {
+//         kind: 'or',
+//         left: { kind: 'condition', field: 'name', value: 'a' },
+//         right: {
+//             kind: 'and',
+//             left: { kind: 'condition', field: 'name', value: 'b' },
+//             right: { kind: 'condition', field: 'tag', value: 'c' }
+//         }
+//     });
+    
+//     // Test NOT with complex expressions
+//     testcase('not (name=foo and tag=bar)', {
+//         kind: 'not',
+//         expr: {
+//             kind: 'and',
+//             left: { kind: 'condition', field: 'name', value: 'foo' },
+//             right: { kind: 'condition', field: 'tag', value: 'bar' }
+//         }
+//     });
+    
+//     // Test multiple ANDs
+//     testcase('name=a and tag=b and name=c', {
+//         kind: 'and',
+//         left: {
+//             kind: 'and',
+//             left: { kind: 'condition', field: 'name', value: 'a' },
+//             right: { kind: 'condition', field: 'tag', value: 'b' }
+//         },
+//         right: { kind: 'condition', field: 'name', value: 'c' }
+//     });
+    
+//     // Test multiple ORs
+//     testcase('name=a or tag=b or name=c', {
+//         kind: 'or',
+//         left: {
+//             kind: 'or',
+//             left: { kind: 'condition', field: 'name', value: 'a' },
+//             right: { kind: 'condition', field: 'tag', value: 'b' }
+//         },
+//         right: { kind: 'condition', field: 'name', value: 'c' }
+//     });
+// };
 
 function matchQueryNode(item: I.Session, node: QueryNode): boolean {
     if (node.kind == 'condition') {
@@ -178,6 +295,8 @@ function matchQueryNode(item: I.Session, node: QueryNode): boolean {
         } else {
             return false; // should be unreachable
         }
+    } else if (node.kind == 'not') {
+        return !matchQueryNode(item, node.expr);
     } else if (node.kind == 'and') {
         return matchQueryNode(item, node.left) && matchQueryNode(item, node.right);
     } else if (node.kind == 'or') {
@@ -189,8 +308,7 @@ function matchQueryNode(item: I.Session, node: QueryNode): boolean {
 function executeQuery(items: I.Session[], queryString: string): I.Session[] {
     if (!queryString.trim()) return items;
     
-    const tokens = tokenize(queryString);
-    const query = parseExpression(tokens);
+    const query = parseExpression(tokenize(queryString));
     return items.filter(item => matchQueryNode(item, query));
 }
 
@@ -198,29 +316,33 @@ function App() {
 
     const narrow = window.matchMedia('(max-width: 600px)').matches;
     const [listCollapsed, setListCollapsed] = useState(narrow);
-    const styles1 = useMemo(() => createListStyles(listCollapsed), [listCollapsed]);
     const [infoCollapsed, setInfoCollapsed] = useState(true);
-    const styles2 = useMemo(() => createSessionAuxiliaryStyles(listCollapsed, infoCollapsed), [listCollapsed, infoCollapsed]);
-    const styles3 = useMemo(() => createConversationStyles(listCollapsed, infoCollapsed), [listCollapsed, infoCollapsed]);
 
-    // this list does not include messages
-    const [sessionsLoading, setSessionsLoading] = useState(true);
-    // TODO distinguish editing properties (name, comment, tags)
+    const styles0 = useMemo(() => createPageStyles(), []);
+    const styles1 = useMemo(() => createMainStyles(), []);
+    const styles2 = useMemo(() => createInfoStyles(infoCollapsed), [infoCollapsed]);
+    const styles3 = useMemo(() => createListStyles(infoCollapsed), [infoCollapsed]);
+    const styles4 = useMemo(() => createModalStyles(), []);
+
+    // this list does not include messages    
     const [sessions, setSessions] = useState<I.Session[]>([]);
-
     const [queryString, setQueryString] = useState<string>('');
+    const [accountBalance, setAccountBalance] = useState<number>(null);
     // only update this when clicking apply
     const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
 
-    // current selected session id
-    const [sessionLoading, setSessionLoading] = useState(false);
+    const [modalOpen, setModalOpen] = useState(false);
+
+    // current selected session id, null for not selected (new session)
     const [sessionId, setSessionId] = useState(null);
+    const [editingSessionName, setEditingSessionName] = useState('');
+    const [editingComment, setEditingComment] = useState('');
+    const [editingTags, setEditingTags] = useState('');
     // current selected session's all messages
     // TODO distinguish editing content
     const [messages, setMessages] = useState<I.Message[]>([]);
     // current displaying message id path
     const [messagePath, setMessagePath] = useState<number[]>([]);
-    const [accountBalance, setAccountBalance] = useState<number>(null);
 
     useEffect(() => {
         (async () => {
@@ -228,7 +350,6 @@ function App() {
             const sessions = await api.getSessions();
             setSessions(sessions);
             setDisplaySessions(sessions);
-            setSessionsLoading(false);
             const maybeSessionId = parseInt(window.location.pathname.substring(1));
             if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
                 handleSelectSession(maybeSessionId);
@@ -243,8 +364,8 @@ function App() {
     const handleQuery = () => {
         try {
             setDisplaySessions(executeQuery(sessions, queryString));
-        } catch {
-            notification('invalid search');
+        } catch (error) {
+            notification('failed to search: ' + error.message);
         }
     };
     const handleClearQuery = () => {
@@ -256,6 +377,12 @@ function App() {
         setDisplaySessions(sessions);
     }, [sessions]);
 
+    const handleReloadAccountBalance = async () => {
+        const result = await api.getAccountBalance();
+        setAccountBalance(result.balance);
+    };
+
+
     const handleAddSession = async () => {
         const result = await api.addSession({} as I.Session);
         setSessions([result].concat(sessions));
@@ -264,8 +391,13 @@ function App() {
         setMessages(result.messages);
         setMessagePath([result.messages[0].id]);
     };
+    const handleDeleteSession = async (sessionId: number) => {
+        if (confirm('delete session?')) {
+            await api.removeSession(sessionId);
+        }
+    };
+
     const handleSelectSession = async (sessionId: number) => {
-        setSessionLoading(true);
         setInfoCollapsed(true);
         // TODO update session properties when selecting session (name, comment, tags, shared)
         const messages = (await api.getSession(sessionId)).messages;
@@ -274,7 +406,6 @@ function App() {
         while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
             messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
         }
-        setSessionLoading(false);
         setSessionId(sessionId);
         setMessages(messages);
         setMessagePath(messagePath);
@@ -282,16 +413,6 @@ function App() {
         const url = new URL(window.location.toString());
         url.pathname = `/${sessionId}`;
         window.history.pushState(null, '', url.toString());
-    };
-    const handleDeleteSession = async (sessionId: number) => {
-        if (confirm('delete session?')) {
-            await api.removeSession(sessionId);
-        }
-    };
-
-    const handleReloadAccountBalance = async () => {
-        const result = await api.getAccountBalance();
-        setAccountBalance(result.balance);
     };
 
     const handleUpdateSession = async (sessionId: number) => {
@@ -322,17 +443,17 @@ function App() {
     };
 
     // NOTE before editing state, try auto height for all textareas while messages/messagePath change
-    useLayoutEffect(() => {
-        const container = document.querySelector<HTMLDivElement>('div#session-content-container');
-        const wasAtBottom = !container ? false : container.clientHeight + container.scrollTop >= container.scrollHeight - 10;
-        document.querySelectorAll<HTMLTextAreaElement>('textarea.major-content').forEach(e => {
-            e.style.height = '8px'; // if you don't shrink them, they will become higher and higher when rendering
-            e.style.height = e.scrollHeight + 'px';
-        });
-        if (wasAtBottom) {
-            container.scrollTo({ top: container.scrollHeight - container.clientHeight });
-        }
-    }, [messages, messagePath]);
+    // useLayoutEffect(() => {
+    //     const container = document.querySelector<HTMLDivElement>('div#session-content-container');
+    //     const wasAtBottom = !container ? false : container.clientHeight + container.scrollTop >= container.scrollHeight - 10;
+    //     document.querySelectorAll<HTMLTextAreaElement>('textarea.major-content').forEach(e => {
+    //         e.style.height = '8px'; // if you don't shrink them, they will become higher and higher when rendering
+    //         e.style.height = e.scrollHeight + 'px';
+    //     });
+    //     if (wasAtBottom) {
+    //         container.scrollTo({ top: container.scrollHeight - container.clientHeight });
+    //     }
+    // }, [messages, messagePath]);
 
     // to make things simple, add message directly add to db
     const handleAddMessage = async () => {
@@ -405,258 +526,144 @@ function App() {
         setMessagePath(messagePath.slice(0, messagePath.find(m => m == messageId) + 1).concat(result.id));
     };
 
+    // for now, only for pc browser
+    // the layout structure is page title => content/new => header => list, which represents the z index without specifying zindex property
+    // TODO real layered structure for mobile browser
+
     const session = sessions.find(s => s.id == sessionId);
-    return <>
-        <div css={styles1.list}>
+    return <div css={styles0.page}>
+        <span css={styles1.pageTitleContainer}>
+            <div css={styles1.pageTitle} onClick={() => setModalOpen(!modalOpen)}><a>YALA</a></div>
+            <div css={styles1.pageSubtitle}>Yet Another Llm chAt ui.</div>
+        </span>
+        <div css={styles1.headerContainer}>
+            {sessionId && <span css={styles1.sessionNameContainer} onClick={() => setInfoCollapsed(!infoCollapsed)}>
+                <span css={styles1.sessionName}>{session.name}</span>
+                <button css={styles1.collapseButton} title='Collapse'><CaretRightOutlined /></button>
+            </span>}
+        </div>
+        {session ? <div css={styles1.sessionContentContainer}>
+            {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles1.messageContainer}>
+                <div css={styles1.messageHeader}>
+                    <span css={styles1.role}>{m.role.toUpperCase()}</span>
+                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
+                        css={[styles1.headerButton, styles1.prevButton]} title="Prev"
+                        disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
+                        onClick={() => handleNavigateBranch(m, false)}><CaretRightOutlined /></button>}
+                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <span css={styles1.pageDisplay}>
+                        {messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) + 1}/{messages.filter(a => a.parentId == m.parentId).map(a => a.id).length}</span>}
+                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
+                        css={styles1.headerButton} title='Next'
+                        disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
+                        onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
+                    {/* TODO change to dotdotdot popup menu in mobile page */}
+                    {/* TODO copy content button */}
+                    <button css={styles1.headerButton}
+                        title='Save current edit in this message record'
+                        onClick={() => handleUpdateMessage(m)}><SaveOutlined />EDIT</button>
+                    <button css={styles1.headerButton}
+                        title='Use current edit to branch message tree from parent message'
+                        onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>
+                    {m.role == 'user' && <button css={styles1.headerButton}
+                        title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
+                </div>
+                {/* TODO https://marked.js.org/#usage */}
+                {/* TODO https://github.com/remarkjs/react-markdown, NOTE react-markdown don't support ai's latex syntax, need something like const preprocessLaTeX = (content: string) => {
+                    // Replace block-level LaTeX delimiters \[ \] with $$ $$  
+                    const blockProcessedContent = content.replace(
+                        /\\\[(.*?)\\\]/gs,
+                        (_, equation) => `$$${equation}$$`,
+                    );
+                    // Replace inline LaTeX delimiters \( \) with $ $
+                    const inlineProcessedContent = blockProcessedContent.replace(
+                        /\\\((.*?)\\\)/gs,
+                        (_, equation) => `$${equation}$`,
+                    );
+                    return inlineProcessedContent;
+                    }; also see https://github.com/remarkjs/react-markdown/issues/785 */}
+                <textarea className='major-content' css={styles1.textarea} value={m.content}
+                    onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
+                <div css={styles1.messageHeader}>
+                    <span>{m.createTime}</span>
+                    {!!m.promptTokenCount && !!m.completionTokenCount && <span>{m.promptTokenCount}/{m.completionTokenCount}</span>}
+                    <button css={styles1.headerButton} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
+                </div>
+            </div>)}
             <div>
-                <button css={styles1.addButton} disabled={sessionsLoading} onClick={() => handleAddSession()}>New Chat</button>
+                <button onClick={handleAddMessage}>ADD</button>
             </div>
-            <div css={styles1.queryContainer}>
-                <input css={styles1.queryString} value={queryString}
+        </div> : <div css={styles1.newSessionContainer}>
+            <div>Start new chat</div>
+            <input css={styles1.newSessionTitle}></input>
+            <textarea></textarea>
+            <button>SEND</button>
+        </div>}
+        {/* this is floating on normal screen and a layer on narrow screen */}
+        {sessionId && <div css={styles2.sessionInfoContainer}>
+            <span css={styles2.label}>Name</span>
+            <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
+            <span css={styles2.label}>Comment</span>
+            <textarea value={session.comment ?? ''} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
+            <span css={styles2.label}>Tags</span>
+            <input value={session.tags.join(',')} onChange={e => { session.tags = e.target.value.split(','); setSessions([...sessions]); }} />
+            <span css={styles2.saveLine}>
+                <span css={styles2.label}>Created at {session.createTime}</span>
+                <button css={styles2.saveButton} onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
+            </span>
+            <span css={styles2.shareLine}>
+                <button title={session.shareId ? 'Unshare' : 'Share'} onClick={handleShareClick}><ShareOutlined /></button>
+                <input value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} readOnly={true} />
+                {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleShareLinkCopy()}><CopyOutlined /></button>}
+            </span>
+        </div>}
+        {/* this is floating on normal screen and a layer on narrow screen */}
+        <div css={styles3.listContainer}>
+            <div>
+                <button css={styles3.addButton} onClick={() => handleSelectSession(null)}>New Chat</button>
+            </div>
+            <div css={styles3.queryContainer}>
+                <input css={styles3.queryString} value={queryString}
                     onKeyUp={e => { if (e.key == 'Enter') { handleQuery(); } } } onChange={e => setQueryString(e.target.value)} />
-                <button title='Clear search' css={styles1.queryButton} onClick={handleClearQuery}><CloseOutlined /></button>
-                <button title='Search' css={styles1.queryButton} onClick={handleQuery}><SearchOutlined /></button>
+                <button title='Clear search' css={styles3.queryButton} onClick={handleClearQuery}><CloseOutlined /></button>
+                <button title='Search' css={styles3.queryButton} onClick={handleQuery}><SearchOutlined /></button>
             </div>
-            <div css={styles1.itemContainer}>
-                {displaySessions.map(s => <div key={s.id} css={[styles1.listItem, sessionId == s.id && styles1.activeItem]}>
-                    <span onClick={() => !sessionLoading && handleSelectSession(s.id)}>{s.name}</span>
+            <div css={styles3.itemsContainer}>
+                {displaySessions.map(s => <div key={s.id} css={[styles3.listItem, sessionId == s.id && styles3.activeItem]}>
+                    <span onClick={() => handleSelectSession(s.id)}>{s.name}</span>
                     <button title="Delete" onClick={() => handleDeleteSession(s.id)}><DeleteOutlined /></button>
                 </div>)}
             </div>
-            <div css={styles1.listFooter}>
-                <button css={styles1.loadButton} onClick={handleReloadAccountBalance} title="Click to Check Balance"><ReloadOutlined /></button>
+        </div>
+        <button css={styles3.collapseButton} title='Collapse' onClick={() => setListCollapsed(!listCollapsed)}><MenuFoldOutlined /></button>
+        {/* this is always a modal on normal or narrow screen */}
+        {modalOpen && <div css={styles4.modalMask} onClick={() => setModalOpen(false)}></div>}
+        {modalOpen && <div css={styles4.modalContainer}>
+            <a href="https://github.com/freskyz/small/tree/main/theai">https://github.com/freskyz/small/tree/main/theai</a>
+            <div css={styles4.listFooter}>
+                <button css={styles4.loadButton} onClick={handleReloadAccountBalance} title="Click to Check Balance"><ReloadOutlined /></button>
                 <span>Balance: {accountBalance ?? '?'}</span>
             </div>
-        </div>
-        <button css={styles1.collapseButton}
-            title='Collapse' onClick={() => setListCollapsed(!listCollapsed)}><MenuFoldOutlined /></button>
-        <div css={styles2.sessionContainer}>
-            <div css={styles2.sessionNameContainer} onClick={() => !sessionLoading && session && setInfoCollapsed(!infoCollapsed)}>
-                <span css={styles2.sessionName}>{session?.name ?? 'New Chat'}</span>
-                <button css={styles2.collapseButton} title='Collapse'><CaretRightOutlined /></button>
-            </div>
-            {/* TODO let this panel float */}
-            {!!session && <div css={styles2.sessionInfoContainer}>
-                <span css={styles2.label}>Name</span>
-                <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
-                <span css={styles2.label}>Comment</span>
-                <textarea value={session.comment ?? ''} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
-                <span css={styles2.label}>Tags</span>
-                <input value={session.tags.join(',')} onChange={e => { session.tags = e.target.value.split(','); setSessions([...sessions]); }} />
-                <span css={styles2.saveLine}>
-                    <span css={styles2.label}>Created at {session.createTime}</span>
-                    <button css={styles2.saveButton} onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
-                </span>
-                <span css={styles2.shareLine}>
-                    <button title={session.shareId ? 'Unshare' : 'Share'} onClick={handleShareClick}><ShareOutlined /></button>
-                    <input value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} readOnly={true} />
-                    {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleShareLinkCopy()}><CopyOutlined /></button>}
-                </span>
-            </div>}
-            {!!session ? <div id='session-content-container' css={styles3.sessionContentContainer}>
-                {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles3.messageContainer}>
-                    <div css={styles3.messageHeader}>
-                        <span css={styles3.role}
-                            title={m.promptTokenCount && m.completionTokenCount ? `${m.promptTokenCount}/${m.completionTokenCount}` : undefined}>
-                            {m.role.toUpperCase()}
-                        </span>
-                        {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
-                            css={[styles3.headerButton, styles3.prevButton]} title="Prev"
-                            disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
-                            onClick={() => handleNavigateBranch(m, false)}><CaretRightOutlined /></button>}
-                        {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <span css={styles3.pageDisplay}>
-                            {messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) + 1}/{messages.filter(a => a.parentId == m.parentId).map(a => a.id).length}</span>}
-                        {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
-                            css={styles3.headerButton} title='Next'
-                            disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
-                            onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
-                        {/* TODO change to dotdotdot popup menu in mobile page */}
-                        {/* TODO copy content button */}
-                        <button css={styles3.headerButton}
-                            title='Save current edit in this message record'
-                            onClick={() => handleUpdateMessage(m)}><SaveOutlined />EDIT</button>
-                        <button css={styles3.headerButton}
-                            title='Use current edit to branch message tree from parent message'
-                            onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>
-                        <button css={styles3.headerButton} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
-                        {m.role == 'user' && <button css={styles3.headerButton}
-                            title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
-                    </div>
-                    {/* TODO https://marked.js.org/#usage */}
-                    {/* TODO https://github.com/remarkjs/react-markdown, NOTE react-markdown don't support ai's latex syntax, need something like const preprocessLaTeX = (content: string) => {
-                        // Replace block-level LaTeX delimiters \[ \] with $$ $$  
-                        const blockProcessedContent = content.replace(
-                            /\\\[(.*?)\\\]/gs,
-                            (_, equation) => `$$${equation}$$`,
-                        );
-                        // Replace inline LaTeX delimiters \( \) with $ $
-                        const inlineProcessedContent = blockProcessedContent.replace(
-                            /\\\((.*?)\\\)/gs,
-                            (_, equation) => `$${equation}$`,
-                        );
-                        return inlineProcessedContent;
-                        }; also see https://github.com/remarkjs/react-markdown/issues/785 */}
-                    <textarea className='major-content' css={styles3.textarea} value={m.content}
-                        onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
-                </div>)}
-                <div>
-                    <button onClick={handleAddMessage}>ADD</button>
-                </div>
-            </div> : <div>TODO start new session</div>}
-        </div>
-    </>;
+            <input id="dark-mode" type="checkbox"></input>
+            {/* TODO // https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/light-dark */}
+            <label htmlFor="dark-mode">Dark Mode</label>
+        </div>}
+    </div>;
 }
 
-const createListStyles = (collapsed: boolean) => ({
-    list: css({
-        position: 'fixed',
-        top: 0,
-        right: collapsed ? '-280px' : 0,
-        height: '100vh',
-        width: '280px',
-        background: '#e7e7e7',
-        padding: '12px',
-        boxSizing: 'border-box',
-        transition: 'right 0.2s',
-        // backup in case you need this
-        // '@media (max-width: 600px)': {},
-    }),
-    collapseButton: css({
-        position: 'fixed',
-        top: '12px',
-        right: '12px',
-        border: 'none',
-        background: 'none',
-        padding: '10px 11px 5px 11px',
-        borderRadius: '6px',
-        cursor: 'pointer',
-        fontSize: '16px',
-        color: '#333',
-        rotate: collapsed ? '180deg' : '0',
-        '&:hover': {
-            background: '#ccc',
-        }
-    }),
-    queryContainer: css({
-        display: 'flex',
-        gap: '4px',
-        marginTop: '8px',
-        height: '28px',
-    }),
-    queryString: css({
-        border: 'none',
-        borderBottom: '1px solid gray',
-        height: '24px',
-        width: '188px',
-        background: 'transparent',
-    }),
-    queryButton: css({
-        height: '28px',
-        padding: '8px',
-        fontSize: '12px',
-        color: '#333',
-        background: 'transparent',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer',
-        '&:hover': {
-            background: '#ccc',
-        }
-    }),
-    itemContainer: css({
-        marginTop: '12px',
-        height: 'calc(100vh - 128px)',
-        overflowX: 'hidden',
-        overflowY: 'auto',
-    }),
-    listFooter: css({
-        display: 'flex',
-        height: '24px',
-        flexDirection: 'row-reverse',
-        'span': {
-            cursor: 'default',
-            fontSize: '12px',
-            lineHeight: '24px',
-        }
-    }),
-    loadButton: css({
-        height: '24px',
-        padding: '4px',
-        fontSize: '12px',
-        color: '#333',
-        background: 'transparent',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer',
-        marginLeft: '8px',
-        '&:hover': {
-            background: '#aaa',
-        }
-    }),
-    addButton: css({
-        padding: '8px 16px',
-        fontSize: '16px',
-        fontWeight: 'bold',
-        color: '#333',
-        backgroundColor: '#ccc',
-        border: 'none',
-        borderRadius: '6px',
-        cursor: 'pointer',
-        boxShadow: '0 2px 8px rgba(40, 46, 56, 0.15)',
-        transition: 'background 0.2s, box-shadow 0.2s',
-        '&:hover': {
-            boxShadow: '0 3px 12px rgba(68, 74, 87, 0.25)',
-        },
-    }),
-    listItem: css({
-        width: '248px',
-        borderRadius: '8px',
-        padding: '0 0 0 8px',
-        height: '36px',
-        cursor: 'pointer',
-        marginLeft: '-2px',
-        display: 'flex',
-        'span': {
-            lineHeight: '36px',
-            width: '212px',
-            display: 'inline-block',
-            textOverflow: 'ellipsis',
-            overflow: 'hidden',
-            whiteSpace: 'nowrap',
-        },
-        'button': {
-            display: 'none',
-            border: 'none',
-            background: 'none',
-            padding: '9px 11px 4px 11px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '16px',
-            '&:hover': {
-                background: '#aaa',
-            }
-        },
-        '&:hover': {
-            background: '#ccc',
-            'button': {
-                display: 'inline',
-            }
-        }
-    }),
-    activeItem: css({
-        background: '#ccc',
-        'button': {
-            display: 'inline',
-        }
+// becomes styles0, currently only the page container
+const createPageStyles = () => ({
+    page: css({
     }),
 });
-const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean) => ({
-    sessionContainer: css({
-        width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
-        marginTop: '-50px',
+
+// becomes style1, main header and content styles
+const createMainStyles = () => ({
+
+    headerContainer: css({
         display: 'flex',
-        flexDirection: 'column',
+        flexFlow: 'column',
         alignItems: 'center',
+        height: '50px',
     }),
     sessionNameContainer: css({
         marginTop: '4px',
@@ -686,9 +693,91 @@ const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean
         outline: 'none',
         fontSize: '14px',
         cursor: 'pointer',
-        rotate: collapsed ? '90deg' : '-90deg',
+        // rotate: collapsed ? '90deg' : '-90deg',
         // transformOrigin: '13px 9px',
     }),
+    pageTitleContainer: css({
+        position: 'fixed',
+    }),
+    pageTitle: css({
+        fontFamily: 'Georgia,seirf',
+        fontSize: '24px',
+        fontStyle: 'italic',
+        fontWeight: 600,
+        textDecoration: 'none',
+    }),
+    pageSubtitle: css({
+        fontSize: '10px',
+        color: '#666',
+    }),
+    sessionContentContainer: css({
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        // width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
+        maxWidth: '800px',
+        // maxHeight: infoCollapsed ? 'calc(100vh - 60px)' : 'calc(100vh - 360px)',
+    }),
+    messagesContainer: css({
+        // width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
+        marginTop: '-50px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+    }),
+    messageContainer: css({
+    }),
+    messageHeader: css({
+        display: 'flex',
+        gap: '4px',
+        padding: '4px 4px 0 4px',
+        height: '32px',
+        boxSizing: 'border-box',
+    }),
+    role: css({
+        lineHeight: '28px',
+        cursor: 'default',
+        marginRight: '4px',
+    }),
+    pageDisplay: css({
+        fontSize: '12px',
+        lineHeight: '28px',
+        cursor: 'default',
+    }),
+    headerButton: css({
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        padding: '6px',
+        fontSize: '12px',
+        cursor: 'pointer',
+        '&:hover': {
+            background: '#eee',
+        },
+        'svg': {
+            marginRight: '2px',
+        }
+    }),
+    prevButton: css({
+        rotate: '180deg',
+    }),
+    completeButton: css({
+        // this should be a major button so a dedicated style
+        // but seems this is not major button in current design
+    }),
+    textarea: css({
+        resize: 'vertical',
+        width: 'calc(100% - 16px)',
+    }),
+    newSessionContainer: css({
+
+    }),
+    newSessionTitle: css({
+
+    }),
+});
+
+// becomes styles2, session info panel
+const createInfoStyles = (collapsed: boolean) => ({
     sessionInfoContainer: css({
         background: '#eee',
         borderRadius: '8px',
@@ -747,59 +836,168 @@ const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean
         },
     }),
 });
-const createConversationStyles = (listCollapsed: boolean, infoCollapsed: boolean) => ({
-    sessionContentContainer: css({
-        overflowX: 'hidden',
-        overflowY: 'auto',
-        width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
-        maxWidth: '800px',
-        maxHeight: infoCollapsed ? 'calc(100vh - 60px)' : 'calc(100vh - 360px)',
+
+// becomes styles3, session list panel
+const createListStyles = (collapsed: boolean) => ({
+    listContainer: css({
+        position: 'fixed',
+        top: 0,
+        right: /*collapsed ? '-280px' :*/ 0,
+        height: '100vh',
+        width: '280px',
+        background: '#e7e7e7',
+        padding: '12px 0 12px 12px',
+        boxSizing: 'border-box',
+        transition: 'right 0.2s',
+        // backup in case you need this
+        // '@media (max-width: 600px)': {},
     }),
-    messageContainer: css({
+    collapseButton: css({
+        position: 'fixed',
+        top: '12px',
+        right: '12px',
+        border: 'none',
+        background: 'none',
+        padding: '10px 11px 5px 11px',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        fontSize: '16px',
+        color: '#333',
+        rotate: collapsed ? '0' : '180deg',
+        '&:hover': {
+            background: '#ccc',
+        },
     }),
-    messageHeader: css({
+    queryContainer: css({
         display: 'flex',
         gap: '4px',
-        padding: '4px 4px 0 4px',
-        height: '32px',
-        boxSizing: 'border-box',
+        marginTop: '8px',
+        height: '28px',
     }),
-    role: css({
-        lineHeight: '28px',
-        cursor: 'default',
-        marginRight: '4px',
+    queryString: css({
+        border: 'none',
+        borderBottom: '1px solid gray',
+        height: '24px',
+        width: '188px',
+        background: 'transparent',
     }),
-    pageDisplay: css({
+    queryButton: css({
+        height: '28px',
+        padding: '8px',
         fontSize: '12px',
-        lineHeight: '28px',
-        cursor: 'default',
-    }),
-    headerButton: css({
+        color: '#333',
         background: 'transparent',
         border: 'none',
-        outline: 'none',
-        padding: '6px',
-        fontSize: '12px',
+        borderRadius: '4px',
         cursor: 'pointer',
         '&:hover': {
-            background: '#eee',
-        },
-        'svg': {
-            marginRight: '2px',
+            background: '#ccc', 
         }
     }),
-    prevButton: css({
-        rotate: '180deg',
+    itemsContainer: css({
+        marginTop: '12px',
+        height: 'calc(100vh - 128px)',
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        borderWidth: '1px 0',
+        borderStyle: 'solid',
+        borderColor: 'lightgray',
     }),
-    completeButton: css({
-        // this should be a major button so a dedicated style
-        // but seems this is not major button in current design
+    addButton: css({
+        padding: '8px 16px',
+        fontSize: '16px',
+        fontWeight: 'bold',
+        color: '#333',
+        backgroundColor: '#ccc',
+        border: 'none',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        boxShadow: '0 2px 8px rgba(40, 46, 56, 0.15)',
+        transition: 'background 0.2s, box-shadow 0.2s',
+        '&:hover': {
+            boxShadow: '0 3px 12px rgba(68, 74, 87, 0.25)',
+        },
     }),
-    textarea: css({
-        resize: 'vertical',
-        width: 'calc(100% - 16px)',
+    listItem: css({
+        width: '248px',
+        borderRadius: '8px',
+        padding: '0 0 0 8px',
+        height: '36px',
+        cursor: 'pointer',
+        marginLeft: '-2px',
+        display: 'flex',
+        'span': {
+            lineHeight: '36px',
+            width: '212px',
+            display: 'inline-block',
+            textOverflow: 'ellipsis',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+        },
+        'button': {
+            display: 'none',
+            border: 'none',
+            background: 'none',
+            padding: '9px 11px 4px 11px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '16px',
+            '&:hover': {
+                background: '#aaa',
+            }
+        },
+        '&:hover': {
+            background: '#ccc',
+            'button': {
+                display: 'inline',
+            }
+        }
+    }),
+    activeItem: css({
+        background: '#ccc',
+        'button': {
+            display: 'inline',
+        }
     }),
 });
+
+// become styles4, system modal
+const createModalStyles = () => ({
+    modalMask: css({
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: '#77777733',
+    }),
+    modalContainer: css({
+        background: '#eee',
+        position: 'absolute',
+        margin: '50px auto',
+        borderRadius: '8px',
+    }),
+    listFooter: css({
+        display: 'flex',
+        height: '24px',
+        'span': {
+            cursor: 'default',
+            fontSize: '12px',
+            lineHeight: '24px',
+        }
+    }),
+    loadButton: css({
+        height: '24px',
+        padding: '4px',
+        fontSize: '12px',
+        color: '#333',
+        background: 'transparent',
+        border: 'none',
+        borderRadius: '4px',
+        cursor: 'pointer',
+        marginLeft: '8px',
+        '&:hover': {
+            background: '#aaa',
+        }
+    }),
+})
 
 let accessToken: string;
 async function startup() {

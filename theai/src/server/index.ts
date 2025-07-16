@@ -19,7 +19,7 @@ const config = (JSON.parse(await fs.readFile('config', 'utf-8')) as {
 type QueryResult<T> = T & mysql.RowDataPacket;
 type ManipulateResult = mysql.ResultSetHeader;
 // so need to change database name to connect to this app's database
-const pool = mysql.createPool({ ...config.database, database: 'MyChat', typeCast: (field, next) =>
+const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: (field, next) =>
     field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1
     : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss') 
     : next(),
