@@ -133,7 +133,8 @@
           context.stroke();
         }
         arrowline(frame[0], frame[1], frame[0] + frame[2] - Math.sign(frame[2]), frame[1] + frame[3] - Math.sign(frame[3]), '#a30');
-        arrowline(frame[0], frame[1], frame[0] + frame[4] - Math.sign(frame[4]), frame[1] + frame[5] - Math.sign(frame[5]), '#630');
+        // this is for investigation, now rectangle and main axis is displayed correctly so no need this
+        // arrowline(frame[0], frame[1], frame[0] + frame[4] - Math.sign(frame[4]), frame[1] + frame[5] - Math.sign(frame[5]), '#630');
       }
       
       // draw path
@@ -161,7 +162,7 @@
       state.coordinates = [];
       state.stack = [];
       state.logs = [];
-      if (width >= height) {
+      if (state.size[0] >= state.size[1]) {
         state.stack.push([0, 0, state.size[0], 0, 0, state.size[1], 0]);
       } else {
         state.stack.push([0, 0, 0, state.size[1], state.size[0], 0, 0]);
@@ -176,6 +177,15 @@
         generateHilbertCurveImpl(...frame);
         requestAnimationFrame(drawState);
       } else if (autointerval) {
+        let turn = 0;
+        for (let i = 0; i < state.coordinates.length - 2; ++i) {
+          const [p1, p2, p3] = [state.coordinates[i], state.coordinates[i + 1], state.coordinates[i + 2]];
+          if (p2.x + (p2.x - p1.x) != p3.x || p2.y + (p2.y - p1.y) != p3.y) {
+            turn += 1;
+          }
+        }
+        addlog(`turn count ${turn}`);
+        document.querySelector('pre#logs').innerText = state.logs.join("\n");
         clearInterval(autointerval);
         autointerval = null;
       }
@@ -185,7 +195,7 @@
         clearInterval(autointerval);
         autointerval = null;
       } else {
-        autointerval = setInterval(handleSingleStep, 333);
+        autointerval = setInterval(handleSingleStep, 250);
       }
     }
 

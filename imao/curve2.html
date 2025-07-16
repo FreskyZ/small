@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Obfuscation Investigation</title>
+  <style>
+    .text-btn{min-width:4rem;height:2rem;line-height:2rem;font-size:1rem;padding:0 0.5rem;margin:0 0.5rem;border:0;border-radius:6px;display:inline-block;position:relative;vertical-align:middle;color:#fff;cursor:pointer;}
+  </style>
+</head>
+<body>
+  <div style="text-align:center;">
+    <input type="number" id="width" value="30"></input>
+    <input type="number" id="height" value="30"></input>
+    <button class="text-btn" style="background-color:#4f1787" onclick="handleReset()">RESET</button>
+    <button class="text-btn" style="background-color:#eb3678" onclick="handleSingleStep()">STEP</button>
+    <button class="text-btn" style="background-color:#fb773c" onclick="handleAutoStep()">AUTO</button>
+    <div style="margin-top:12px"><canvas width="600" height="600"></canvas></div>
+    <div><pre id="logs"></pre></div>
+  </div>
+  <script>
+    const state = {
+      width: 0,
+      height: 0,
+      stack: [],        // [start point [x, y], end point [x, y], thinkness, level][]
+      coordinates: [],  // [number, number][]
+      lastBatchSize: 0, // last new coordinates batch size
+      logs: [],         // string[]
+    };
+    const canvasElement = document.querySelector('canvas');
+
+    function drawState() {
+      // for current purpose, always draw a square
+      const canvasSize = [canvasElement.width, canvasElement.height];
+      const context = canvasElement.getContext('2d');
+      context.clearRect(0, 0, canvasSize[0], canvasSize[1]);
+  
+      // draw cells
+      let cellWidth = canvasSize[0] / state.width;
+      let cellHeight = canvasSize[1] / state.height;
+
+      // temp solution to make cells always square
+      // this hack requires that canvasSize is not used after this
+      cellHeight = cellWidth = Math.min(cellWidth, cellHeight);
+
+      context.strokeStyle = '#ddd';
+      context.lineWidth = 1;
+      // Draw vertical lines
+      for (let i = 0; i <= state.width; i++) {
+        const x = i * cellWidth;
+        context.beginPath();
+        context.moveTo(x, 0);
+        context.lineTo(x, cellHeight * state.height);
+        context.stroke();
+      }
+      // Draw horizontal lines
+      for (let i = 0; i <= state.height; i++) {
+        const y = i * cellHeight;
+        context.beginPath();
+        context.moveTo(0, y);
+        context.lineTo(cellWidth * state.width, y);
+        context.stroke();
+      }
+
+      const colors = [
+        "#002255",
+        "#002288",
+        "#0022aa",
+        "#0022dd",
+        "#005522",
+        "#008822",
+        "#00aa22",
+        "#00dd22",
+      ];
+      for (const frame of state.stack) {
+        const [bp, axis, thickness, level] = frame;
+        const color = colors[level % 8];
+        // these are absolute x, y, width, height
+        const [x, y, w, h] = ({
+          '←↓': [bp.x - axis.length + 1, bp.y, axis.length, thickness.length],
+          '←↑': [bp.x - axis.length + 1, bp.y - thickness.length + 1, axis.length, thickness.length],
+          '↑←': [bp.x - thickness.length + 1, bp.y - axis.length + 1, thickness.length, axis.length],
+          '↑→': [bp.x, bp.y - axis.length + 1, thickness.length, axis.length],
+          '→↓': [bp.x, bp.y, axis.length, thickness.length],
+          '→↑': [bp.x, bp.y - thickness.length + 1, axis.length, thickness.length],
+          '↓←': [bp.x - thickness.length + 1, bp.y, thickness.length, axis.length],
+          '↓→': [bp.x, bp.y, thickness.length, axis.length],
+        })[`${axis.direction}${thickness.direction}`];
+
+        context.fillStyle = color + "44";
+        context.strokeStyle = color + 'aa'; // make border opaque
+        context.lineWidth = 2;
+
+        const rectX = x * cellWidth;
+        const rectY = y * cellHeight;
+        const rectWidth = w * cellWidth;
+        const rectHeight = h * cellHeight;
+
+        context.fillRect(rectX, rectY, rectWidth, rectHeight);
+        context.strokeRect(rectX, rectY, rectWidth, rectHeight);
+
+        function arrowline(x1, y1, x2, y2, color) {
+          if (x1 == x2 && y1 == y2) { return; } 
+          const centerX1 = (x1 + 0.5) * cellWidth;
+          const centerY1 = (y1 + 0.5) * cellHeight;
+          const centerX2 = (x2 + 0.5) * cellWidth;
+          const centerY2 = (y2 + 0.5) * cellHeight;
+
+          context.strokeStyle = color;
+          context.lineWidth = 2;
+          context.beginPath();
+          context.moveTo(centerX1, centerY1);
+          context.lineTo(centerX2, centerY2);
+          context.stroke();
+
+          // Draw arrowhead
+          const angle = Math.atan2(centerY2 - centerY1, centerX2 - centerX1);
+          const arrowLength = 8;
+          const arrowAngle = Math.PI / 6;
+
+          context.beginPath();
+          context.moveTo(centerX2, centerY2);
+          context.lineTo(
+            centerX2 - arrowLength * Math.cos(angle - arrowAngle),
+            centerY2 - arrowLength * Math.sin(angle - arrowAngle)
+          );
+          context.moveTo(centerX2, centerY2);
+          context.lineTo(
+            centerX2 - arrowLength * Math.cos(angle + arrowAngle),
+            centerY2 - arrowLength * Math.sin(angle + arrowAngle)
+          );
+          context.stroke();
+        }
+        arrowline(bp.x, bp.y, ...{
+          '←': [bp.x - axis.length + 1, bp.y],
+          '↑': [bp.x, bp.y - axis.length + 1],
+          '→': [bp.x + axis.length - 1, bp.y],
+          '↓': [bp.x, bp.y + axis.length - 1],
+        }[axis.direction], '#a30');
+      }
+      
+      // draw path
+      for (let i = 0; i < state.coordinates.length - 1; i++) {
+        const [[x1, y1], [x2, y2]] = [state.coordinates[i], state.coordinates[i + 1]];
+        const centerX1 = (x1 + 0.5) * cellWidth;
+        const centerY1 = (y1 + 0.5) * cellHeight;
+        const centerX2 = (x2 + 0.5) * cellWidth;
+        const centerY2 = (y2 + 0.5) * cellHeight;
+
+        context.strokeStyle = i >= state.coordinates.length - state.lastBatchSize - 1 ? '#888' : '#111';
+        context.lineWidth = 3;
+        context.beginPath();
+        context.moveTo(centerX1, centerY1);
+        context.lineTo(centerX2, centerY2);
+        context.stroke();
+      }
+
+      document.querySelector('pre#logs').innerText = state.logs.join("\n");
+    }
+
+    function handleReset() {
+      state.width = parseInt(document.querySelector('input#width').value);
+      state.height = parseInt(document.querySelector('input#height').value);
+      state.coordinates = [];
+      state.stack = [];
+      state.logs = [];
+      if (state.width >= state.height) {
+        state.stack.push([{ x: 0, y: 0 }, { direction: '→', length: state.width }, { direction: '↓', length: state.height }, 0]);
+      } else {
+        state.stack.push([{ x: 0, y: 0 }, { direction: '↓', length: state.height }, { direction: '→', length: state.width }, 0]);
+      }
+      requestAnimationFrame(drawState);
+    }
+
+    let autointerval;
+    function handleSingleStep() {
+      if (state.stack.length) {
+        const frame = state.stack.pop();
+        const beforeFrameCount = state.stack.length;
+        const beforeCoordinateCount = state.coordinates.length;
+        generateHilbertCurveImpl(...frame);
+        if (beforeFrameCount == state.stack.length && beforeCoordinateCount == state.coordinates.length) {
+          addlog('stuck! abort!');
+          if (autointerval) {
+            clearInterval(autointerval);
+            autointerval = null;
+          }
+        }
+        requestAnimationFrame(drawState);
+      } else {
+        let turn = 0;
+        for (let i = 0; i < state.coordinates.length - 2; ++i) {
+          const [p1, p2, p3] = [state.coordinates[i], state.coordinates[i + 1], state.coordinates[i + 2]];
+          if (p2.x + (p2.x - p1.x) != p3.x || p2.y + (p2.y - p1.y) != p3.y) {
+            turn += 1;
+          }
+        }
+        addlog(`turn count ${turn}`);
+        document.querySelector('pre#logs').innerText = state.logs.join("\n");
+        if (autointerval) {
+          clearInterval(autointerval);
+          autointerval = null;
+        }
+      }
+    }
+    function handleAutoStep() {
+      if (autointerval) {
+        clearInterval(autointerval);
+        autointerval = null;
+      } else {
+        autointerval = setInterval(handleSingleStep, 250);
+      }
+    }
+
+    function addlog(content) {
+      state.logs.push(content);
+      if (state.logs.length > 8) {
+        state.logs.shift();
+      }
+    }
+
+    // begin point is coordinate regarding top left cell as (0, 0), x towards right, y towards bottom
+    // begin point is inclusive inclusive
+    // axis is { direction: top | bottom | left | right, length }, length will not be zero
+    // thickness is { direction: top | bottom | left | right, length }, length will not be zero
+    // axis and thickness is orthogonal, one of them must horizontal and the other is vertical
+    // direction: ←↑→↓ ('\u{2190}\u{2191}\u{2192}\u{2193}')
+    // level: recursion depth
+    function generateHilbertCurveImpl(bp, axis, thickness, level) {
+      const logheader = `[(${bp.x}, ${bp.y}) axis${axis.direction}${axis.length}, thick${thickness.direction}${thickness.length}]`;
+
+      if (axis.length == 0 || thickness.length == 0) {
+        addlog(`${logheader} invalid, abort`);
+        return;
+      }
+
+      if (thickness.length == 1) {
+        state.lastBatchSize = axis.length;
+        addlog(`${logheader} fill`);
+        state.coordinates.push(...({
+          '←': new Array(axis.length).fill(0).map((_, i) => [bp.x - i, bp.y]),
+          '↑': new Array(axis.length).fill(0).map((_, i) => [bp.x, bp.y - i]),
+          '→': new Array(axis.length).fill(0).map((_, i) => [bp.x + i, bp.y]),
+          '↓': new Array(axis.length).fill(0).map((_, i) => [bp.x, bp.y + i]),
+        })[axis.direction]);
+        return;
+      }
+      state.lastBatchSize = 0;
+
+      // there is exactly no way to work with axis length 3, thickness length 2, simple floor seems not enough
+      // test cases 31x17, 30x20, 32x32, 23x31, 41x5
+      const half = full => Math.floor(full / 2) % 2 && full > 2 ? Math.floor(full / 2) + 1 : Math.floor(full / 2);
+
+      if (axis.length / thickness.length > 1.5) {
+        addlog(`${logheader} long`);
+        const halfLength = half(axis.length);
+        const anotherHalfLength = axis.length - halfLength;
+        const nextBp = {
+          '←': { x: bp.x - halfLength, y: bp.y },
+          '↑': { x: bp.x, y: bp.y - halfLength },
+          '→': { x: bp.x + halfLength, y: bp.y },
+          '↓': { x: bp.x, y: bp.y + halfLength },
+        }[axis.direction];
+        // generateHilbertCurveImpl(bp, { ...axis, length: halfLength }, thickness);
+        // generateHilbertCurveImpl(nextBp, { ...axis, length: anotherHalfLength }, thickness);
+        // NOTE call order in loop version is reversed comparing to recursive version for DFS
+        state.stack.push([nextBp, { ...axis, length: anotherHalfLength }, thickness, level + 1]);
+        state.stack.push([bp, { ...axis, length: halfLength }, thickness, level + 1]);
+      } else {
+        addlog(`${logheader} normal`);
+        const halfAxisLength = half(axis.length);
+        const anotherHalfAxisLength = axis.length - halfAxisLength;
+        const halfThicknessLength = half(thickness.length);
+        const anotherHalfThicknessLength = thickness.length - halfThicknessLength;
+
+        const move = (point, direction, length) => ({
+          '←': { x: point.x - length, y: point.y },
+          '↑': { x: point.x, y: point.y - length },
+          '→': { x: point.x + length, y: point.y },
+          '↓': { x: point.x, y: point.y + length },
+        })[direction];
+        const reverse = direction => ({ '←': '→', '↑': '↓', '→': '←', '↓': '↑' })[direction];
+
+        // don't forget that furthur thickness half is the middle step
+        // don't forget the closer parts does not have same axis direction, they need to go into the furthur half and go back
+        // NOTE call order in loop version is reversed comparing to recursive version for DFS
+        state.stack.push(...[
+          // last, move bp toward thickness direction with halflength and one more cell back (or else it is inside the furthur half)
+          // then move bp toward axis direction and one more cell back (or else it is outside the original rectangular),
+          // axis is reverse first step
+          // thickness is reverse first step, don't forget this is another half axis
+          [
+            move(move(bp, thickness.direction, halfThicknessLength - 1), axis.direction, axis.length - 1),
+            { direction: reverse(thickness.direction), length: halfThicknessLength },
+            { direction: reverse(axis.direction), length: anotherHalfAxisLength },
+            level + 1,
+          ],
+          // then, move bp toward thickness direction with half thickness length
+          // axis is exactly same for the furthur half
+          // thickness is same direction with half length, don't forget the new thichness length is another half
+          [
+            move(bp, thickness.direction, halfThicknessLength),
+            axis,
+            { direction: thickness.direction, length: anotherHalfThicknessLength },
+            level + 1,
+          ],
+          // first, start from bp, change axis direction to thickness direction,
+          // to keep original rectangular, the new thickness direction is original axis direction
+          // both length are half length
+          [
+            bp,
+            { direction: thickness.direction, length: halfThicknessLength },
+            { direction: axis.direction, length: halfAxisLength },
+            level + 1,
+          ],
+        ]);
+      }
+    }
+  </script>
+</body>
+</html>
