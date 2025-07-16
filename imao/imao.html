@@ -5,111 +5,85 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Image Obfuscation</title>
   <style>
-    .text-btn{min-width:4rem;height:2rem;line-height:2rem;font-size:1rem;padding:0 0.5rem;margin:0 0.5rem;border:0;border-radius:6px;display:inline-block;position:relative;vertical-align:middle;color:#fff;cursor:pointer;}
+    .text-btn{min-width:4rem;height:2rem;line-height:2rem;font-size:1rem;padding:0 0.5rem;
+    margin:0 0.5rem;border:0;border-radius:6px;display:inline-block;position:relative;vertical-align:middle;color:#fff;cursor:pointer;}
   </style>
 </head>
 <body>
   <div style="text-align:center;">
     <div>
       <span class="text-btn" style="background-color:#180161">
-        选择图片
-        <input type="file" accept="image/*" style="position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;background-color:#ccc" onchange="handleDisplayFile()" />
+        <span style="cursor:pointer">SELECT</span>
+        <input type="file" accept="image/*" style="position:absolute;left:0;top:0;width:100%;height:100%;opacity:0;color:#fff;" onchange="handleDisplayFile()" />
       </span>
-      <button class="text-btn" style="background-color:#4f1787" onclick="handleObfuscate(true)">混淆</button>
-      <button class="text-btn" style="background-color:#eb3678" onclick="handleObfuscate(false)">解混淆</button>
-      <button class="text-btn" style="background-color:#fb773c" onclick="handleDisplayFile()">还原</button>
+      <button class="text-btn" style="background-color:#4f1787" onclick="handleEncode(true)">ENCODE</button>
+      <button class="text-btn" style="background-color:#eb3678" onclick="handleEncode(false)">DECODE</button>
+      <button class="text-btn" style="background-color:#fb773c" onclick="handleDisplayFile()">RECOVER</button>
     </div>
     <div>
       <img style="margin-top:12px;max-width:calc(100vw - 2em);max-height:calc(100vh - 8em);display:none;" />
     </div>
   </div>
   <script>
-    /**
-     * Recursive implementation of the Hilbert curve generation algorithm.
-     * This function fills a rectangular area with a space-filling curve that visits
-     * every point exactly once while maintaining locality properties.
-     * 
-     * @param {number} x - Starting x coordinate
-     * @param {number} y - Starting y coordinate
-     * @param {number} ax - Major direction vector x component (width direction)
-     * @param {number} ay - Major direction vector y component (width direction)
-     * @param {number} bx - Orthogonal direction vector x component (height direction)
-     * @param {number} by - Orthogonal direction vector y component (height direction)
-     * @param {[number, number][]} coordinates - Array to store the generated coordinate pairs [x, y]
-     */
-    function generateHilbertCurveImpl(x, y, ax, ay, bx, by, coordinates) {
-      
-      const regionWidth = Math.abs(ax + ay);
-      const regionHeight = Math.abs(bx + by);
+    // TODO this is slow, convert this and the pixel manipulation operations into webassembly
+    // BUT there seems no prebuilt binaries for https://github.com/WebAssembly/wabt, so do this later
+    // also optimize by manipulating chunks of pixels (like 4x4 should still be obfuscated but x16 performance)
+    function generateCurveImpl(bp, axis, thickness, coordinates) {
 
-      const axSign = Math.sign(ax), aySign = Math.sign(ay); // unit major direction
-      const bxSign = Math.sign(bx), bySign = Math.sign(by); // unit orthogonal direction
-
-      if (regionHeight == 1) {
-        for (let i = 0; i < regionWidth; i++) {
-          coordinates.push([x, y]);
-          x += axSign;
-          y += aySign;
-        }
+      if (thickness.length == 1) {
+        coordinates.push(...({
+          '←': new Array(axis.length).fill(0).map((_, i) => [bp.x - i, bp.y]),
+          '↑': new Array(axis.length).fill(0).map((_, i) => [bp.x, bp.y - i]),
+          '→': new Array(axis.length).fill(0).map((_, i) => [bp.x + i, bp.y]),
+          '↓': new Array(axis.length).fill(0).map((_, i) => [bp.x, bp.y + i]),
+        })[axis.direction]);
         return;
       }
+      const half = full => Math.floor(full / 2) % 2 && full > 2 ? Math.floor(full / 2) + 1 : Math.floor(full / 2);
 
-      if (regionWidth == 1) {
-        for (let i = 0; i < regionHeight; i++) {
-          coordinates.push([x, y]);
-          x += bxSign;
-          y += bySign;
-        }
-        return;
-      }
-
-      let axHalf = Math.floor(ax / 2), ayHalf = Math.floor(ay / 2);
-      let bxHalf = Math.floor(bx / 2), byHalf = Math.floor(by / 2);
-
-      const regionWidthHalf = Math.abs(axHalf + ayHalf);
-      const regionHeightHalf = Math.abs(bxHalf + byHalf);
-
-      if (2 * regionWidth > 3 * regionHeight) {
-        if ((regionWidthHalf % 2) && (regionWidth > 2)) {
-          // prefer even steps
-          axHalf += axSign;
-          ayHalf += aySign;
-        }
-
-        // long case: split in two parts only
-        generateHilbertCurveImpl(x, y, axHalf, ayHalf, bx, by, coordinates);
-        generateHilbertCurveImpl(x + axHalf, y + ayHalf, ax - axHalf, ay - ayHalf, bx, by, coordinates);
-
+      if (axis.length / thickness.length > 1.5) {
+        const halfLength = half(axis.length);
+        const anotherHalfLength = axis.length - halfLength;
+        const nextBp = {
+          '←': { x: bp.x - halfLength, y: bp.y },
+          '↑': { x: bp.x, y: bp.y - halfLength },
+          '→': { x: bp.x + halfLength, y: bp.y },
+          '↓': { x: bp.x, y: bp.y + halfLength },
+        }[axis.direction];
+        generateCurveImpl(bp, { ...axis, length: halfLength }, thickness, coordinates);
+        generateCurveImpl(nextBp, { ...axis, length: anotherHalfLength }, thickness, coordinates);
       } else {
-        if ((regionHeightHalf % 2) && (regionHeight > 2)) {
-          // prefer even steps
-          bxHalf += bxSign;
-          byHalf += bySign;
-        }
+        const halfAxisLength = half(axis.length);
+        const anotherHalfAxisLength = axis.length - halfAxisLength;
+        const halfThicknessLength = half(thickness.length);
+        const anotherHalfThicknessLength = thickness.length - halfThicknessLength;
 
-        // standard case: one step up, one long horizontal, one step down
-        generateHilbertCurveImpl(x, y, bxHalf, byHalf, axHalf, ayHalf, coordinates);
-        generateHilbertCurveImpl(x + bxHalf, y + byHalf, ax, ay, bx - bxHalf, by - byHalf, coordinates);
-        generateHilbertCurveImpl(x + (ax - axSign) + (bxHalf - bxSign), y + (ay - aySign) + (byHalf - bySign), -bxHalf, -byHalf, -(ax - axHalf), -(ay - ayHalf), coordinates);
+        const move = (point, direction, length) => ({
+          '←': { x: point.x - length, y: point.y },
+          '↑': { x: point.x, y: point.y - length },
+          '→': { x: point.x + length, y: point.y },
+          '↓': { x: point.x, y: point.y + length },
+        })[direction];
+        const reverse = direction => ({ '←': '→', '↑': '↓', '→': '←', '↓': '↑' })[direction];
+
+        generateCurveImpl(bp,
+          { direction: thickness.direction, length: halfThicknessLength },
+          { direction: axis.direction, length: halfAxisLength }, coordinates);
+        generateCurveImpl(move(bp, thickness.direction, halfThicknessLength), axis,
+          { direction: thickness.direction, length: anotherHalfThicknessLength }, coordinates);
+        generateCurveImpl(
+          move(move(bp, thickness.direction, halfThicknessLength - 1), axis.direction, axis.length - 1),
+          { direction: reverse(thickness.direction), length: halfThicknessLength },
+          { direction: reverse(axis.direction), length: anotherHalfAxisLength }, coordinates);
       }
     }
-    // window.generateHibertCurveImpl = generateHibertCurveImpl;
 
-    /**
-     * Generates a Hilbert curve that fills a rectangular area of specified dimensions.
-     * The Hilbert curve is a space-filling curve that visits every point in the rectangle
-     * exactly once, providing good locality properties for mapping 2D coordinates to 1D indices.
-     * 
-     * @param {number} width - Width of the rectangular area to fill
-     * @param {number} height - Height of the rectangular area to fill
-     * @returns {[number, number][]} Array of coordinate pairs [x, y] representing the curve path
-     */
-    function generateHilbertCurve(width, height) {
+    function generateCurve(width, height) {
       const coordinates = [];
       if (width >= height) {
-        generateHilbertCurveImpl(0, 0, width, 0, 0, height, coordinates);
+        generateCurveImpl({ x: 0, y: 0, }, { direction: '→', length: width }, { direction: '↓', length: height }, coordinates);
       } else {
-        generateHilbertCurveImpl(0, 0, 0, height, width, 0, coordinates);
+        generateCurveImpl({ x: 0, y: 0, }, { direction: '↓', length: height }, { direction: '→', length: width }, coordinates);
       }
       return coordinates;
     }
@@ -128,10 +102,10 @@
       }
     }
   
-    async function handleObfuscate(obfuscate) {
+    async function handleEncode(encode) {
       if (!imageElement.src) { return; }
       imageElement.style.display = "none";
-      // request double animation frame for the imageelement change
+      // request double animation frame for the image element change
       await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
       const canvasElement = document.createElement("canvas");
@@ -143,16 +117,14 @@
       const originalImageData = canvasContext.getImageData(0, 0, width, height);
       const newImageData = new ImageData(width, height);
 
-      // let ratioParameter = parseFloat(new URLSearchParams(window.location.search).get("r"));
-      // ratioParameter = isNaN(ratioParameter) ? (Math.sqrt(5) - 1) / 2 : ratioParameter;
-      const curve = generateHilbertCurve(width, height);
+      const curve = generateCurve(width, height);
       const offset = Math.round((Math.sqrt(5) - 1) / 2 * width * height);
       for (let i = 0; i < width * height; i++) {
         const normalCoordinate = curve[i];
         const obfuscatedCoordinate = curve[(i + offset) % (width * height)];
         const normalDataIndex = 4 * (normalCoordinate[0] + normalCoordinate[1] * width);
         const obfuscatedDataIndex = 4 * (obfuscatedCoordinate[0] + obfuscatedCoordinate[1] * width);
-        if (obfuscate) {
+        if (encode) {
           newImageData.data.set(originalImageData.data.slice(normalDataIndex, normalDataIndex + 4), obfuscatedDataIndex);
         } else {
           newImageData.data.set(originalImageData.data.slice(obfuscatedDataIndex, obfuscatedDataIndex + 4), normalDataIndex);
