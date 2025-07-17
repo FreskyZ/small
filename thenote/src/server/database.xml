@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<database name="YANO">
+<database name="YAMA">
   <table name="Book">
     <primary-key field="BookId" />
     <field name="BookId" type="id" />
@@ -27,8 +27,7 @@
     <field name="Name" type="string" size="100" />
     <field name="Content" type="text" />
     <field name="Shared" type="bool" />
-    <!-- TODO consider also make Session.ShareId not null (set value when create) -->
-    <field name="ShareId" type="guid" />
+    <field name="ShareId" type="string?" size="36" />
   </table>
   <!-- TODO don't forget don't create new version when content same,
     and overwrite auto version when content same and manual save -->

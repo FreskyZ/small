@@ -1,23 +1,12 @@
 /** @jsxImportSource @emotion/react */
 import { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { css } from '@emotion/react';
+import { css, keyframes } from '@emotion/react';
 import * as I from '../shared/api.js';
 
-const notificationElement = document.querySelector<HTMLSpanElement>('span#notification');
-
-let notificationTimer: any;
-function notification(message: string) {
-    if (notificationTimer) {
-        clearTimeout(notificationTimer);
-    }
-    notificationElement.style.display = 'inline';
-    notificationElement.innerText = message;
-    notificationTimer = setTimeout(() => {
-        notificationElement.style.display = 'none';
-    }, 10_000);
+function LoadingOutlined() {
+    return <svg viewBox="0 0 1024 1024" focusable="false" data-icon="loading" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 00-94.3-139.9 437.71 437.71 0 00-139.9-94.3C629 83.6 571.4 72 512 72c-19.9 0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z"></path></svg>;
 }
-
 function DeleteOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="delete" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M360 184h-8c4.4 0 8-3.6 8-8v8h304v-8c0 4.4 3.6 8 8 8h-8v72h72v-80c0-35.3-28.7-64-64-64H352c-35.3 0-64 28.7-64 64v80h72v-72zm504 72H160c-17.7 0-32 14.3-32 32v32c0 4.4 3.6 8 8 8h60.4l24.7 523c1.6 34.1 29.8 61 63.9 61h454c34.2 0 62.3-26.8 63.9-61l24.7-523H888c4.4 0 8-3.6 8-8v-32c0-17.7-14.3-32-32-32zM731.3 840H292.7l-24.2-512h487l-24.2 512z"></path></svg>;
 }
@@ -168,123 +157,7 @@ function parseOrExpression(tokens: string[]): QueryNode {
 function parseExpression(tokens: string[]): QueryNode {
     return parseOrExpression(tokens);
 }
-// (window as any)['parseExpressionTest'] = () => {
-//     function testcase(input: string, expect: QueryNode) {
-//         function compareNode(actual: QueryNode, expect: QueryNode, path: string) {
-//             if (actual.kind != expect.kind) {
-//                 throw new Error(`${path}: kind mismatch, actual ${actual.kind} expect ${expect.kind}`);
-//             } else if (actual.kind == 'condition' && expect.kind == 'condition') {
-//                 if (actual.field != expect.field) { throw new Error(`${path}: field mismatch, actual ${actual.field} expect ${expect.field}`); }
-//                 if (actual.value != expect.value) { throw new Error(`${path}: field mismatch, actual ${actual.value} expect ${expect.value}`); }
-//             } else if (actual.kind == 'not' && expect.kind == 'not') {
-//                 compareNode(actual.expr, expect.expr, path + ':not');
-//             } else if ((actual.kind == 'and' || actual.kind == 'or') && (expect.kind == 'and' || expect.kind == 'or')) {
-//                 compareNode(actual.left, expect.left, path + `:${actual.kind}-left`);
-//                 compareNode(actual.right, expect.right, path + `:${actual.kind}-right`);
-//             }
-//         }
-//         compareNode(parseExpression(tokenize(input)), expect, 'root');
-//     }
-//     testcase('name=abc', { kind: 'condition', field: 'name', value: 'abc' });
-//     testcase('name=123', { kind: 'condition', field: 'name', value: '123' });
-//     testcase('tag=work', { kind: 'condition', field: 'tag', value: 'work' });
-//     testcase('name = abc', { kind: 'condition', field: 'name', value: 'abc' });
-//     testcase('name= 123', { kind: 'condition', field: 'name', value: '123' });
-//     testcase('tag =work', { kind: 'condition', field: 'tag', value: 'work' });
-//     testcase("name='foo bar'", { kind: 'condition', field: 'name', value: 'foo bar' });
-//     testcase('name = "hello(+)world"', { kind: 'condition', field: 'name', value: 'hello(+)world' });
-    
-//     // Test AND operations
-//     testcase('name=foo and tag=bar', {
-//         kind: 'and',
-//         left: { kind: 'condition', field: 'name', value: 'foo' },
-//         right: { kind: 'condition', field: 'tag', value: 'bar' }
-//     });
-//     testcase('name = foo and tag = bar', {
-//         kind: 'and',
-//         left: { kind: 'condition', field: 'name', value: 'foo' },
-//         right: { kind: 'condition', field: 'tag', value: 'bar' }
-//     });
-    
-//     // Test OR operations
-//     testcase('name=foo or tag=bar', {
-//         kind: 'or',
-//         left: { kind: 'condition', field: 'name', value: 'foo' },
-//         right: { kind: 'condition', field: 'tag', value: 'bar' }
-//     });
-    
-//     // Test NOT operations
-//     testcase('not name=foo', {
-//         kind: 'not',
-//         expr: { kind: 'condition', field: 'name', value: 'foo' }
-//     });
-//     testcase('not tag = bar', {
-//         kind: 'not',
-//         expr: { kind: 'condition', field: 'tag', value: 'bar' }
-//     });
-    
-//     // Test parentheses
-//     testcase('(name=foo)', { kind: 'condition', field: 'name', value: 'foo' });
-//     testcase('(name=foo or tag=bar)', {
-//         kind: 'or',
-//         left: { kind: 'condition', field: 'name', value: 'foo' },
-//         right: { kind: 'condition', field: 'tag', value: 'bar' }
-//     });
-    
-//     // Test complex nested expressions
-//     testcase('(name=foo or tag=bar) and name = baz', {
-//         kind: 'and',
-//         left: {
-//             kind: 'or',
-//             left: { kind: 'condition', field: 'name', value: 'foo' },
-//             right: { kind: 'condition', field: 'tag', value: 'bar' }
-//         },
-//         right: { kind: 'condition', field: 'name', value: 'baz' }
-//     });
-    
-//     // Test operator precedence (AND has higher precedence than OR)
-//     testcase('name = a or name = b and tag = c', {
-//         kind: 'or',
-//         left: { kind: 'condition', field: 'name', value: 'a' },
-//         right: {
-//             kind: 'and',
-//             left: { kind: 'condition', field: 'name', value: 'b' },
-//             right: { kind: 'condition', field: 'tag', value: 'c' }
-//         }
-//     });
-    
-//     // Test NOT with complex expressions
-//     testcase('not (name=foo and tag=bar)', {
-//         kind: 'not',
-//         expr: {
-//             kind: 'and',
-//             left: { kind: 'condition', field: 'name', value: 'foo' },
-//             right: { kind: 'condition', field: 'tag', value: 'bar' }
-//         }
-//     });
-    
-//     // Test multiple ANDs
-//     testcase('name=a and tag=b and name=c', {
-//         kind: 'and',
-//         left: {
-//             kind: 'and',
-//             left: { kind: 'condition', field: 'name', value: 'a' },
-//             right: { kind: 'condition', field: 'tag', value: 'b' }
-//         },
-//         right: { kind: 'condition', field: 'name', value: 'c' }
-//     });
-    
-//     // Test multiple ORs
-//     testcase('name=a or tag=b or name=c', {
-//         kind: 'or',
-//         left: {
-//             kind: 'or',
-//             left: { kind: 'condition', field: 'name', value: 'a' },
-//             right: { kind: 'condition', field: 'tag', value: 'b' }
-//         },
-//         right: { kind: 'condition', field: 'name', value: 'c' }
-//     });
-// };
+// NOTE BLAME this line to find unit test for parseexpr, if you want large change or refactor
 
 function matchQueryNode(item: I.Session, node: QueryNode): boolean {
     if (node.kind == 'condition') {
@@ -532,10 +405,6 @@ function App() {
 
     const session = sessions.find(s => s.id == sessionId);
     return <div css={styles0.page}>
-        <span css={styles1.pageTitleContainer}>
-            <div css={styles1.pageTitle} onClick={() => setModalOpen(!modalOpen)}><a>YALA</a></div>
-            <div css={styles1.pageSubtitle}>Yet Another Llm chAt ui.</div>
-        </span>
         <div css={styles1.headerContainer}>
             {sessionId && <span css={styles1.sessionNameContainer} onClick={() => setInfoCollapsed(!infoCollapsed)}>
                 <span css={styles1.sessionName}>{session.name}</span>
@@ -584,6 +453,7 @@ function App() {
                 <textarea className='major-content' css={styles1.textarea} value={m.content}
                     onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
                 <div css={styles1.messageHeader}>
+                    <span>#{m.id}</span>
                     <span>{m.createTime}</span>
                     {!!m.promptTokenCount && !!m.completionTokenCount && <span>{m.promptTokenCount}/{m.completionTokenCount}</span>}
                     <button css={styles1.headerButton} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
@@ -612,6 +482,7 @@ function App() {
             </span>
             <span css={styles2.shareLine}>
                 <button title={session.shareId ? 'Unshare' : 'Share'} onClick={handleShareClick}><ShareOutlined /></button>
+                {/* TODO make this <a> */}
                 <input value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} readOnly={true} />
                 {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleShareLinkCopy()}><CopyOutlined /></button>}
             </span>
@@ -635,7 +506,7 @@ function App() {
             </div>
         </div>
         <button css={styles3.collapseButton} title='Collapse' onClick={() => setListCollapsed(!listCollapsed)}><MenuFoldOutlined /></button>
-        {/* this is always a modal on normal or narrow screen */}
+        {/* TODO change to another popup menu trigger from right bottom corner */}
         {modalOpen && <div css={styles4.modalMask} onClick={() => setModalOpen(false)}></div>}
         {modalOpen && <div css={styles4.modalContainer}>
             <a href="https://github.com/freskyz/small/tree/main/theai">https://github.com/freskyz/small/tree/main/theai</a>
@@ -695,20 +566,6 @@ const createMainStyles = () => ({
         cursor: 'pointer',
         // rotate: collapsed ? '90deg' : '-90deg',
         // transformOrigin: '13px 9px',
-    }),
-    pageTitleContainer: css({
-        position: 'fixed',
-    }),
-    pageTitle: css({
-        fontFamily: 'Georgia,seirf',
-        fontSize: '24px',
-        fontStyle: 'italic',
-        fontWeight: 600,
-        textDecoration: 'none',
-    }),
-    pageSubtitle: css({
-        fontSize: '10px',
-        color: '#666',
     }),
     sessionContentContainer: css({
         overflowX: 'hidden',
@@ -997,64 +854,164 @@ const createModalStyles = () => ({
             background: '#aaa',
         }
     }),
-})
+});
 
-let accessToken: string;
-async function startup() {
-    // TODO save access token when developing, stop save access token after developing
-    if (localStorage['access-token']) {
-        accessToken = localStorage['access-token'];
-        const response = await fetch(`https://api.example.com/user-credential`, { headers: { authorization: 'Bearer ' + accessToken } });
-        if (response.ok) {
-            createRoot(document.querySelector('main')).render(<App />);
-            return;
-        }
-        // else goto signin
-    }
-    const authorizationCode = new URLSearchParams(window.location.search).get('code');
-    if (!authorizationCode) {
-        if (window.location.pathname.length > 1) {
-            localStorage['return-pathname'] = window.location.pathname;
-        }
-        window.location.assign(`https://id.example.com?return=https://chat.example.com`);
-    } else {
-        const url = new URL(window.location.toString());
-        url.searchParams.delete('code');
-        if (localStorage['return-pathname']) {
-            url.pathname = localStorage['return-pathname'];
-            localStorage.removeItem('return-pathname');
-        }
-        window.history.replaceState(null, '', url.toString());
-        const response = await fetch(`https://api.example.com/signin`, { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
-        if (response.status != 200) {
-            notification('Something went wrong. (1)');
-        } else {
-            accessToken = (await response.json()).accessToken;
-            localStorage['access-token'] = accessToken;
-            createRoot(document.querySelector('main')).render(<App />);
-        }
-    }
-}
-await startup();
+// TODO startup process
+// if no access token and no code query parameter:
+//    display and empty page with a continue button, wait for continue button
+// if has access token:
+//    try get user credentials
+//    if get user credentials:
+//       goto render
+// if no code query parameter:
+//    goto id.example.com?return
+// if has code query parameter:
+//    sign in and render, display a sign in failure content if sign in failed
+
+// if api get 401:
+//    wait for confirm continue
+//    goto id.example.com?return
+
+const emptytext = "What draws you here - chance or curiosity? And what sends you away - emptiness or the whisper of something unseen? Like a door ajar in the wind, this space may beckon or repel, yet who can say if arrival or departure holds more meaning? To stay is to touch the unknown; to go is to carry its shadow. Perhaps the truest contact is the absence of answers, the silent exchange between seeker and void. And if you reach out, do you seek me, or the echo of your own unanswered questions? In the end, is any path but a circle?";
+const root = createRoot(document.querySelector('main'));
+startup(() => root.render(<App />));
 
 // AUTOGEN
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
 
+
+let notificationTimer: any;
+let notificationElement: HTMLSpanElement;
+function notification(message: string) {
+    if (!notificationElement) {
+        const container = document.createElement('div');
+        container.style = 'position:fixed;inset:0;text-align:center;cursor:default;pointer-events:none';
+        notificationElement = document.createElement('span');
+        notificationElement.style = 'padding:8px;background-color:white;margin-top:4em;'
+            + 'display:none;border-radius:4px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);max-width:320px';
+        container.appendChild(notificationElement);
+        document.body.appendChild(container);
+    }
+    if (notificationTimer) {
+        clearTimeout(notificationTimer);
+    }
+    notificationElement.style.display = 'inline-block';
+    notificationElement.innerText = message;
+    notificationTimer = setTimeout(() => { notificationElement.style.display = 'none'; }, 10_000);
+}
+
+function EmptyPage({ handleContinue }: {
+    handleContinue: () => void,
+}) {
+    const styles = {
+        app: css({ maxWidth: '360px', margin: '32vh auto' }),
+        fakeText: css({ fontSize: '14px' }),
+        mainText: css({ fontSize: '10px', color: '#666', marginTop: '8px' }),
+        button: css({ border: 'none', outline: 'none', background: 'transparent', cursor: 'pointer', fontSize: '14px', borderRadius: '4px', '&:hover': { background: '#ccc' } }),
+    };
+    return <div css={styles.app}>
+        <div css={styles.fakeText}>{emptytext}</div>
+        <div css={styles.mainText}>
+            I mean, access token not found, if you are me, click <button css={styles.button} onClick={handleContinue}>CONTINUE</button>, or else you seems to be here by accident or curious, you may leave here because there is no content for you, or you may continue your curiosity by finding my contact information.
+        </div>
+    </div>;
+}
+
+let accessToken: string;
+(window as any)['setaccesstoken'] = (v: string) => accessToken = v; // test access token expiration
+
+function gotoIdentityProvider() {
+    if (window.location.pathname.length > 1) {
+        localStorage['return-pathname'] = window.location.pathname;
+    }
+    window.location.assign('https://id.example.com?return=https://chat.example.com');
+}
+
+async function startup(render: () => void) {
+    const localStorageAccessToken = localStorage['access-token'];
+    const authorizationCode = new URLSearchParams(window.location.search).get('code');
+
+    if (localStorageAccessToken) {
+        const response = await fetch('https://api.example.com/user-credential', { headers: { authorization: 'Bearer ' + localStorageAccessToken } });
+        if (response.ok) { accessToken = localStorageAccessToken; render(); return; } // else goto signin
+    } else if (!authorizationCode && window.location.pathname.length == 1) { // only display emptyapp when no code and no path
+        await new Promise<void>(resolve => root.render(<EmptyPage handleContinue={resolve} />));
+    }
+    if (!authorizationCode) {
+        gotoIdentityProvider();
+    } else {
+        const url = new URL(window.location.toString());
+        url.searchParams.delete('code');
+        if (localStorage['return-pathname']) { url.pathname = localStorage['return-pathname']; localStorage.removeItem('return-pathname'); }
+        window.history.replaceState(null, '', url.toString());
+        const response = await fetch('https://api.example.com/signin', { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
+        if (response.status != 200) { notification('Failed to sign in, how does that happen?'); }
+        else { accessToken = localStorage['access-token'] = (await response.json()).accessToken; render(); }
+    }
+}
+
+let gotoIdModalMaskElement: HTMLDivElement;
+let gotoIdModalContainerElement: HTMLDivElement;
+let gotoIdModalOKButton: HTMLButtonElement;
+let gotoIdModalCancelButton: HTMLButtonElement;
+function confirmGotoIdentityProvider() {
+    if (!gotoIdModalMaskElement) {
+        gotoIdModalMaskElement = document.createElement('div');
+        gotoIdModalMaskElement.style = 'position:fixed;inset:0;background-color:#7777;display:none';
+        gotoIdModalContainerElement = document.createElement('div');
+        gotoIdModalContainerElement.style = 'z-index:100;position:relative;margin:60px auto;padding:12px;'
+            + 'border-radius:8px;background-color:white;max-width:320px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);';
+        const titleElement = document.createElement('div');
+        titleElement.style = 'font-weight:bold;margin-bottom:8px';
+        titleElement.innerText = 'CONFIRM';
+        const contentElement = document.createElement('div');
+        contentElement.innerText = 'Authentication failed, click OK to authenticate again, it is likely to lose unsaved changes, click CANCEL to try again later.';
+        const buttonContainerElement = document.createElement('div');
+        buttonContainerElement.style = 'display:flex;flex-flow:row-reverse;gap:12px;margin-top:12px';
+        gotoIdModalOKButton = document.createElement('button');
+        gotoIdModalOKButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
+        gotoIdModalOKButton.innerText = 'OK';
+        gotoIdModalCancelButton = document.createElement('button');
+        gotoIdModalCancelButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
+        gotoIdModalCancelButton.innerText = 'CANCEL';
+        buttonContainerElement.appendChild(gotoIdModalOKButton);
+        buttonContainerElement.appendChild(gotoIdModalCancelButton);
+        gotoIdModalContainerElement.appendChild(titleElement);
+        gotoIdModalContainerElement.appendChild(contentElement);
+        gotoIdModalContainerElement.appendChild(buttonContainerElement);
+        document.body.appendChild(gotoIdModalMaskElement);
+        document.body.appendChild(gotoIdModalContainerElement);
+    }
+    const handleCancel = () => {
+        gotoIdModalCancelButton.removeEventListener('click', handleCancel);
+        gotoIdModalMaskElement.style.display = 'none';
+        gotoIdModalContainerElement.style.display = 'none';
+    };
+    gotoIdModalCancelButton.addEventListener('click', handleCancel);
+    const handleOk = () => {
+        gotoIdModalOKButton.removeEventListener('click', handleOk);
+        localStorage.removeItem('access-token');
+        gotoIdentityProvider();
+    };
+    gotoIdModalOKButton.addEventListener('click', handleOk);
+    gotoIdModalMaskElement.style.display = 'block';
+    gotoIdModalContainerElement.style.display = 'block';
+}
+
 async function sendRequest(method: string, path: string, parameters?: any, data?: any): Promise<any> {
-    const url = new URL(`https://api.example.com/chat${path}`);
+    const url = new URL(`https://api.example.com/yala${path}`);
     Object.entries(parameters || {}).forEach(p => url.searchParams.append(p[0], p[1].toString()));
     const response = await fetch(url.toString(), data ? {
         method,
         body: JSON.stringify(data),
         headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
     } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
-
+    if (response.status == 401) { confirmGotoIdentityProvider(); return; }
     // normal/error both return json body, but void do not
-    const hasResponseBody = response.headers.has('content-Type')
-        && response.headers.get('content-Type').includes('application/json');
-    const responseData = hasResponseBody ? await response.json() : {};
+    const hasJsonBody = response.headers.has('content-Type') && response.headers.get('content-Type').includes('application/json');
+    const responseData = hasJsonBody ? await response.json() : {};
     return response.ok ? Promise.resolve(responseData)
         : response.status >= 400 && response.status < 500 ? Promise.reject(responseData)
         : response.status >= 500 ? Promise.reject({ message: 'internal error' })

@@ -194,6 +194,7 @@ async function removeSession(ax: ActionContext, sessionId: number) {
     await pool.execute('DELETE FROM `Session` WHERE `SessionId` = ?', [sessionId]);
 }
 
+// TODO got invalid message id
 async function addMessage(ax: ActionContext, sessionId: number, message: I.Message): Promise<I.Message> {
     await validateSessionUser(ax, sessionId);
 
@@ -220,13 +221,13 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
         "SELECT MAX(`MessageId`) FROM `Message` GROUP BY `SessionId` HAVING `SessionId` = ?",
         [sessionId],
     );
-    const messageId = maxMessages[0].MaxMessageId + 1;
+    const newMessageId = maxMessages[0].MaxMessageId + 1;
     await pool.execute<ManipulateResult>(
-        'INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`) VALUES (?, ?, ?, ?)',
-        [sessionId, messageId, message.parentId, message.role, message.content],
+        'INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`) VALUES (?, ?, ?, ?, ?)',
+        [sessionId, newMessageId, message.parentId, message.role, message.content],
     );
     return {
-        id: messageId,
+        id: newMessageId,
         parentId: message.parentId,
         role: message.role,
         content: message.content,

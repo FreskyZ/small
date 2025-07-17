@@ -8,16 +8,22 @@
   <style>html{font-size:16px}</style>
 </head>
 <body style="background-color:#f3f3f3;font-family:'Segoe UI',Roboto,sans-serif;">
-
-  <main></main>
-
-  <div style="position:fixed;top:32px;width:320px;text-align:center;cursor:default">
-    <span id="notification" style="
-      padding:8px;background-color:white;display:none;
-      border-radius:4px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15)"></span>
+  <div style="position:fixed;left:8px;top:8px;">
+    <div style="font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;font-style:italic;font-weight:600;text-decoration:none;"><a href='#'>YALA</a></div>
+    <div style="font-size:10px;color:#666">Yet Another Llm chAt ui.</div>
   </div>
-
+  <main>
+    <style>@keyframes spin{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}</style>
+    <div style="font-size:14px;margin:2em auto;width:6em">
+      <svg style="display:inline-block;animation:spin 1s linear infinite" viewBox="0 0 1024 1024" focusable="false" width="1em" height="1em" aria-hidden="true">
+        <path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 00-94.3-139.9 437.71 437.71 0 00-139.9-94.3C629 83.6 571.4 72 512 72c-19.9
+          0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z">
+        </path>
+      </svg>
+      Loading...
+    </div>
+  </main>
   <script type="module" src="/index.js"></script>
-  <script src="https://freskyz.com:8001/client-dev.js"></script>
+  <script src="https://example.com:8001/client-dev.js"></script>
 </body>
 </html>

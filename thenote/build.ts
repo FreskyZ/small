@@ -1,5 +1,5 @@
 
-// app name is YANO, db name is YANO, host is note.example.com
+// app name is YAMA, db name is YAMA, host is note.example.com
 // the full-flat tag based note list seems too flat for a note, the tree structure seems complicated,
 // I may try to use a fixed tree structure, e.g. book => section => page, which is same as onenote
 
@@ -21,3 +21,5 @@
 // consider using note.example.com?id=\d+, and note.example.com/s?id=guid
 
 // code highlight maybe need this https://highlightjs.org/, if markdown library does not support syntax highlighting
+
+// add a <clipboard> element that add a container and allows copy to clipboard
