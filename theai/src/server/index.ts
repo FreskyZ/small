@@ -25,6 +25,10 @@ const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: 
     : next(),
 });
 
+function formatDateTime(value: dayjs.Dayjs) {
+    return value.format('YYYY-MM-DDTHH:mm:ss[Z]');
+}
+
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
 
@@ -38,8 +42,8 @@ async function getSessions(ax: ActionContext): Promise<I.Session[]> {
         comment: s.Comment ?? '',
         tags: s.Tags?.split(',')?.filter(x => x) ?? [],
         shareId: s.Shared ? s.ShareId : null,
-        createTime: s.CreateTime.toISOString(),
-        updateTime: s.UpdateTime.toISOString(),
+        createTime: formatDateTime(s.CreateTime),
+        updateTime: formatDateTime(s.UpdateTime),
         messages: [], // get list api does not include messages
     }));
 }
@@ -66,8 +70,8 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
         comment: session.Comment ?? '',
         tags: session.Tags?.split(',')?.filter(x => x) ?? [],
         shareId: session.Shared ? session.ShareId : null,
-        createTime: session.CreateTime.toISOString(),
-        updateTime: session.UpdateTime.toISOString(),
+        createTime: formatDateTime(session.CreateTime),
+        updateTime: formatDateTime(session.UpdateTime),
         messages: messages.map<I.Message>(m => ({
             id: m.MessageId,
             parentId: m.ParentMessageId,
@@ -76,8 +80,8 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
             thinkingContent: m.ThinkingContent,
             promptTokenCount: m.PromptTokenCount,
             completionTokenCount: m.CompletionTokenCount,
-            createTime: m.CreateTime.toISOString(),
-            updateTime: m.UpdateTime.toISOString(),
+            createTime: formatDateTime(m.CreateTime),
+            updateTime: formatDateTime(m.UpdateTime),
         })),
     };
 }
@@ -142,15 +146,15 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
     return {
         id: insertResult.insertId,
         name: newName,
-        createTime: ax.now.toISOString(),
-        updateTime: ax.now.toISOString(),
+        createTime: formatDateTime(ax.now),
+        updateTime: formatDateTime(ax.now),
         tags: [],
         messages: [{
             id: 1,
             role: 'system',
             content: 'You are a helpful assistant.',
-            createTime: ax.now.toISOString(),
-            updateTime: ax.now.toISOString(),
+            createTime: formatDateTime(ax.now),
+            updateTime: formatDateTime(ax.now),
         }],
     };
 }
@@ -183,7 +187,7 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
         'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ?, `UpdateTime` = ? WHERE `SessionId` = ?',
         [session.name, session.comment ?? null, session.tags.join(','), ax.now.format('YYYY-MM-DD HH:mm:ss'), session.id],
     );
-    session.updateTime = ax.now.toISOString();
+    session.updateTime = formatDateTime(ax.now);
     return session;
 }
 async function removeSession(ax: ActionContext, sessionId: number) {
@@ -231,8 +235,8 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
         parentId: message.parentId,
         role: message.role,
         content: message.content,
-        createTime: ax.now.toISOString(),
-        updateTime: ax.now.toISOString(),
+        createTime: formatDateTime(ax.now),
+        updateTime: formatDateTime(ax.now),
     };
 }
 
@@ -243,7 +247,7 @@ async function updateMessage(ax: ActionContext, sessionId: number, message: I.Me
         'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL, `UpdateTime` = ? WHERE `MessageId` = ?',
         [message.content, ax.now.format('YYYY-MM-DD HH:mm:ss'), message.id],
     );
-    message.updateTime = ax.now.toISOString();
+    message.updateTime = formatDateTime(ax.now);
     return message;
 }
 
@@ -373,8 +377,8 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
     // complete message works as external service is adding message
     const newMessageId = messageRelationships.reduce((acc, r) => Math.max(acc, r.MessageId), 0) + 1;
     await pool.execute<ManipulateResult>(
-        "INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, 'assistant', ?, ?, ?, ?)",
-        [sessionId, newMessageId, messageId, processedContent, responseReasoningContent, promptTokenCount, completionTokenCount],
+        "INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)",
+        [sessionId, newMessageId, messageId, processedContent, responseReasoningContent ?? null, promptTokenCount, completionTokenCount],
     );
 
     return {
@@ -384,8 +388,8 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
         content: processedContent,
         promptTokenCount,
         completionTokenCount,
-        createTime: ax.now.toISOString(),
-        updateTime: ax.now.toISOString(),
+        createTime: formatDateTime(ax.now),
+        updateTime: formatDateTime(ax.now),
     };
 }
 
@@ -446,8 +450,8 @@ async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
     )
     return sessions.map(s => ({
         ...s,
-        inserted_at: (s.inserted_at as unknown as dayjs.Dayjs).toISOString(),  
-        updated_at: (s.updated_at as unknown as dayjs.Dayjs).toISOString(),  
+        inserted_at: formatDateTime(s.inserted_at as unknown as dayjs.Dayjs),  
+        updated_at: formatDateTime(s.updated_at as unknown as dayjs.Dayjs),  
     }));
 }
 async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dmessage[]> {
@@ -457,7 +461,7 @@ async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dm
     );
     return messages.map(m => ({
         ...m,
-        inserted_at: (m.inserted_at as unknown as dayjs.Dayjs).toISOString(),
+        inserted_at: formatDateTime(m.inserted_at as unknown as dayjs.Dayjs),
     }));
 }
 

@@ -462,7 +462,7 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         body: JSON.stringify(data),
         headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
     } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
-    if (response.status == 401) { confirmGotoIdentityProvider(); return; }
+    if (response.status == 401) { confirmGotoIdentityProvider(); return Promise.reject('Authentication failed.'); }
     // normal/error both return json body, but void do not
     const hasJsonBody = response.headers.has('content-Type') && response.headers.get('content-Type').includes('application/json');
     const responseData = hasJsonBody ? await response.json() : {};
@@ -625,7 +625,8 @@ async function postprocess(assets: ScriptAssets): Promise<boolean> {
         { name: 'react', pathnames: [] },
         { name: 'react-dom', pathnames: ['/client'] },
         { name: 'dayjs', pathnames: ['/plugin/utc.js', '/plugin/timezone.js'] },
-        { name: '@emotion/react', pathnames: ['/jsx-runtime'] }
+        { name: '@emotion/react', pathnames: ['/jsx-runtime'] },
+        { name: 'react-markdown', pathnames: [] },
     ];
     const projectConfig = JSON.parse(await fs.readFile('package.json', 'utf-8')) as {
         dependencies: Record<string, string>,

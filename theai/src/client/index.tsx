@@ -1,7 +1,8 @@
 /** @jsxImportSource @emotion/react */
 import { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { css, keyframes } from '@emotion/react';
+import { css } from '@emotion/react';
+import Markdown from 'react-markdown';
 import * as I from '../shared/api.js';
 
 function LoadingOutlined() {
@@ -13,12 +14,15 @@ function DeleteOutlined() {
 function MenuFoldOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="menu-fold" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M408 442h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm-8 204c0 4.4 3.6 8 8 8h480c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H408c-4.4 0-8 3.6-8 8v56zm504-486H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 632H120c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM115.4 518.9L271.7 642c5.8 4.6 14.4.5 14.4-6.9V388.9c0-7.4-8.5-11.5-14.4-6.9L115.4 505.1a8.74 8.74 0 000 13.8z"></path></svg>;
 }
+function MenuOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="menu" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M904 160H120c-4.4 0-8 3.6-8 8v64c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-64c0-4.4-3.6-8-8-8zm0 624H120c-4.4 0-8 3.6-8 8v64c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-64c0-4.4-3.6-8-8-8zm0-312H120c-4.4 0-8 3.6-8 8v64c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-64c0-4.4-3.6-8-8-8z"></path></svg>;
+}
 function ShareOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="share-alt" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M752 664c-28.5 0-54.8 10-75.4 26.7L469.4 540.8a160.68 160.68 0 000-57.6l207.2-149.9C697.2 350 723.5 360 752 360c66.2 0 120-53.8 120-120s-53.8-120-120-120-120 53.8-120 120c0 11.6 1.6 22.7 4.7 33.3L439.9 415.8C410.7 377.1 364.3 352 312 352c-88.4 0-160 71.6-160 160s71.6 160 160 160c52.3 0 98.7-25.1 127.9-63.8l196.8 142.5c-3.1 10.6-4.7 21.8-4.7 33.3 0 66.2 53.8 120 120 120s120-53.8 120-120-53.8-120-120-120zm0-476c28.7 0 52 23.3 52 52s-23.3 52-52 52-52-23.3-52-52 23.3-52 52-52zM312 600c-48.5 0-88-39.5-88-88s39.5-88 88-88 88 39.5 88 88-39.5 88-88 88zm440 236c-28.7 0-52-23.3-52-52s23.3-52 52-52 52 23.3 52 52-23.3 52-52 52z"></path></svg>;
 }
-// function EditOutlined() {
-//     return <svg viewBox="64 64 896 896" focusable="false" data-icon="edit" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z"></path></svg>;
-// }
+function EditOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="edit" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z"></path></svg>;
+}
 function ReloadOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="reload" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M909.1 209.3l-56.4 44.1C775.8 155.1 656.2 92 521.9 92 290 92 102.3 279.5 102 511.5 101.7 743.7 289.8 932 521.9 932c181.3 0 335.8-115 394.6-276.1 1.5-4.2-.7-8.9-4.9-10.3l-56.7-19.5a8 8 0 00-10.1 4.8c-1.8 5-3.8 10-5.9 14.9-17.3 41-42.1 77.8-73.7 109.4A344.77 344.77 0 01655.9 829c-42.3 17.9-87.4 27-133.8 27-46.5 0-91.5-9.1-133.8-27A341.5 341.5 0 01279 755.2a342.16 342.16 0 01-73.7-109.4c-17.9-42.4-27-87.4-27-133.9s9.1-91.5 27-133.9c17.3-41 42.1-77.8 73.7-109.4 31.6-31.6 68.4-56.4 109.3-73.8 42.3-17.9 87.4-27 133.8-27 46.5 0 91.5 9.1 133.8 27a341.5 341.5 0 01109.3 73.8c9.9 9.9 19.2 20.4 27.8 31.4l-60.2 47a8 8 0 003 14.1l175.6 43c5 1.2 9.9-2.6 9.9-7.7l.8-180.9c-.1-6.6-7.8-10.3-13-6.2z"></path></svg>;
 }
@@ -39,6 +43,26 @@ function SearchOutlined() {
 }
 function CloseOutlined() {
     return <svg fill-rule="evenodd" viewBox="64 64 896 896" focusable="false" data-icon="close" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M799.86 166.31c.02 0 .04.02.08.06l57.69 57.7c.04.03.05.05.06.08a.12.12 0 010 .06c0 .03-.02.05-.06.09L569.93 512l287.7 287.7c.04.04.05.06.06.09a.12.12 0 010 .07c0 .02-.02.04-.06.08l-57.7 57.69c-.03.04-.05.05-.07.06a.12.12 0 01-.07 0c-.03 0-.05-.02-.09-.06L512 569.93l-287.7 287.7c-.04.04-.06.05-.09.06a.12.12 0 01-.07 0c-.02 0-.04-.02-.08-.06l-57.69-57.7c-.04-.03-.05-.05-.06-.07a.12.12 0 010-.07c0-.03.02-.05.06-.09L454.07 512l-287.7-287.7c-.04-.04-.05-.06-.06-.09a.12.12 0 010-.07c0-.02.02-.04.06-.08l57.7-57.69c.03-.04.05-.05.07-.06a.12.12 0 01.07 0c.03 0 .05.02.09.06L512 454.07l287.7-287.7c.04-.04.06-.05.09-.06a.12.12 0 01.07 0z"></path></svg>;
+}
+function GithubLogoDark() {
+    return <svg x="0px" y="0px" viewBox="0 0 97.6 96" >
+        <path style={{fill:'#1B1F24'}} d="M48.9,0C21.8,0,0,22,0,49.2C0,71,14,89.4,33.4,95.9c2.4,0.5,3.3-1.1,3.3-2.4c0-1.1-0.1-5.1-0.1-9.1
+            c-13.6,2.9-16.4-5.9-16.4-5.9c-2.2-5.7-5.4-7.2-5.4-7.2c-4.4-3,0.3-3,0.3-3c4.9,0.3,7.5,5.1,7.5,5.1c4.4,7.5,11.4,5.4,14.2,4.1
+            c0.4-3.2,1.7-5.4,3.1-6.6c-10.8-1.1-22.2-5.4-22.2-24.3c0-5.4,1.9-9.8,5-13.2c-0.5-1.2-2.2-6.3,0.5-13c0,0,4.1-1.3,13.4,5.1
+            c3.9-1.1,8.1-1.6,12.2-1.6s8.3,0.6,12.2,1.6c9.3-6.4,13.4-5.1,13.4-5.1c2.7,6.8,1,11.8,0.5,13c3.2,3.4,5,7.8,5,13.2
+            c0,18.9-11.4,23.1-22.3,24.3c1.8,1.5,3.3,4.5,3.3,9.1c0,6.6-0.1,11.9-0.1,13.5c0,1.3,0.9,2.9,3.3,2.4C83.6,89.4,97.6,71,97.6,49.2
+            C97.7,22,75.8,0,48.9,0z"/>
+    </svg>;
+}
+function GithubLogoLight() {
+    return <svg  x="0px" y="0px" viewBox="0 0 97.6 96">
+        <path style={{ fill:'white' }} d="M48.9,0C21.8,0,0,22,0,49.2C0,71,14,89.4,33.4,95.9c2.4,0.5,3.3-1.1,3.3-2.4c0-1.1-0.1-5.1-0.1-9.1
+            c-13.6,2.9-16.4-5.9-16.4-5.9c-2.2-5.7-5.4-7.2-5.4-7.2c-4.4-3,0.3-3,0.3-3c4.9,0.3,7.5,5.1,7.5,5.1c4.4,7.5,11.4,5.4,14.2,4.1
+            c0.4-3.2,1.7-5.4,3.1-6.6c-10.8-1.1-22.2-5.4-22.2-24.3c0-5.4,1.9-9.8,5-13.2c-0.5-1.2-2.2-6.3,0.5-13c0,0,4.1-1.3,13.4,5.1
+            c3.9-1.1,8.1-1.6,12.2-1.6s8.3,0.6,12.2,1.6c9.3-6.4,13.4-5.1,13.4-5.1c2.7,6.8,1,11.8,0.5,13c3.2,3.4,5,7.8,5,13.2
+            c0,18.9-11.4,23.1-22.3,24.3c1.8,1.5,3.3,4.5,3.3,9.1c0,6.6-0.1,11.9-0.1,13.5c0,1.3,0.9,2.9,3.3,2.4C83.6,89.4,97.6,71,97.6,49.2
+            C97.7,22,75.8,0,48.9,0z"/>
+    </svg>;
 }
 
 // I'm a proffessional user, so I can use complex query syntax
@@ -187,49 +211,72 @@ function executeQuery(items: I.Session[], queryString: string): I.Session[] {
 
 function App() {
 
-    const narrow = window.matchMedia('(max-width: 600px)').matches;
-    const [listCollapsed, setListCollapsed] = useState(narrow);
-    const [infoCollapsed, setInfoCollapsed] = useState(true);
+    const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 600px)').matches);
+    const [listOpen, setListOpen] = useState(() => !window.matchMedia('(max-width: 600px)').matches);
+    const [infoOpen, setInfoOpen] = useState(false);
 
     const styles0 = useMemo(() => createPageStyles(), []);
-    const styles1 = useMemo(() => createMainStyles(), []);
-    const styles2 = useMemo(() => createInfoStyles(infoCollapsed), [infoCollapsed]);
-    const styles3 = useMemo(() => createListStyles(infoCollapsed), [infoCollapsed]);
-    const styles4 = useMemo(() => createModalStyles(), []);
+    const styles1 = useMemo(() => createMainStyles(narrow, infoOpen, listOpen), [narrow, infoOpen, listOpen]);
+    const styles2 = useMemo(() => createInfoStyles(narrow, infoOpen), [narrow, infoOpen]);
+    const styles3 = useMemo(() => createListStyles(listOpen), [listOpen]);
+    const styles4 = useMemo(() => createSystemModalStyles(narrow), [narrow]);
 
-    // this list does not include messages    
+    // Throttle resize event handler to avoid excessive updates
+    useEffect(() => {
+        let resizeTimer: any;
+        const handleResize = () => {
+            if (resizeTimer) { return; }
+            resizeTimer = setTimeout(() => {
+                setNarrow(window.matchMedia('(max-width: 600px)').matches);
+                resizeTimer = null;
+            }, 200);
+        };
+        window.addEventListener('resize', handleResize);
+        return () => {
+            window.removeEventListener('resize', handleResize);
+            if (resizeTimer) { clearTimeout(resizeTimer); }
+        };
+    }, []);
+
+    // region: the list
     const [sessions, setSessions] = useState<I.Session[]>([]);
     const [queryString, setQueryString] = useState<string>('');
-    const [accountBalance, setAccountBalance] = useState<number>(null);
     // only update this when clicking apply
     const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
 
-    const [modalOpen, setModalOpen] = useState(false);
-
-    // current selected session id, null for not selected (new session)
+    // region: session info
     const [sessionId, setSessionId] = useState(null);
     const [editingSessionName, setEditingSessionName] = useState('');
-    const [editingComment, setEditingComment] = useState('');
-    const [editingTags, setEditingTags] = useState('');
-    // current selected session's all messages
+    const [editingSessionComment, setEditingSessionComment] = useState('');
+    const [editingSessionTags, setEditingSessionTags] = useState('');
+
+    // region: system menu
+    const [systemModalOpen, setSystemModalOpen] = useState(false);
+    const [accountBalance, setAccountBalance] = useState<number>(null);
+
+    // region: messages
     // TODO distinguish editing content
     const [messages, setMessages] = useState<I.Message[]>([]);
     // current displaying message id path
     const [messagePath, setMessagePath] = useState<number[]>([]);
 
+    // TODO add error message display on all api invocations
     useEffect(() => {
         (async () => {
-            // TODO add error message display on all api invocations
-            const sessions = await api.getSessions();
-            setSessions(sessions);
-            setDisplaySessions(sessions);
-            const maybeSessionId = parseInt(window.location.pathname.substring(1));
-            if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
-                handleSelectSession(maybeSessionId);
-            } else {
-                const url = new URL(window.location.toString());
-                url.pathname = '/';
-                window.history.replaceState(null, '', url.toString());
+            try {
+                const sessions = await api.getSessions();
+                setSessions(sessions);
+                setDisplaySessions(sessions);
+                const maybeSessionId = parseInt(window.location.pathname.substring(1));
+                if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
+                    handleSelectSession(sessions, maybeSessionId);
+                } else {
+                    const url = new URL(window.location.toString());
+                    url.pathname = '/';
+                    window.history.replaceState(null, '', url.toString());
+                }
+            } catch (error) {
+                notification(error?.message ?? 'Something went wrong (1)');
             }
         })();
     }, []);
@@ -255,7 +302,6 @@ function App() {
         setAccountBalance(result.balance);
     };
 
-
     const handleAddSession = async () => {
         const result = await api.addSession({} as I.Session);
         setSessions([result].concat(sessions));
@@ -270,30 +316,56 @@ function App() {
         }
     };
 
-    const handleSelectSession = async (sessionId: number) => {
-        setInfoCollapsed(true);
-        // TODO update session properties when selecting session (name, comment, tags, shared)
-        const messages = (await api.getSession(sessionId)).messages;
-        // session's message list cannot be empty, so this find must have result
-        const messagePath: number[] = [messages.find(m => !m.parentId).id];
-        while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
-            messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
+    const handleSelectSession = async (sessions: I.Session[], sessionId: number) => {
+        setInfoOpen(false);
+        try {
+            const session = await api.getSession(sessionId);
+            const messages = session.messages;
+            session.messages = []; // don't save messages in state.sessions
+            // session's message list cannot be empty, so this find must have result
+            const messagePath: number[] = [messages.find(m => !m.parentId).id];
+            while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
+                messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
+            }
+            setSessions(sessions.map(s => s.id == sessionId ? session : s));
+            setSessionId(sessionId);
+            setMessages(messages);
+            setMessagePath(messagePath);
+            const url = new URL(window.location.toString());
+            url.pathname = `/${sessionId}`;
+            window.history.pushState(null, '', url.toString());
+        } catch (error) {
+            notification(error?.message ?? 'Something went wrong (3)');
         }
-        setSessionId(sessionId);
-        setMessages(messages);
-        setMessagePath(messagePath);
-
-        const url = new URL(window.location.toString());
-        url.pathname = `/${sessionId}`;
-        window.history.pushState(null, '', url.toString());
     };
 
+    const handleToggleSessionInfo = () => {
+        if (infoOpen) {
+            setInfoOpen(false);
+        } else {
+            const session = sessions.find(s => s.id == sessionId);
+            setEditingSessionName(session.name);
+            setEditingSessionComment(session.comment);
+            setEditingSessionTags(session.tags.join(','));
+            setInfoOpen(true);
+        }
+    }
     const handleUpdateSession = async (sessionId: number) => {
-        // trim and remove empty entry
-        session.tags = session.tags.map(t => t.trim()).filter(t => t);
-        await api.updateSession(sessions.find(s => s.id == sessionId));
-        setSessions([...sessions]);
-        notification(`saved successfully`);
+        const session = sessions.find(s => s.id == sessionId);
+        const newSession = {
+            ...session,
+            name: editingSessionName,
+            comment: editingSessionComment,
+            // trim and remove empty entry
+            tags: editingSessionTags.split(',').map(t => t.trim()).filter(t => t),
+        };
+        try {
+            const updatedSession = await api.updateSession(newSession);
+            setSessions(sessions.map(s => s.id == sessionId ? updatedSession : s));
+            notification('saved successfully');
+        } catch (error) {
+            notification(error?.message ?? 'Something went wrong (2)');
+        }
     };
     const handleShareClick = async () => {
         if (session.shareId) {
@@ -393,28 +465,29 @@ function App() {
     };
 
     const handleCompleteMessage = async (messageId: number) => {
-        const result = await api.completeMessage(sessionId, messageId);
-        // TODO messagepath is not displayed correctly
-        setMessages(messages.concat(result));
-        setMessagePath(messagePath.slice(0, messagePath.find(m => m == messageId) + 1).concat(result.id));
+        try {
+            const result = await api.completeMessage(sessionId, messageId);
+            // TODO messagepath is not displayed correctly
+            setMessages(messages.concat(result));
+            setMessagePath(messagePath.slice(0, messagePath.find(m => m == messageId) + 1).concat(result.id));
+        } catch (error) {
+            notification(error?.message ?? 'Something went wrong (4)');
+        }
     };
 
-    // for now, only for pc browser
-    // the layout structure is page title => content/new => header => list, which represents the z index without specifying zindex property
-    // TODO real layered structure for mobile browser
-
     const session = sessions.find(s => s.id == sessionId);
-    return <div css={styles0.page}>
-        <div css={styles1.headerContainer}>
-            {sessionId && <span css={styles1.sessionNameContainer} onClick={() => setInfoCollapsed(!infoCollapsed)}>
-                <span css={styles1.sessionName}>{session.name}</span>
-                <button css={styles1.collapseButton} title='Collapse'><CaretRightOutlined /></button>
-            </span>}
+    return <>
+        <div css={styles1.sessionNameContainerContainer}>
+            <div css={styles1.sessionNameContainer} onClick={handleToggleSessionInfo}>
+                <span css={styles1.sessionName}>{session?.name}</span>
+                <button css={styles1.infoButton} title='Collapse'><CaretRightOutlined /></button>
+            </div>
         </div>
-        {session ? <div css={styles1.sessionContentContainer}>
-            {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i} css={styles1.messageContainer}>
-                <div css={styles1.messageHeader}>
-                    <span css={styles1.role}>{m.role.toUpperCase()}</span>
+        {session ? <div css={styles1.messagesContainer}>
+            {messagePath.map(mid => messages.find(m => m.id == mid)).map((m, i) => <div key={i}
+                css={[styles1.messageContainer, m.role == 'assistant' ? styles1.leftMessageContainer : styles1.rightMessageContainer]}>
+                <div css={[styles1.messageHeader, m.role == 'assistant' ? styles1.leftMessageHeader : styles1.rightMessageHeader]}>
+                    {m.role == 'assistant' && <span css={styles1.role}>{m.role.toUpperCase()}</span>}
                     {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
                         css={[styles1.headerButton, styles1.prevButton]} title="Prev"
                         disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
@@ -425,16 +498,18 @@ function App() {
                         css={styles1.headerButton} title='Next'
                         disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
                         onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
-                    {/* TODO change to dotdotdot popup menu in mobile page */}
-                    {/* TODO copy content button */}
+                    <button css={styles1.headerButton}
+                        title='Copy Content'
+                        onClick={() => navigator.clipboard.writeText(m.content)}><CopyOutlined />COPY</button>
                     <button css={styles1.headerButton}
                         title='Save current edit in this message record'
-                        onClick={() => handleUpdateMessage(m)}><SaveOutlined />EDIT</button>
+                        onClick={() => handleUpdateMessage(m)}><EditOutlined />EDIT</button>
                     <button css={styles1.headerButton}
                         title='Use current edit to branch message tree from parent message'
                         onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>
                     {m.role == 'user' && <button css={styles1.headerButton}
                         title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
+                    {m.role != 'assistant' && <span css={styles1.role}>{m.role.toUpperCase()}</span>}
                 </div>
                 {/* TODO https://marked.js.org/#usage */}
                 {/* TODO https://github.com/remarkjs/react-markdown, NOTE react-markdown don't support ai's latex syntax, need something like const preprocessLaTeX = (content: string) => {
@@ -450,13 +525,17 @@ function App() {
                     );
                     return inlineProcessedContent;
                     }; also see https://github.com/remarkjs/react-markdown/issues/785 */}
-                <textarea className='major-content' css={styles1.textarea} value={m.content}
-                    onChange={e => { m.content = e.target.value; setMessages([...messages]) }} />
-                <div css={styles1.messageHeader}>
-                    <span>#{m.id}</span>
-                    <span>{m.createTime}</span>
-                    {!!m.promptTokenCount && !!m.completionTokenCount && <span>{m.promptTokenCount}/{m.completionTokenCount}</span>}
-                    <button css={styles1.headerButton} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
+                {/* <textarea css={styles1.textarea} value={m.content}
+                    onChange={e => { m.content = e.target.value; setMessages([...messages]) }} /> */}
+                <div css={styles1.markdownContainer}>
+                    <Markdown>{m.content}</Markdown>
+                </div>
+                <div css={[styles1.messageFooter, m.role == 'assistant' ? styles1.leftMessageFooter : styles1.rightMessageFooter]}>
+                    <span css={styles1.headerText}>#{m.id}</span>
+                    {!narrow && <span css={styles1.headerText}>create {m.createTime}</span>}
+                    <span css={styles1.headerText}>update {m.updateTime}</span>
+                    {!!m.promptTokenCount && !!m.completionTokenCount && <span css={styles1.headerText}>token {m.promptTokenCount}/{m.completionTokenCount}</span>}
+                    <button css={[styles1.headerButton, styles1.deleteButton]} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
                 </div>
             </div>)}
             <div>
@@ -468,29 +547,28 @@ function App() {
             <textarea></textarea>
             <button>SEND</button>
         </div>}
-        {/* this is floating on normal screen and a layer on narrow screen */}
-        {sessionId && <div css={styles2.sessionInfoContainer}>
+        {sessionId && <div css={styles2.infoContainer}>
             <span css={styles2.label}>Name</span>
-            <input value={session.name} onChange={e => { session.name = e.target.value; setSessions([...sessions]); }} />
-            <span css={styles2.label}>Comment</span>
-            <textarea value={session.comment ?? ''} onChange={e => { session.comment = e.target.value; setSessions([...sessions]); }} />
+            <input value={editingSessionName} onChange={e => setEditingSessionName(e.target.value)} />
             <span css={styles2.label}>Tags</span>
-            <input value={session.tags.join(',')} onChange={e => { session.tags = e.target.value.split(','); setSessions([...sessions]); }} />
-            <span css={styles2.saveLine}>
-                <span css={styles2.label}>Created at {session.createTime}</span>
-                <button css={styles2.saveButton} onClick={() => handleUpdateSession(sessionId)}>SAVE</button>
+            <input value={editingSessionTags} onChange={e => setEditingSessionTags(e.target.value)} />
+            <span css={styles2.label}>Comment</span>
+            <textarea value={editingSessionComment} rows={3} onChange={e => setEditingSessionComment(e.target.value)} />
+            <span css={styles2.label}>Created {session.createTime}, Updated {session.updateTime}</span>
+            <span css={styles2.buttonContainer}>
+                <span css={styles2.shareButtonContainer}>
+                    <button onClick={handleShareClick}><ShareOutlined />SHARE</button>
+                    <button disabled={!session.shareId} onClick={() => handleShareLinkCopy()}><CopyOutlined />COPY</button>
+                </span>
+                <button onClick={() => handleUpdateSession(sessionId)}><SaveOutlined />SAVE</button>
             </span>
-            <span css={styles2.shareLine}>
-                <button title={session.shareId ? 'Unshare' : 'Share'} onClick={handleShareClick}><ShareOutlined /></button>
-                {/* TODO make this <a> */}
-                <input value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} readOnly={true} />
-                {!!session.shareId && <button title="Copy to Clipboard" onClick={() => handleShareLinkCopy()}><CopyOutlined /></button>}
+            <span css={styles2.shareLinkContainer}>
+                <input readOnly={true} value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} />
             </span>
         </div>}
-        {/* this is floating on normal screen and a layer on narrow screen */}
         <div css={styles3.listContainer}>
             <div>
-                <button css={styles3.addButton} onClick={() => handleSelectSession(null)}>New Chat</button>
+                <button css={styles3.addButton} onClick={() => handleSelectSession(sessions, null)}>New Chat</button>
             </div>
             <div css={styles3.queryContainer}>
                 <input css={styles3.queryString} value={queryString}
@@ -500,44 +578,45 @@ function App() {
             </div>
             <div css={styles3.itemsContainer}>
                 {displaySessions.map(s => <div key={s.id} css={[styles3.listItem, sessionId == s.id && styles3.activeItem]}>
-                    <span onClick={() => handleSelectSession(s.id)}>{s.name}</span>
+                    <span onClick={() => handleSelectSession(sessions, s.id)}>{s.name}</span>
                     <button title="Delete" onClick={() => handleDeleteSession(s.id)}><DeleteOutlined /></button>
                 </div>)}
             </div>
         </div>
-        <button css={styles3.collapseButton} title='Collapse' onClick={() => setListCollapsed(!listCollapsed)}><MenuFoldOutlined /></button>
-        {/* TODO change to another popup menu trigger from right bottom corner */}
-        {modalOpen && <div css={styles4.modalMask} onClick={() => setModalOpen(false)}></div>}
-        {modalOpen && <div css={styles4.modalContainer}>
-            <a href="https://github.com/freskyz/small/tree/main/theai">https://github.com/freskyz/small/tree/main/theai</a>
-            <div css={styles4.listFooter}>
-                <button css={styles4.loadButton} onClick={handleReloadAccountBalance} title="Click to Check Balance"><ReloadOutlined /></button>
+        <button css={styles3.collapseButton} title='Collapse' onClick={() => setListOpen(!listOpen)}><MenuFoldOutlined /></button>
+        {systemModalOpen && <div css={styles4.modalMask} onClick={() => setSystemModalOpen(false)}></div>}
+        {systemModalOpen && <div css={styles4.modalContainer}>
+            <div css={styles4.githubLink}><a href="https://github.com/freskyz/small/tree/main/theai" target='_blank' referrerPolicy='no-referrer'><GithubLogoDark /></a></div>
+            <div css={styles4.balanceContainer}>
+                <button css={styles4.balanceButton} onClick={handleReloadAccountBalance} title="Click to Check Balance"><ReloadOutlined /></button>
                 <span>Balance: {accountBalance ?? '?'}</span>
             </div>
             <input id="dark-mode" type="checkbox"></input>
             {/* TODO // https://developer.mozilla.org/en-US/docs/Web/CSS/color_value/light-dark */}
             <label htmlFor="dark-mode">Dark Mode</label>
         </div>}
-    </div>;
+        <button css={styles4.trigger} title='System Menu' onClick={() => setSystemModalOpen(!systemModalOpen)}><MenuOutlined /></button>
+    </>;
 }
 
-// becomes styles0, currently only the page container
+// this becomes styles0, currently only the page container
 const createPageStyles = () => ({
     page: css({
     }),
 });
 
-// becomes style1, main header and content styles
-const createMainStyles = () => ({
-
-    headerContainer: css({
+// this becomes style1, main header and content styles
+const createMainStyles = (narrow: boolean, infoOpen: boolean, listOpen: boolean) => ({
+    sessionNameContainerContainer: css({
         display: 'flex',
         flexFlow: 'column',
         alignItems: 'center',
-        height: '50px',
+        marginTop: '16px',
+        transition: 'width 0.25s ease',
+        // don't shrink width when narrow
+        width: !narrow && listOpen ? 'calc(100vw - 280px)' : 'calc(100vw - 24px)',
     }),
     sessionNameContainer: css({
-        marginTop: '4px',
         borderRadius: '4px',
         cursor: 'pointer',
         height: '24px',
@@ -552,59 +631,89 @@ const createMainStyles = () => ({
         lineHeight: '24px',
         marginRight: '4px',
         userSelect: 'none',
-        maxWidth: '200px',
+        maxWidth: '180px',
         display: 'inline-block',
         textOverflow: 'ellipsis',
         overflow: 'hidden',
         whiteSpace: 'nowrap',
     }),
-    collapseButton: css({
+    infoButton: css({
         background: 'transparent',
         border: 'none',
         outline: 'none',
         fontSize: '14px',
+        padding: '5px',
         cursor: 'pointer',
-        // rotate: collapsed ? '90deg' : '-90deg',
-        // transformOrigin: '13px 9px',
-    }),
-    sessionContentContainer: css({
-        overflowX: 'hidden',
-        overflowY: 'auto',
-        // width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
-        maxWidth: '800px',
-        // maxHeight: infoCollapsed ? 'calc(100vh - 60px)' : 'calc(100vh - 360px)',
+        rotate: infoOpen ? '-90deg' : '90deg',
     }),
     messagesContainer: css({
-        // width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
-        marginTop: '-50px',
+        marginTop: '8px',
+        overflowX: 'hidden',
+        overflowY: 'auto',
+        maxHeight: 'calc(100vh - 60px)',
         display: 'flex',
-        flexDirection: 'column',
+        flexFlow: 'column',
         alignItems: 'center',
+        transition: 'width 0.25s ease',
+        // don't shrink width when narrow
+        width: !narrow && listOpen ? 'calc(100vw - 288px)' : 'calc(100vw - 24px)',
     }),
     messageContainer: css({
+        width: '720px',
+        maxWidth: '90%',
+    }),
+    leftMessageContainer: css({
+        marginRight: narrow ? '24px' : '48px',
+    }),
+    rightMessageContainer: css({
+        marginLeft: narrow ? '24px' : '48px',
     }),
     messageHeader: css({
+        marginTop: '4px',
         display: 'flex',
         gap: '4px',
         padding: '4px 4px 0 4px',
-        height: '32px',
+        height: '28px',
         boxSizing: 'border-box',
     }),
+    leftMessageHeader: css({
+    }),
+    rightMessageHeader: css({
+        justifyContent: 'flex-end',
+    }),
+    messageFooter: css({
+        display: 'flex',
+        gap: '4px',
+        padding: '0 4px 4px 4px',
+        height: '28px',
+        boxSizing: 'border-box',
+    }),
+    leftMessageFooter: css({
+    }),
+    rightMessageFooter: css({
+        justifyContent: 'flex-end',
+    }),
     role: css({
-        lineHeight: '28px',
+        lineHeight: '24px',
         cursor: 'default',
         marginRight: '4px',
     }),
     pageDisplay: css({
         fontSize: '12px',
-        lineHeight: '28px',
+        lineHeight: '24px',
+        cursor: 'default',
+    }),
+    headerText: css({
+        fontSize: '12px',
+        lineHeight: '24px',
         cursor: 'default',
     }),
     headerButton: css({
         background: 'transparent',
         border: 'none',
         outline: 'none',
-        padding: '6px',
+        display: 'flex',
+        padding: '6px 6px 2px 6px',
         fontSize: '12px',
         cursor: 'pointer',
         '&:hover': {
@@ -614,16 +723,24 @@ const createMainStyles = () => ({
             marginRight: '2px',
         }
     }),
+    deleteButton: css({
+        color: '#333',
+    }),
     prevButton: css({
         rotate: '180deg',
-    }),
-    completeButton: css({
-        // this should be a major button so a dedicated style
-        // but seems this is not major button in current design
     }),
     textarea: css({
         resize: 'vertical',
         width: 'calc(100% - 16px)',
+    }),
+    markdownContainer: css({
+        padding: '8px',
+        backgroundColor: '#ddd',
+        borderRadius: '4px',
+        fontSize: '14px',
+        p: {
+            margin: '0', // overwrite ua style
+        },
     }),
     newSessionContainer: css({
 
@@ -633,19 +750,20 @@ const createMainStyles = () => ({
     }),
 });
 
-// becomes styles2, session info panel
-const createInfoStyles = (collapsed: boolean) => ({
-    sessionInfoContainer: css({
+// this becomes styles2, session info panel
+const createInfoStyles = (narrow: boolean, open: boolean) => ({
+    infoContainer: css({
+        position: 'fixed',
+        top: '64px',
+        left: narrow ? 0 : 'calc(50vw - 200px)',
         background: '#eee',
         borderRadius: '8px',
-        boxShadow: '0 4px 4px rgba(40, 46, 56, 0.15)',
-        padding: collapsed ? 0 : '8px',
-        height: collapsed ? 0 : undefined,
+        boxShadow: '3px 3px 10px 4px rgba(40, 46, 56, 0.15)',
+        padding: '8px',
         overflow: 'hidden',
-        marginTop: '12px',
-        width: '100%',
+        width: narrow ? '100%' : '400px',
         maxWidth: '400px',
-        display: 'flex',
+        display: open ? 'flex': 'none',
         flexDirection: 'column',
         boxSizing: 'border-box',
         'textarea': {
@@ -656,63 +774,58 @@ const createInfoStyles = (collapsed: boolean) => ({
         fontSize: '12px',
         color: '#333',
     }),
-    saveLine: css({
-        marginTop: '4px',
-    }),
-    saveButton: css({
-        background: 'transparent',
-        border: 'none',
-        outline: 'none',
-        borderRadius: '4px',
-        fontSize: '16px',
-        padding: '4px 12px 2px 12px',
-        float: 'right',
-        cursor: 'pointer',
-        '&:hover': {
-            background: '#ccc',
-        },
-    }),
-    shareLine: css({
+    buttonContainer: css({
         display: 'flex',
-        gap: '4px',
+        justifyContent: 'space-between',
         marginTop: '4px',
         button: {
             background: 'transparent',
             border: 'none',
             outline: 'none',
             borderRadius: '4px',
-            fontSize: '14px',
-            padding: '6px 4px 2px 4px',
+            fontSize: '12px',
+            display: 'flex',
+            padding: '5px 8px 3px 8px',
             cursor: 'pointer',
             '&:hover': {
                 background: '#ccc',
             },
         },
+    }),
+    shareButtonContainer: css({
+        display: 'flex',
+        gap: '4px',
+    }),
+    shareLinkContainer: css({
+        display: 'flex',
+        gap: '4px',
+        marginTop: '4px',
         input: {
             width: '100%',
         },
     }),
 });
 
-// becomes styles3, session list panel
-const createListStyles = (collapsed: boolean) => ({
+// this becomes styles3, session list panel
+const createListStyles = (open: boolean) => ({
     listContainer: css({
         position: 'fixed',
         top: 0,
-        right: /*collapsed ? '-280px' :*/ 0,
+        right: 0,
         height: '100vh',
         width: '280px',
         background: '#e7e7e7',
         padding: '12px 0 12px 12px',
         boxSizing: 'border-box',
-        transition: 'right 0.2s',
+        transition: 'transform 0.25s',
+        transform: open ? 'translateX(0)' : 'translateX(280px)',
         // backup in case you need this
         // '@media (max-width: 600px)': {},
     }),
     collapseButton: css({
         position: 'fixed',
         top: '12px',
-        right: '12px',
+        right: '56px',
         border: 'none',
         background: 'none',
         padding: '10px 11px 5px 11px',
@@ -720,7 +833,7 @@ const createListStyles = (collapsed: boolean) => ({
         cursor: 'pointer',
         fontSize: '16px',
         color: '#333',
-        rotate: collapsed ? '0' : '180deg',
+        rotate: open ? '180deg' : '0',
         '&:hover': {
             background: '#ccc',
         },
@@ -753,12 +866,12 @@ const createListStyles = (collapsed: boolean) => ({
     }),
     itemsContainer: css({
         marginTop: '12px',
-        height: 'calc(100vh - 128px)',
+        height: 'calc(104vh - 100px)',
         overflowX: 'hidden',
         overflowY: 'auto',
         borderWidth: '1px 0',
         borderStyle: 'solid',
-        borderColor: 'lightgray',
+        borderColor: '#ccc',
     }),
     addButton: css({
         padding: '8px 16px',
@@ -770,7 +883,7 @@ const createListStyles = (collapsed: boolean) => ({
         borderRadius: '6px',
         cursor: 'pointer',
         boxShadow: '0 2px 8px rgba(40, 46, 56, 0.15)',
-        transition: 'background 0.2s, box-shadow 0.2s',
+        transition: 'background 0.25s, box-shadow 0.25s',
         '&:hover': {
             boxShadow: '0 3px 12px rgba(68, 74, 87, 0.25)',
         },
@@ -818,20 +931,45 @@ const createListStyles = (collapsed: boolean) => ({
     }),
 });
 
-// become styles4, system modal
-const createModalStyles = () => ({
+// this becomes styles4, system modal
+const createSystemModalStyles = (narrow: boolean) => ({
+    trigger: css({
+        position: 'fixed',
+        top: '12px',
+        right: '12px',
+        border: 'none',
+        background: 'none',
+        padding: '10px 11px 5px 11px',
+        borderRadius: '6px',
+        cursor: 'pointer',
+        fontSize: '16px',
+        color: '#333',
+        '&:hover': {
+            background: '#ccc',
+        },
+    }),
     modalMask: css({
         position: 'fixed',
         inset: 0,
-        backgroundColor: '#77777733',
+        backgroundColor: '#7777',
     }),
     modalContainer: css({
+        position: 'fixed',
         background: '#eee',
-        position: 'absolute',
-        margin: '50px auto',
+        top: '64px',
+        left: narrow ? 0 : 'calc(50vw - 180px)',
         borderRadius: '8px',
+        padding: '12px',
+        width: narrow ? '100%' : '360px',
+        boxShadow: '3px 3px 10px 4px rgba(0, 0, 0, 0.15)',
+        boxSizing: 'border-box',
     }),
-    listFooter: css({
+    githubLink: css({
+        width: '16px',
+        height: '16px',
+    }),
+    balanceContainer: css({
+        marginTop: '12px',
         display: 'flex',
         height: '24px',
         'span': {
@@ -840,7 +978,7 @@ const createModalStyles = () => ({
             lineHeight: '24px',
         }
     }),
-    loadButton: css({
+    balanceButton: css({
         height: '24px',
         padding: '4px',
         fontSize: '12px',
@@ -856,31 +994,14 @@ const createModalStyles = () => ({
     }),
 });
 
-// TODO startup process
-// if no access token and no code query parameter:
-//    display and empty page with a continue button, wait for continue button
-// if has access token:
-//    try get user credentials
-//    if get user credentials:
-//       goto render
-// if no code query parameter:
-//    goto id.example.com?return
-// if has code query parameter:
-//    sign in and render, display a sign in failure content if sign in failed
-
-// if api get 401:
-//    wait for confirm continue
-//    goto id.example.com?return
-
-const emptytext = "What draws you here - chance or curiosity? And what sends you away - emptiness or the whisper of something unseen? Like a door ajar in the wind, this space may beckon or repel, yet who can say if arrival or departure holds more meaning? To stay is to touch the unknown; to go is to carry its shadow. Perhaps the truest contact is the absence of answers, the silent exchange between seeker and void. And if you reach out, do you seek me, or the echo of your own unanswered questions? In the end, is any path but a circle?";
 const root = createRoot(document.querySelector('main'));
 startup(() => root.render(<App />));
+const emptytext = "What draws you here - chance or curiosity? And what sends you away - emptiness or the whisper of something unseen? Like a door ajar in the wind, this space may beckon or repel, yet who can say if arrival or departure holds more meaning? To stay is to touch the unknown; to go is to carry its shadow. Perhaps the truest contact is the absence of answers, the silent exchange between seeker and void. And if you reach out, do you seek me, or the echo of your own unanswered questions? In the end, is any path but a circle?";
 
 // AUTOGEN
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
-
 
 let notificationTimer: any;
 let notificationElement: HTMLSpanElement;
@@ -1008,7 +1129,7 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         body: JSON.stringify(data),
         headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
     } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
-    if (response.status == 401) { confirmGotoIdentityProvider(); return; }
+    if (response.status == 401) { confirmGotoIdentityProvider(); return Promise.reject('Authentication failed.'); }
     // normal/error both return json body, but void do not
     const hasJsonBody = response.headers.has('content-Type') && response.headers.get('content-Type').includes('application/json');
     const responseData = hasJsonBody ? await response.json() : {};
