@@ -1,12 +1,13 @@
 /** @jsxImportSource @emotion/react */
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useLayoutEffect } from 'react';
+import type { PropsWithChildren } from 'react';
 import { createRoot } from 'react-dom/client';
-import { css } from '@emotion/react';
+import { css, keyframes } from '@emotion/react';
 import Markdown from 'react-markdown';
 import * as I from '../shared/api.js';
 
-function LoadingOutlined() {
-    return <svg viewBox="0 0 1024 1024" focusable="false" data-icon="loading" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 00-94.3-139.9 437.71 437.71 0 00-139.9-94.3C629 83.6 571.4 72 512 72c-19.9 0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z"></path></svg>;
+function LoadingOutlined({ className }: { className?: string }) {
+    return <svg className={className} viewBox="0 0 1024 1024" focusable="false" data-icon="loading" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 00-94.3-139.9 437.71 437.71 0 00-139.9-94.3C629 83.6 571.4 72 512 72c-19.9 0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z"></path></svg>;
 }
 function DeleteOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="delete" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M360 184h-8c4.4 0 8-3.6 8-8v8h304v-8c0 4.4 3.6 8 8 8h-8v72h72v-80c0-35.3-28.7-64-64-64H352c-35.3 0-64 28.7-64 64v80h72v-72zm504 72H160c-17.7 0-32 14.3-32 32v32c0 4.4 3.6 8 8 8h60.4l24.7 523c1.6 34.1 29.8 61 63.9 61h454c34.2 0 62.3-26.8 63.9-61l24.7-523H888c4.4 0 8-3.6 8-8v-32c0-17.7-14.3-32-32-32zM731.3 840H292.7l-24.2-512h487l-24.2 512z"></path></svg>;
@@ -43,6 +44,12 @@ function SearchOutlined() {
 }
 function CloseOutlined() {
     return <svg fill-rule="evenodd" viewBox="64 64 896 896" focusable="false" data-icon="close" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M799.86 166.31c.02 0 .04.02.08.06l57.69 57.7c.04.03.05.05.06.08a.12.12 0 010 .06c0 .03-.02.05-.06.09L569.93 512l287.7 287.7c.04.04.05.06.06.09a.12.12 0 010 .07c0 .02-.02.04-.06.08l-57.7 57.69c-.03.04-.05.05-.07.06a.12.12 0 01-.07 0c-.03 0-.05-.02-.09-.06L512 569.93l-287.7 287.7c-.04.04-.06.05-.09.06a.12.12 0 01-.07 0c-.02 0-.04-.02-.08-.06l-57.69-57.7c-.04-.03-.05-.05-.06-.07a.12.12 0 010-.07c0-.03.02-.05.06-.09L454.07 512l-287.7-287.7c-.04-.04-.05-.06-.06-.09a.12.12 0 010-.07c0-.02.02-.04.06-.08l57.7-57.69c.03-.04.05-.05.07-.06a.12.12 0 01.07 0c.03 0 .05.02.09.06L512 454.07l287.7-287.7c.04-.04.06-.05.09-.06a.12.12 0 01.07 0z"></path></svg>;
+}
+function SendOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="send" width="1em" height="1em" fill="currentColor" aria-hidden="true"><defs><style></style></defs><path d="M931.4 498.9L94.9 79.5c-3.4-1.7-7.3-2.1-11-1.2a15.99 15.99 0 00-11.7 19.3l86.2 352.2c1.3 5.3 5.2 9.6 10.4 11.3l147.7 50.7-147.6 50.7c-5.2 1.8-9.1 6-10.3 11.3L72.2 926.5c-.9 3.7-.5 7.6 1.2 10.9 3.9 7.9 13.5 11.1 21.5 7.2l836.5-417c3.1-1.5 5.6-4.1 7.2-7.1 3.9-8 .7-17.6-7.2-21.6zM170.8 826.3l50.3-205.6 295.2-101.3c2.3-.8 4.2-2.6 5-5 1.4-4.2-.8-8.7-5-10.2L221.1 403 171 198.2l628 314.9-628.2 313.2z"></path></svg>;
+}
+function PlusOutlined() {
+    return <svg viewBox="64 64 896 896" focusable="false" data-icon="plus" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M482 152h60q8 0 8 8v704q0 8-8 8h-60q-8 0-8-8V160q0-8 8-8z"></path><path d="M192 474h672q8 0 8 8v60q0 8-8 8H160q-8 0-8-8v-60q0-8 8-8z"></path></svg>;
 }
 function GithubLogoDark() {
     return <svg x="0px" y="0px" viewBox="0 0 97.6 96" >
@@ -209,15 +216,36 @@ function executeQuery(items: I.Session[], queryString: string): I.Session[] {
     return items.filter(item => matchQueryNode(item, query));
 }
 
+async function callapi<T>(api: Promise<T>): Promise<T | false> {
+    try {
+        return await api;
+    } catch (error) {
+        notification(error?.message ? 'Error: ' + error?.message : 'Something went wrong (5)');
+        return false;
+    }
+}
+
+const spinKeyframes = keyframes({
+    from: {
+        transform: 'rotate(0deg)',
+    },
+    to: {
+        transform: 'rotate(360deg)',
+    },
+});
+function Loading({ loading, children }: PropsWithChildren<{ loading: boolean }>) {
+    return loading ? <LoadingOutlined css={{ animation: `${spinKeyframes} 1s linear infinite` }} /> : children;
+}
+
 function App() {
 
     const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 600px)').matches);
     const [listOpen, setListOpen] = useState(() => !window.matchMedia('(max-width: 600px)').matches);
     const [infoOpen, setInfoOpen] = useState(false);
 
-    const styles0 = useMemo(() => createPageStyles(), []);
+    const styles0 = useMemo(() => createPageStyles(listOpen), [listOpen]);
     const styles1 = useMemo(() => createMainStyles(narrow, infoOpen, listOpen), [narrow, infoOpen, listOpen]);
-    const styles2 = useMemo(() => createInfoStyles(narrow, infoOpen), [narrow, infoOpen]);
+    const styles2 = useMemo(() => createInfoStyles(narrow, infoOpen, listOpen), [narrow, infoOpen, listOpen]);
     const styles3 = useMemo(() => createListStyles(listOpen), [listOpen]);
     const styles4 = useMemo(() => createSystemModalStyles(narrow), [narrow]);
 
@@ -243,40 +271,58 @@ function App() {
     const [queryString, setQueryString] = useState<string>('');
     // only update this when clicking apply
     const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
+    const [removingSession, setRemovingSession] = useState(false);
 
     // region: session info
-    const [sessionId, setSessionId] = useState(null);
+    const [sessionLoading, setSessionLoading] = useState(false);
+    const [sessionId, setSessionId] = useState(null); // null for initial loading, 0 for new session
     const [editingSessionName, setEditingSessionName] = useState('');
     const [editingSessionComment, setEditingSessionComment] = useState('');
     const [editingSessionTags, setEditingSessionTags] = useState('');
+    const [sharingLoading, setSharingLoading] = useState(false);
+    const [infoSaving, setInfoSaving] = useState(false);
 
     // region: system menu
     const [systemModalOpen, setSystemModalOpen] = useState(false);
     const [accountBalance, setAccountBalance] = useState<number>(null);
 
     // region: messages
-    // TODO distinguish editing content
     const [messages, setMessages] = useState<I.Message[]>([]);
+    // completing does not actually interfere with message operations except delete, so only disable the current message
+    const [completingMessageId, setCompletingMessageId] = useState<number>(null);
+    // feel free to saving multiple message at the same time
+    const [savingMessageIds, setSavingMessageIds] = useState<number[]>([]);
     // current displaying message id path
+    // TODO save message path to query
     const [messagePath, setMessagePath] = useState<number[]>([]);
+    const [editingMessageId, setEditingMessageId] = useState<number>(null); // TODO 0 for new message?
+    const [editingMessageContent, setEditingMessageContent] = useState('');
 
-    // TODO add error message display on all api invocations
+    // region: new session
+    const [creatingSession, setCreatingSession] = useState(false);
+    const [generatingSession, setGeneratingSession] = useState(false);
+    const [newSessionMessageContent, setNewSessionMessageContent] = useState('');
+    const [newSessionMessageIsSystemPrompt, setNewSessionMessageIsSystemPrompt] = useState(false);
+
+    const editingMessageTextareaElement = useRef<HTMLTextAreaElement>(null);
+    useLayoutEffect(() => {
+        if (editingMessageId && editingMessageContent && editingMessageTextareaElement.current) {
+            // if you don't shrink them, they will become higher and higher when rendering
+            editingMessageTextareaElement.current.style.height = '8px';
+            editingMessageTextareaElement.current.style.height = editingMessageTextareaElement.current.scrollHeight + 'px';
+        }
+    }, [editingMessageId, editingMessageContent, editingMessageTextareaElement]);
+
     useEffect(() => {
         (async () => {
-            try {
-                const sessions = await api.getSessions();
-                setSessions(sessions);
-                setDisplaySessions(sessions);
-                const maybeSessionId = parseInt(window.location.pathname.substring(1));
-                if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
-                    handleSelectSession(sessions, maybeSessionId);
-                } else {
-                    const url = new URL(window.location.toString());
-                    url.pathname = '/';
-                    window.history.replaceState(null, '', url.toString());
-                }
-            } catch (error) {
-                notification(error?.message ?? 'Something went wrong (1)');
+            const sessions = await callapi(api.getSessions()); if (!sessions) { return; }
+            setSessions(sessions);
+            setDisplaySessions(sessions);
+            const maybeSessionId = parseInt(new URLSearchParams(window.location.search).get('id'));
+            if (!isNaN(maybeSessionId) && maybeSessionId > 0 && sessions.some(s => s.id == maybeSessionId)) {
+                handleSelectSession(sessions, maybeSessionId);
+            } else {
+                setSessionId(0);
             }
         })();
     }, []);
@@ -298,28 +344,49 @@ function App() {
     }, [sessions]);
 
     const handleReloadAccountBalance = async () => {
-        const result = await api.getAccountBalance();
+        const result = await callapi(api.getAccountBalance()); if (!result) { return; }
         setAccountBalance(result.balance);
     };
 
-    const handleAddSession = async () => {
-        const result = await api.addSession({} as I.Session);
-        setSessions([result].concat(sessions));
-        // TODO id is not added to url after adding
-        setSessionId(result.id);
-        setMessages(result.messages);
-        setMessagePath([result.messages[0].id]);
-    };
-    const handleDeleteSession = async (sessionId: number) => {
+    const handleRemoveSession = async (removingSessionId: number) => {
         if (confirm('delete session?')) {
-            await api.removeSession(sessionId);
+            setRemovingSession(true);
+            const result = await callapi(api.removeSession(removingSessionId));
+            setRemovingSession(false);
+            if (result === false) { return; }
+            setSessions(sessions.filter(s => s.id != removingSessionId));
+            if (sessionId == removingSessionId) {
+                // it's ok to give original sessions because 0 is not used to find in sessions
+                handleSelectSession(sessions, 0);
+            }
         }
     };
 
+    useEffect(() => {
+        if (sessionId !== null) { // skip initial loading
+            const url = new URL(window.location.toString());
+            if (sessionId) {
+                url.searchParams.set('id', sessionId);
+            } else {
+                url.searchParams.delete('id');
+            }
+            window.history.pushState(null, '', url.toString());
+        }
+    }, [sessionId]);
+
     const handleSelectSession = async (sessions: I.Session[], sessionId: number) => {
         setInfoOpen(false);
-        try {
-            const session = await api.getSession(sessionId);
+        setEditingMessageId(null);
+        if (!sessionId) {
+            setSessionId(0);
+            setMessages([]);
+            setMessagePath([]);
+            setEditingMessageContent('');
+            setNewSessionMessageIsSystemPrompt(false);
+        } else {
+            setSessionLoading(true);
+            const session = await callapi(api.getSession(sessionId));
+            if (!session) { setSessionLoading(false); return; }
             const messages = session.messages;
             session.messages = []; // don't save messages in state.sessions
             // session's message list cannot be empty, so this find must have result
@@ -327,15 +394,11 @@ function App() {
             while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
                 messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
             }
+            setSessionLoading(false);
             setSessions(sessions.map(s => s.id == sessionId ? session : s));
             setSessionId(sessionId);
             setMessages(messages);
             setMessagePath(messagePath);
-            const url = new URL(window.location.toString());
-            url.pathname = `/${sessionId}`;
-            window.history.pushState(null, '', url.toString());
-        } catch (error) {
-            notification(error?.message ?? 'Something went wrong (3)');
         }
     };
 
@@ -359,22 +422,26 @@ function App() {
             // trim and remove empty entry
             tags: editingSessionTags.split(',').map(t => t.trim()).filter(t => t),
         };
-        try {
-            const updatedSession = await api.updateSession(newSession);
-            setSessions(sessions.map(s => s.id == sessionId ? updatedSession : s));
-            notification('saved successfully');
-        } catch (error) {
-            notification(error?.message ?? 'Something went wrong (2)');
-        }
+        setInfoSaving(true);
+        const updatedSession = await callapi(api.updateSession(newSession));
+        setInfoSaving(false);
+        if (!updatedSession) { return; }
+        setSessions(sessions.map(s => s.id == sessionId ? updatedSession : s));
+        notification('saved successfully');
     };
     const handleShareClick = async () => {
+        setSharingLoading(true);
         if (session.shareId) {
-            await api.unshareSession(sessionId);
+            const result = await callapi(api.unshareSession(sessionId));
+            setSharingLoading(false);
+            if (result === false) { return; }
             session.shareId = null;
             setSessions([...sessions]);
             notification('Unshared!');
         } else {
-            const result = await api.shareSession(sessionId);
+            const result = await callapi(api.shareSession(sessionId));
+            setSharingLoading(false);
+            if (!result) { return; }
             session.shareId = result.id;
             setSessions([...sessions]);
             notification('Shared!');
@@ -382,29 +449,50 @@ function App() {
     };
     const handleShareLinkCopy = () => {
         if (session.shareId) {
-            navigator.clipboard.writeText(`https://chat.example.com/share/${session.shareId}`);
+            navigator.clipboard.writeText(`https://chat.example.com/s?id=${session.shareId}`);
             notification('Copied to clipboard!');
         }
     };
-
-    // NOTE before editing state, try auto height for all textareas while messages/messagePath change
-    // useLayoutEffect(() => {
-    //     const container = document.querySelector<HTMLDivElement>('div#session-content-container');
-    //     const wasAtBottom = !container ? false : container.clientHeight + container.scrollTop >= container.scrollHeight - 10;
-    //     document.querySelectorAll<HTMLTextAreaElement>('textarea.major-content').forEach(e => {
-    //         e.style.height = '8px'; // if you don't shrink them, they will become higher and higher when rendering
-    //         e.style.height = e.scrollHeight + 'px';
-    //     });
-    //     if (wasAtBottom) {
-    //         container.scrollTo({ top: container.scrollHeight - container.clientHeight });
-    //     }
-    // }, [messages, messagePath]);
+    
+    const handleCreateSession = async () => {
+        setCreatingSession(true);
+        const session = await callapi(api.addSession({
+            messages: [{ id: 1, role: newSessionMessageIsSystemPrompt ? 'system' : 'user', content: newSessionMessageContent }],
+        } as I.Session));
+        setCreatingSession(false);
+        if (!session) { return; }
+        setNewSessionMessageContent('');
+        setSessions([session].concat(sessions));
+        setSessionId(session.id);
+        setMessages(session.messages);
+        setMessagePath([session.messages[0].id]);
+    };
+    const handleGenerateSession = async () => {
+        setGeneratingSession(true);
+        const session = await callapi(api.addSession({
+            messages: [{ id: 1, role: 'user', content: newSessionMessageContent }],
+        } as I.Session));
+        if (!session) { setGeneratingSession(false); return; }
+        const assistantMessage = await callapi(api.completeMessage(session.id, session.messages[0].id));
+        setGeneratingSession(false);
+        setSessions([session].concat(sessions));
+        setSessionId(session.id);
+        setNewSessionMessageContent('');
+        if (!assistantMessage) {
+            setMessages(session.messages);
+            setMessagePath([session.messages[0].id]);
+        } else {
+            setMessages(session.messages.concat(assistantMessage));
+            setMessagePath([session.messages[0].id, assistantMessage.id]);
+        }
+    };
 
     // to make things simple, add message directly add to db
     const handleAddMessage = async () => {
         const lastMessage = messages.find(m => m.id == messagePath[messagePath.length - 1]);
         const newRole = lastMessage.role == 'system' || lastMessage.role == 'assistant' ? 'user' : 'assistant';
-        const result = await api.addMessage(sessionId, { id: 0, parentId: lastMessage.id, role: newRole, content: '' });
+        const result = await callapi(api.addMessage(sessionId, { id: 0, parentId: lastMessage.id, role: newRole, content: '' }));
+        if (!result) { return; }
         setMessages(messages.concat(result));
         setMessagePath(messagePath.concat(result.id));
     };
@@ -417,19 +505,32 @@ function App() {
         }
         setMessagePath(newMessagePath);
     };
-    const handleUpdateMessage = async (message: I.Message) => {
-        await api.updateMessage(sessionId, message);
-        notification('save edit successfully');
+    const handleEditMessage = (message: I.Message) => {
+        setEditingMessageId(message.id);
+        setEditingMessageContent(message.content);
+    };
+    const handleSaveMessage = async (message: I.Message) => {
+        setSavingMessageIds(ids => ids.concat(message.id));
+        const newMessage = {
+            ...message,
+            content: editingMessageContent,
+        }
+        const result = await callapi(api.updateMessage(sessionId, newMessage));
+        setSavingMessageIds(ids => ids.filter(m => m != message.id));
+        if (!result) { return; }
+        setEditingMessageId(null);
+        setEditingMessageContent('');
+        setMessages(messages.map(e => e.id == message.id ? result : e));
+        notification('Saved successfully.');
     };
     const handleBranchMessage = async (message: I.Message) => {
         // directly use the current message to call addmessage is enough for branch message
-        const result = await api.addMessage(sessionId, message);
+        const result = await callapi(api.addMessage(sessionId, message)); if (!result) { return; }
         setMessages(messages.concat(result));
         setMessagePath(messagePath.slice(0, messagePath.indexOf(message.id)).concat(result.id));
-        notification('branch message successfully');
+        notification('Branch created successfully.');
     };
     const handleDeleteMessage = async (messageId: number) => {
-
         // if have sibiling, place a sibling at current path
         let currentPositionNewMessageId: number;
         const message = messages.find(m => m.id == messageId);
@@ -442,9 +543,14 @@ function App() {
             currentPositionNewMessageId = siblings[newSiblingIndex];
         }
 
-        if (confirm('delete this and following message?')) {
-            await api.removeMessageTree(sessionId, messageId);
+        if (!confirm('delete this and following message?')) {
+            return;
         }
+
+        setSessionLoading(true);
+        const result = await callapi(api.removeMessageTree(sessionId, messageId));
+        if (result === false) { setSessionLoading(false); return; }
+        
         let newMessages = messages.filter(m => m.id != messageId);
         let beforeLoopMessagesLength = newMessages.length;
         while (true) {
@@ -460,27 +566,26 @@ function App() {
             newMessagePath.push(newMessages.find(m => m.parentId == newMessagePath[newMessagePath.length - 1]).id);
         }
         // console.log('delete message, result', { newMessages, newMessagePath });
+        setSessionLoading(false);
         setMessages(newMessages);
         setMessagePath(newMessagePath);
     };
 
     const handleCompleteMessage = async (messageId: number) => {
-        try {
-            const result = await api.completeMessage(sessionId, messageId);
-            // TODO messagepath is not displayed correctly
-            setMessages(messages.concat(result));
-            setMessagePath(messagePath.slice(0, messagePath.find(m => m == messageId) + 1).concat(result.id));
-        } catch (error) {
-            notification(error?.message ?? 'Something went wrong (4)');
-        }
+        setCompletingMessageId(messageId);
+        const result = await callapi(api.completeMessage(sessionId, messageId));
+        setCompletingMessageId(null);
+        if (!result) { return; }
+        setMessages(messages.concat(result));
+        setMessagePath(messagePath.slice(0, messagePath.findIndex(m => m == messageId) + 1).concat(result.id));
     };
 
     const session = sessions.find(s => s.id == sessionId);
     return <>
         <div css={styles1.sessionNameContainerContainer}>
             <div css={styles1.sessionNameContainer} onClick={handleToggleSessionInfo}>
-                <span css={styles1.sessionName}>{session?.name}</span>
-                <button css={styles1.infoButton} title='Collapse'><CaretRightOutlined /></button>
+                <span css={styles1.sessionName}>{session?.name ?? 'New Session'}</span>
+                {!!sessionId && <button css={styles1.infoButton} title='Collapse'><CaretRightOutlined /></button>}
             </div>
         </div>
         {session ? <div css={styles1.messagesContainer}>
@@ -488,66 +593,80 @@ function App() {
                 css={[styles1.messageContainer, m.role == 'assistant' ? styles1.leftMessageContainer : styles1.rightMessageContainer]}>
                 <div css={[styles1.messageHeader, m.role == 'assistant' ? styles1.leftMessageHeader : styles1.rightMessageHeader]}>
                     {m.role == 'assistant' && <span css={styles1.role}>{m.role.toUpperCase()}</span>}
-                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
+                    {m.id != editingMessageId && messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
                         css={[styles1.headerButton, styles1.prevButton]} title="Prev"
-                        disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
+                        // any editing message disable switch page
+                        disabled={!!editingMessageId || messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == 0}
                         onClick={() => handleNavigateBranch(m, false)}><CaretRightOutlined /></button>}
-                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <span css={styles1.pageDisplay}>
+                    {m.id != editingMessageId && messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <span css={styles1.pageDisplay}>
                         {messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) + 1}/{messages.filter(a => a.parentId == m.parentId).map(a => a.id).length}</span>}
-                    {messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
+                    {m.id != editingMessageId && messages.filter(a => a.parentId == m.parentId).map(a => a.id).length > 1 && <button
                         css={styles1.headerButton} title='Next'
-                        disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
+                        disabled={!!editingMessageId || messages.filter(a => a.parentId == m.parentId)
+                            .map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
                         onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
-                    <button css={styles1.headerButton}
-                        title='Copy Content'
-                        onClick={() => navigator.clipboard.writeText(m.content)}><CopyOutlined />COPY</button>
-                    <button css={styles1.headerButton}
-                        title='Save current edit in this message record'
-                        onClick={() => handleUpdateMessage(m)}><EditOutlined />EDIT</button>
-                    <button css={styles1.headerButton}
-                        title='Use current edit to branch message tree from parent message'
-                        onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>
-                    {m.role == 'user' && <button css={styles1.headerButton}
-                        title='Complete this' onClick={() => handleCompleteMessage(m.id)}><CaretRightOutlined />COMPLETE</button>}
+                    {m.id != editingMessageId && <button css={styles1.headerButton}
+                        onClick={() => { navigator.clipboard.writeText(m.content); notification('Copied to clipboard!'); }}><CopyOutlined />COPY</button>}
+                    {/* do not display all edit button when editing any message */}
+                    {m.id != completingMessageId && !editingMessageId && <button css={styles1.headerButton}
+                        onClick={() => handleEditMessage(m)}><EditOutlined />EDIT</button>}
+                    {/* do not display all edit button when editing any message */}
+                    {!editingMessageId && <button css={styles1.headerButton}
+                        onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>}
+                    {/* do not display all complete button when editing any message, when any message is completing */}
+                    {!editingMessageId && m.role == 'user' && <button css={styles1.headerButton}
+                        disabled={m.id == completingMessageId} onClick={() => handleCompleteMessage(m.id)}>
+                        <Loading loading={m.id == completingMessageId}><CaretRightOutlined /></Loading>COMPLETE</button>}
+                    {m.id == editingMessageId && <button css={styles1.headerButton}
+                        onClick={() => handleSaveMessage(m)}>
+                        <Loading loading={savingMessageIds.includes(m.id)}><SaveOutlined /></Loading>SAVE</button>}
+                    {m.id == editingMessageId && <button css={styles1.headerButton}
+                        onClick={() => { setEditingMessageId(null); setEditingMessageContent(''); }}><CloseOutlined />CANCEL</button>}
                     {m.role != 'assistant' && <span css={styles1.role}>{m.role.toUpperCase()}</span>}
                 </div>
-                {/* TODO https://marked.js.org/#usage */}
-                {/* TODO https://github.com/remarkjs/react-markdown, NOTE react-markdown don't support ai's latex syntax, need something like const preprocessLaTeX = (content: string) => {
-                    // Replace block-level LaTeX delimiters \[ \] with $$ $$  
-                    const blockProcessedContent = content.replace(
-                        /\\\[(.*?)\\\]/gs,
-                        (_, equation) => `$$${equation}$$`,
-                    );
-                    // Replace inline LaTeX delimiters \( \) with $ $
-                    const inlineProcessedContent = blockProcessedContent.replace(
-                        /\\\((.*?)\\\)/gs,
-                        (_, equation) => `$${equation}$`,
-                    );
-                    return inlineProcessedContent;
-                    }; also see https://github.com/remarkjs/react-markdown/issues/785 */}
-                {/* <textarea css={styles1.textarea} value={m.content}
-                    onChange={e => { m.content = e.target.value; setMessages([...messages]) }} /> */}
-                <div css={styles1.markdownContainer}>
-                    <Markdown>{m.content}</Markdown>
-                </div>
+                {m.id == editingMessageId
+                    ? <textarea ref={editingMessageTextareaElement} css={styles1.textarea}
+                        value={editingMessageContent} onChange={e => setEditingMessageContent(e.target.value)} />
+                    : <div css={styles1.markdownContainer}>
+                        <Markdown>{m.content}</Markdown>
+                    </div>}
                 <div css={[styles1.messageFooter, m.role == 'assistant' ? styles1.leftMessageFooter : styles1.rightMessageFooter]}>
                     <span css={styles1.headerText}>#{m.id}</span>
                     {!narrow && <span css={styles1.headerText}>create {m.createTime}</span>}
                     <span css={styles1.headerText}>update {m.updateTime}</span>
-                    {!!m.promptTokenCount && !!m.completionTokenCount && <span css={styles1.headerText}>token {m.promptTokenCount}/{m.completionTokenCount}</span>}
-                    <button css={[styles1.headerButton, styles1.deleteButton]} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>
+                    {!!m.promptTokenCount && !!m.completionTokenCount
+                        && <span css={styles1.headerText}>token {m.promptTokenCount}/{m.completionTokenCount}</span>}
+                    {/* do not display all delete button when editing any message, do not delete completing message */}
+                    {!editingMessageId && m.id != completingMessageId && <button
+                        css={[styles1.headerButton, styles1.deleteButton]} onClick={() => handleDeleteMessage(m.id)}><DeleteOutlined />DELETE</button>}
                 </div>
             </div>)}
             <div>
                 <button onClick={handleAddMessage}>ADD</button>
             </div>
-        </div> : <div css={styles1.newSessionContainer}>
-            <div>Start new chat</div>
-            <input css={styles1.newSessionTitle}></input>
-            <textarea></textarea>
-            <button>SEND</button>
+        </div> : sessionId === 0 && <div css={styles1.newSessionContainer}>
+            <div>Start New Chat</div>
+            <textarea css={styles1.newSessionInput} rows={4}
+                readOnly={creatingSession || generatingSession}
+                value={newSessionMessageContent} onChange={e => setNewSessionMessageContent(e.target.value)}></textarea>
+            <div css={styles1.newSessionButtonContainer}>
+                <input id='new-session-system-prompt' type="checkbox" disabled={creatingSession || generatingSession}
+                    checked={newSessionMessageIsSystemPrompt} onChange={e => setNewSessionMessageIsSystemPrompt(e.target.checked)}></input>
+                <label htmlFor='new-session-system-prompt'>System Prompt</label>
+                <button css={styles1.newSessionButton}
+                    disabled={!newSessionMessageContent || creatingSession || generatingSession}
+                    onClick={handleCreateSession}>
+                    <Loading loading={creatingSession}><PlusOutlined /></Loading>CREATE
+                </button>
+                <button css={styles1.newSessionButton}
+                    disabled={!newSessionMessageContent || newSessionMessageIsSystemPrompt || creatingSession || generatingSession}
+                    onClick={handleGenerateSession}>
+                    <Loading loading={generatingSession}><SendOutlined /></Loading>SEND
+                </button>
+            </div>
         </div>}
-        {sessionId && <div css={styles2.infoContainer}>
+        {sessionLoading && <div css={styles0.sessionLoadingMask}><LoadingOutlined /></div>}
+        {!!sessionId && <div css={styles2.infoContainer}>
             <span css={styles2.label}>Name</span>
             <input value={editingSessionName} onChange={e => setEditingSessionName(e.target.value)} />
             <span css={styles2.label}>Tags</span>
@@ -557,18 +676,20 @@ function App() {
             <span css={styles2.label}>Created {session.createTime}, Updated {session.updateTime}</span>
             <span css={styles2.buttonContainer}>
                 <span css={styles2.shareButtonContainer}>
-                    <button onClick={handleShareClick}><ShareOutlined />SHARE</button>
+                    <button onClick={handleShareClick}><Loading loading={sharingLoading}><ShareOutlined /></Loading>SHARE</button>
                     <button disabled={!session.shareId} onClick={() => handleShareLinkCopy()}><CopyOutlined />COPY</button>
                 </span>
-                <button onClick={() => handleUpdateSession(sessionId)}><SaveOutlined />SAVE</button>
+                <button disabled={infoSaving} onClick={() => handleUpdateSession(sessionId)}>
+                    <Loading loading={infoSaving}><SaveOutlined /></Loading>SAVE
+                </button>
             </span>
             <span css={styles2.shareLinkContainer}>
-                <input readOnly={true} value={session.shareId ? `https://chat.example.com/share/${session.shareId}` : ''} />
+                <input readOnly={true} value={session.shareId ? `https://chat.example.com/s?id=${session.shareId}` : ''} />
             </span>
         </div>}
         <div css={styles3.listContainer}>
             <div>
-                <button css={styles3.addButton} onClick={() => handleSelectSession(sessions, null)}>New Chat</button>
+                <button css={styles3.addNewButton} onClick={() => handleSelectSession(sessions, 0)}>ADD NEW</button>
             </div>
             <div css={styles3.queryContainer}>
                 <input css={styles3.queryString} value={queryString}
@@ -579,10 +700,11 @@ function App() {
             <div css={styles3.itemsContainer}>
                 {displaySessions.map(s => <div key={s.id} css={[styles3.listItem, sessionId == s.id && styles3.activeItem]}>
                     <span onClick={() => handleSelectSession(sessions, s.id)}>{s.name}</span>
-                    <button title="Delete" onClick={() => handleDeleteSession(s.id)}><DeleteOutlined /></button>
+                    <button title="Delete" onClick={() => handleRemoveSession(s.id)}><DeleteOutlined /></button>
                 </div>)}
             </div>
         </div>
+        {((!sessionId && sessionId !== 0) || removingSession) && <div css={styles0.sessionsLoadingMask}><LoadingOutlined /></div>}
         <button css={styles3.collapseButton} title='Collapse' onClick={() => setListOpen(!listOpen)}><MenuFoldOutlined /></button>
         {systemModalOpen && <div css={styles4.modalMask} onClick={() => setSystemModalOpen(false)}></div>}
         {systemModalOpen && <div css={styles4.modalContainer}>
@@ -600,8 +722,31 @@ function App() {
 }
 
 // this becomes styles0, currently only the page container
-const createPageStyles = () => ({
-    page: css({
+const createPageStyles = (listOpen: boolean) => ({
+    sessionsLoadingMask: css({
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: '#7777',
+        svg: {
+            position: 'fixed',
+            left: '50vw',
+            top: '50vh',
+            fontSize: '24px',
+            animation: `${spinKeyframes} 1s linear infinite`,
+        },
+    }),
+    sessionLoadingMask: css({
+        position: 'fixed',
+        inset: 0,
+        backgroundColor: '#7777',
+        svg: {
+            position: 'fixed',
+            left: listOpen ? 'calc(50vw - 140px)' : '50vw',
+            top: '50vh',
+            fontSize: '24px',
+            animation: `${spinKeyframes} 1s linear infinite`,
+            transition: 'left 0.3s',
+        },
     }),
 });
 
@@ -732,6 +877,7 @@ const createMainStyles = (narrow: boolean, infoOpen: boolean, listOpen: boolean)
     textarea: css({
         resize: 'vertical',
         width: 'calc(100% - 16px)',
+        fontSize: '12px',
     }),
     markdownContainer: css({
         padding: '8px',
@@ -743,19 +889,48 @@ const createMainStyles = (narrow: boolean, infoOpen: boolean, listOpen: boolean)
         },
     }),
     newSessionContainer: css({
-
+        display: 'flex',
+        gap: '8px',
+        flexFlow: 'column',
+        alignItems: 'center',
+        marginTop: '30vh',
+        transition: 'width 0.25s ease',
+        // don't shrink width when narrow
+        width: !narrow && listOpen ? 'calc(100vw - 288px)' : 'calc(100vw - 24px)',
     }),
-    newSessionTitle: css({
-
+    newSessionInput: css({
+        resize: 'vertical',
+        width: '400px',
+        maxWidth: '90%',
+        fontSize: '12px', // why is ua style give this very small font size
+    }),
+    newSessionButtonContainer: css({
+        display: 'flex',
+    }),
+    newSessionButton: css({
+        marginLeft: '8px',
+        background: 'transparent',
+        border: 'none',
+        outline: 'none',
+        display: 'flex',
+        padding: '6px 6px 2px 6px',
+        fontSize: '14px',
+        cursor: 'pointer',
+        '&:hover': {
+            background: '#eee',
+        },
+        'svg': {
+            marginRight: '2px',
+        }
     }),
 });
 
 // this becomes styles2, session info panel
-const createInfoStyles = (narrow: boolean, open: boolean) => ({
+const createInfoStyles = (narrow: boolean, open: boolean, listOpen: boolean) => ({
     infoContainer: css({
         position: 'fixed',
         top: '64px',
-        left: narrow ? 0 : 'calc(50vw - 200px)',
+        left: narrow ? 0 : listOpen ? 'calc(50vw - 340px)' : 'calc(50vw - 200px)',
         background: '#eee',
         borderRadius: '8px',
         boxShadow: '3px 3px 10px 4px rgba(40, 46, 56, 0.15)',
@@ -766,6 +941,7 @@ const createInfoStyles = (narrow: boolean, open: boolean) => ({
         display: open ? 'flex': 'none',
         flexDirection: 'column',
         boxSizing: 'border-box',
+        transition: 'left 0.3s',
         'textarea': {
             resize: 'vertical',
         },
@@ -873,7 +1049,7 @@ const createListStyles = (open: boolean) => ({
         borderStyle: 'solid',
         borderColor: '#ccc',
     }),
-    addButton: css({
+    addNewButton: css({
         padding: '8px 16px',
         fontSize: '16px',
         fontWeight: 'bold',
@@ -1046,6 +1222,7 @@ let accessToken: string;
 function gotoIdentityProvider() {
     if (window.location.pathname.length > 1) {
         localStorage['return-pathname'] = window.location.pathname;
+        localStorage['return-searchparams'] = window.location.search;
     }
     window.location.assign('https://id.example.com?return=https://chat.example.com');
 }
@@ -1066,6 +1243,7 @@ async function startup(render: () => void) {
         const url = new URL(window.location.toString());
         url.searchParams.delete('code');
         if (localStorage['return-pathname']) { url.pathname = localStorage['return-pathname']; localStorage.removeItem('return-pathname'); }
+        if (localStorage['return-searchparams']) { url.search = localStorage['return-searchparams']; localStorage.removeItem('return-searchparams'); }
         window.history.replaceState(null, '', url.toString());
         const response = await fetch('https://api.example.com/signin', { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
         if (response.status != 200) { notification('Failed to sign in, how does that happen?'); }

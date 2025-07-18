@@ -40,7 +40,7 @@
     generated backend function call and front end function wrapper will include the Public -->
   <action key="share" name="PublicGetSession" public="true" a1="shareId:guid" return="Session" />
   <!-- use body.name as name, or generate a name if not provided -->
-  <!-- creates a initial system message: You are a helpful assistant. -->
+  <!-- requires exactly one message, role is user or system -->
   <action key="main" name="AddSession" body="Session" return="Session" />
   <!-- rename session or update comment -->
   <action key="main" name="UpdateSession" body="Session" return="Session" />

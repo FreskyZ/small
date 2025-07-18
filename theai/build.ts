@@ -379,6 +379,7 @@ let accessToken: string;
 function gotoIdentityProvider() {
     if (window.location.pathname.length > 1) {
         localStorage['return-pathname'] = window.location.pathname;
+        localStorage['return-searchparams'] = window.location.search;
     }
     window.location.assign('https://id.example.com?return=https://chat.example.com');
 }
@@ -399,6 +400,7 @@ async function startup(render: () => void) {
         const url = new URL(window.location.toString());
         url.searchParams.delete('code');
         if (localStorage['return-pathname']) { url.pathname = localStorage['return-pathname']; localStorage.removeItem('return-pathname'); }
+        if (localStorage['return-searchparams']) { url.search = localStorage['return-searchparams']; localStorage.removeItem('return-searchparams'); }
         window.history.replaceState(null, '', url.toString());
         const response = await fetch('https://api.example.com/signin', { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
         if (response.status != 200) { notification('Failed to sign in, how does that happen?'); }
@@ -645,6 +647,12 @@ async function postprocess(assets: ScriptAssets): Promise<boolean> {
             new RegExp(`from ['"]${dependency.name}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}'`);
         for (const pathname of dependency.pathnames) {
             assets.mainClient = assets.mainClient.replace(
+                new RegExp(`from ['"]${dependency.name}${pathname}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}${pathname}'`);
+        }
+        assets.shareClient = assets.shareClient.replace(
+            new RegExp(`from ['"]${dependency.name}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}'`);
+        for (const pathname of dependency.pathnames) {
+            assets.shareClient = assets.shareClient.replace(
                 new RegExp(`from ['"]${dependency.name}${pathname}['"]`), `from 'https://esm.sh/${dependency.name}@${packageVersion}${pathname}'`);
         }
     }

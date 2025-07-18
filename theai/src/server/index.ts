@@ -122,9 +122,19 @@ async function publicGetSession(_ax: ActionContext, shareId: string): Promise<I.
     };
 }
 
-async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Session> {
-    const newName = withName.name ?? ax.now.format('YYYYMMDD-HHmmss');
+async function addSession(ax: ActionContext, session: I.Session): Promise<I.Session> {
 
+    if (session.messages.length != 1) {
+        throw new MyError('common', 'missing initial message');
+    }
+    if (session.messages[0].role != 'system' && session.messages[0].role != 'user') {
+        throw new MyError('common', 'invalid role');
+    }
+    if (!session.messages[0].content || !session.messages[0].content.length) {
+        throw new MyError('common', 'invalid content');
+    }
+
+    const newName = session.name ?? ax.now.format('YYYYMMDD-HHmmss');
     // NOTE session name should not duplicate in userid (can duplicate in different users)
     const [existingSessions] = await pool.query<QueryResult<D.Session>[]>(
         'SELECT `SessionId` FROM `Session` WHERE `UserId` = ? AND `Name` = ?',
@@ -139,8 +149,8 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
         [ax.userId, newName],
     );
     await pool.execute<ManipulateResult>(
-        "INSERT INTO `Message` (`SessionId`, `MessageId`, `Role`, `Content`) VALUES (?, 1, 'system', 'You are a helpful assistant.')",
-        [insertResult.insertId],
+        "INSERT INTO `Message` (`SessionId`, `MessageId`, `Role`, `Content`) VALUES (?, 1, ?, ?)",
+        [insertResult.insertId, session.messages[0].role, session.messages[0].content],
     );
 
     return {
@@ -151,8 +161,8 @@ async function addSession(ax: ActionContext, withName: I.Session): Promise<I.Ses
         tags: [],
         messages: [{
             id: 1,
-            role: 'system',
-            content: 'You are a helpful assistant.',
+            role: session.messages[0].role,
+            content: session.messages[0].content,
             createTime: formatDateTime(ax.now),
             updateTime: formatDateTime(ax.now),
         }],
@@ -192,13 +202,11 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
 }
 async function removeSession(ax: ActionContext, sessionId: number) {
     // TODO if indexed, cannot remove
-
     await validateSessionUser(ax, sessionId);
     await pool.execute('DELETE FROM `Message` WHERE `SessionId` = ?', [sessionId]);
     await pool.execute('DELETE FROM `Session` WHERE `SessionId` = ?', [sessionId]);
 }
 
-// TODO got invalid message id
 async function addMessage(ax: ActionContext, sessionId: number, message: I.Message): Promise<I.Message> {
     await validateSessionUser(ax, sessionId);
 
@@ -222,7 +230,7 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
     }
 
     const [maxMessages] = await pool.query<QueryResult<{ MaxMessageId: number }>[]>(
-        "SELECT MAX(`MessageId`) FROM `Message` GROUP BY `SessionId` HAVING `SessionId` = ?",
+        "SELECT MAX(`MessageId`) `MaxMessageId` FROM `Message` GROUP BY `SessionId` HAVING `SessionId` = ?",
         [sessionId],
     );
     const newMessageId = maxMessages[0].MaxMessageId + 1;
@@ -244,8 +252,8 @@ async function updateMessage(ax: ActionContext, sessionId: number, message: I.Me
     await validateSessionUser(ax, sessionId);
 
     await pool.execute(
-        'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL, `UpdateTime` = ? WHERE `MessageId` = ?',
-        [message.content, ax.now.format('YYYY-MM-DD HH:mm:ss'), message.id],
+        'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL, `UpdateTime` = ? WHERE `MessageId` = ? AND `SessionId` = ?',
+        [message.content, ax.now.format('YYYY-MM-DD HH:mm:ss'), message.id, sessionId],
     );
     message.updateTime = formatDateTime(ax.now);
     return message;
@@ -279,6 +287,7 @@ async function removeMessageTree(ax: ActionContext, sessionId: number, messageId
     );
 }
 
+const fakeComplete = false;
 async function completeMessage(ax: ActionContext, sessionId: number, messageId: number): Promise<I.Message> {
     await validateSessionUser(ax, sessionId);
 
@@ -300,9 +309,10 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
 
     // order by messageid: a message cannot be added before its parentid, so order by parentid is enough
     const [messages] = await pool.execute<QueryResult<D.Message>[]>(
-        `SELECT \`MessageId\`, \`Role\`, \`Content\` FROM \`Message\` WHERE \`MessageId\` IN (${messageIds.map(() => '?').join(',')}) ORDER BY \`MessageId\``,
-        messageIds,
+        `SELECT \`MessageId\`, \`Role\`, \`Content\` FROM \`Message\` WHERE \`SessionId\` = ? AND \`MessageId\` IN (${messageIds.map(() => '?').join(',')}) ORDER BY \`MessageId\``,
+        [sessionId, ...messageIds],
     );
+    // console.log('completeMessage, loaded messages', messages);
 
     const firstRole = messages[0].Role;
     if (firstRole != 'system' && firstRole != 'user') {
@@ -330,62 +340,75 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
         throw new MyError('common', 'conversation must end with a user message');
     }
 
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${config.aikey}`,
-        },
-        body: JSON.stringify({ model: 'deepseek-chat', messages: messages.map(m => ({ role: m.Role, content: m.Content })) }),
-    });
-    if (response.status != 200) {
-        // TMD there is no log here
-        console.log(response);
-        throw new MyError('internal', 'failed to get response');
-    }
-
-    interface CompletionAPIResponse {
-        choices: {
-            index: number,
-            message: {
-                role: string,
-                content: string,
-                reasoning_content: string,
+    let responseContent: string;
+    let responseReasoningContent: string;
+    let promptTokenCount: number;
+    let completionTokenCount: number;
+    if (fakeComplete) {
+        await new Promise<void>(resolve => setTimeout(resolve, 10_000));
+        responseContent = "for debug " + messages.map(m => m.Content).join("\n");
+        responseReasoningContent = null;
+        const veryRawWordCount = messages.filter(m => m.Role != 'assistant').reduce((acc, m) => acc + m.Content.split(' ').length, 0);
+        promptTokenCount = Math.round(veryRawWordCount * 0.2);
+        completionTokenCount = Math.round(veryRawWordCount * 0.8);
+    } else {
+        const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${config.aikey}`,
             },
-            finish_reason: string,
-        }[],
-        usage: {
-            prompt_tokens: number,
-            completion_tokens: number,
-            total_tokens: number,
-        };
-    }
-    const responseBody = await response.json() as CompletionAPIResponse;
-    const responseContent = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.content : '(no response)';
-    const responseReasoningContent = responseBody.choices && responseBody.choices[0] ? responseBody.choices[0].message.reasoning_content : '(no response)';
-    const processedContent = responseContent.trim()
-        // .replace(/\r?\n\r?\n/g, '\n') // remove empty line
-        // .split('\n').map(v => v.trim()).join('\n') // trim each line
-        // additional refinements if need
-        // .replace(/"([^"]*)"/g, '“$1”') // replace ASCII double quotes with fullwidth quotes
-        // .replaceAll('...', '……') // replace ... with full width …
-        // .replaceAll('**', '') // remove markdown bold
+            body: JSON.stringify({ model: 'deepseek-chat', messages: messages.map(m => ({ role: m.Role, content: m.Content })) }),
+        });
+        if (response.status != 200) {
+            // TMD there is no log here
+            console.log(response);
+            throw new MyError('internal', 'failed to get response');
+        }
 
-    const promptTokenCount =  responseBody.usage.prompt_tokens;
-    const completionTokenCount = responseBody.usage.completion_tokens;
+        interface CompletionAPIResponse {
+            choices: {
+                index: number,
+                message: {
+                    role: string,
+                    content: string,
+                    reasoning_content: string,
+                },
+                finish_reason: string,
+            }[],
+            usage: {
+                prompt_tokens: number,
+                completion_tokens: number,
+                total_tokens: number,
+            };
+        }
+        const responseData = await response.json() as CompletionAPIResponse;
+        const responseOriginalContent = responseData.choices && responseData.choices[0] ? responseData.choices[0].message.content : '(no response)';
+        responseReasoningContent = responseData.choices && responseData.choices[0] ? responseData.choices[0].message.reasoning_content : '(no response)';
+        responseContent = responseOriginalContent.trim()
+            // .replace(/\r?\n\r?\n/g, '\n') // remove empty line
+            // .split('\n').map(v => v.trim()).join('\n') // trim each line
+            // additional refinements if need
+            // .replace(/"([^"]*)"/g, '“$1”') // replace ASCII double quotes with fullwidth quotes
+            // .replaceAll('...', '……') // replace ... with full width …
+            // .replaceAll('**', '') // remove markdown bold
+
+        promptTokenCount =  responseData.usage.prompt_tokens;
+        completionTokenCount = responseData.usage.completion_tokens;
+    }
 
     // complete message works as external service is adding message
     const newMessageId = messageRelationships.reduce((acc, r) => Math.max(acc, r.MessageId), 0) + 1;
     await pool.execute<ManipulateResult>(
         "INSERT INTO `Message` (`SessionId`, `MessageId`, `ParentMessageId`, `Role`, `Content`, `ThinkingContent`, `PromptTokenCount`, `CompletionTokenCount`) VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?)",
-        [sessionId, newMessageId, messageId, processedContent, responseReasoningContent ?? null, promptTokenCount, completionTokenCount],
+        [sessionId, newMessageId, messageId, responseContent, responseReasoningContent ?? null, promptTokenCount, completionTokenCount],
     );
 
     return {
         id: newMessageId,
         parentId: messageId,
         role: 'assistant',
-        content: processedContent,
+        content: responseContent,
         promptTokenCount,
         completionTokenCount,
         createTime: formatDateTime(ax.now),
