@@ -24,7 +24,7 @@ const debug = 'AKARI_DEBUG' in process.env;
 // TODO if this is needed again, it need to be in buildscriptwebsocket command
 const nocodegen = 'AKARI_NOCG' in process.env; // manually change codegen part for debugging, etc.
 if (nocodegen) { console.log('configured no codegen'); }
-const config = JSON.parse(await fs.readFile('akaric', 'utf-8'));
+const config = JSON.parse(await fs.readFile('akari.json', 'utf-8'));
 
 // ???
 // by the way ATTENTION this relative path is not same as in build-core.js
@@ -720,8 +720,9 @@ async function buildAndDeploy() {
     const indexhtml = await fs.readFile('src/client/index.html', 'utf-8');
     const processedIndexHTML = indexhtml.replaceAll('example.com', config['main-domain']);
     await sftpclient.put(Buffer.from(processedIndexHTML), path.join(config.webroot, 'static/yala/index.html'));
-
-    await sftpclient.fastPut('src/client/share.html', path.join(config.webroot, 'static/yala/share.html'));
+    const sharehtml = await fs.readFile('src/client/index.html', 'utf-8');
+    const processedShareHTML = sharehtml.replaceAll('example.com', config['main-domain']);
+    await sftpclient.put(Buffer.from(processedShareHTML), path.join(config.webroot, 'static/yala/share.html'));
     await sftpclient.put(Buffer.from(assets.mainClient), path.join(config.webroot, 'static/yala/index.js'));
     await sftpclient.put(Buffer.from(assets.shareClient), path.join(config.webroot, 'static/yala/share.js'));
     await sftpclient.put(Buffer.from(assets.server), path.join(config.webroot, 'servers/yala.js'));

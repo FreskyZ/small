@@ -2,10 +2,31 @@
 import { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
+import Markdown from 'react-markdown';
 import * as I from '../shared/api.js';
 
 function CaretRightOutlined() {
     return <svg viewBox="0 0 1024 1024" focusable="false" data-icon="caret-right" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M715.8 493.5L335 165.1c-14.2-12.2-35-1.2-35 18.5v656.8c0 19.7 20.8 30.7 35 18.5l380.8-328.4c10.9-9.4 10.9-27.6 0-37z"></path></svg>;
+}
+
+let notificationTimer: any;
+let notificationElement: HTMLSpanElement;
+function notification(message: string) {
+    if (!notificationElement) {
+        const container = document.createElement('div');
+        container.style = 'position:fixed;inset:0;text-align:center;cursor:default;pointer-events:none';
+        notificationElement = document.createElement('span');
+        notificationElement.style = 'padding:8px;background-color:white;margin-top:4em;'
+            + 'display:none;border-radius:4px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);max-width:320px';
+        container.appendChild(notificationElement);
+        document.body.appendChild(container);
+    }
+    if (notificationTimer) {
+        clearTimeout(notificationTimer);
+    }
+    notificationElement.style.display = 'inline-block';
+    notificationElement.innerText = message;
+    notificationTimer = setTimeout(() => { notificationElement.style.display = 'none'; }, 10_000);
 }
 
 function App() {
@@ -20,20 +41,23 @@ function App() {
     useEffect(() => {
         (async () => {
             // TODO redirect to /404 if not found
-            const shareId = window.location.pathname.substring(7);
+            const shareId = new URLSearchParams(window.location.search).get('id');
             if (shareId) {
-                const session = await api.publicGetSession(shareId);
-                const messages = session.messages;
-                const messagePath: number[] = [messages.find(m => !m.parentId).id];
-                while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
-                    messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
+                try {
+                    const session = await api.publicGetSession(shareId);
+                    const messages = session.messages;
+                    const messagePath: number[] = [messages.find(m => !m.parentId).id];
+                    while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
+                        messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
+                    }
+                    setSession(session);
+                    setMessagePath(messagePath);
+                } catch (error) {
+                    // TODO change notification to some empty error message page
+                    notification(error?.message ? 'Error: ' + error?.message : 'Something went wrong.');
                 }
-                setSession(session);
-                setMessagePath(messagePath);
             } else {
-                const url = new URL(window.location.toString());
-                url.pathname = '/share';
-                window.history.replaceState(null, '', url.toString());
+                window.location.href = '/404';
             }
         })();
     }, []);
@@ -77,7 +101,9 @@ function App() {
                             disabled={messages.filter(a => a.parentId == m.parentId).map(a => a.id).indexOf(m.id) == messages.filter(a => a.parentId == m.parentId).map(a => a.id).length - 1}
                             onClick={() => handleNavigateBranch(m, true)}><CaretRightOutlined /></button>}
                     </div>
-                    <textarea css={styles3.textarea} value={m.content} readOnly={true} />
+                    <div css={styles3.markdownContainer}>
+                        <Markdown>{m.content}</Markdown>
+                    </div>
                 </div>)}
             </div>}
         </div>
@@ -189,9 +215,14 @@ const createConversationStyles = (listCollapsed: boolean) => ({
     prevButton: css({
         rotate: '180deg',
     }),
-    textarea: css({
-        resize: 'vertical',
-        width: 'calc(100% - 16px)',
+    markdownContainer: css({
+        padding: '8px',
+        backgroundColor: '#ddd',
+        borderRadius: '4px',
+        fontSize: '14px',
+        p: {
+            margin: '0', // overwrite ua style
+        },
     }),
 });
 
@@ -199,7 +230,7 @@ createRoot(document.querySelector('main')).render(<App />);
 
 // this is the remove access token version of sendRequest
 async function sendAnonymousRequest(method: string, path: string, parameters?: any, data?: any): Promise<any> {
-    const url = new URL(`https://api.example.com/chat${path}`);
+    const url = new URL(`https://api.example.com/yala${path}`);
     Object.entries(parameters || {}).forEach(p => url.searchParams.append(p[0], p[1].toString()));
     const response = await fetch(url.toString(), data ? {
         method,

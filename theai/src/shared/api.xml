@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8" ?>
-<api version="1">
+<api name="yala">
   <type name="Session">
     <field name="id" type="id" />
     <field name="name" type="string" />

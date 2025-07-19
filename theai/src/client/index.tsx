@@ -628,6 +628,7 @@ function App() {
                     ? <textarea ref={editingMessageTextareaElement} css={styles1.textarea}
                         value={editingMessageContent} onChange={e => setEditingMessageContent(e.target.value)} />
                     : <div css={styles1.markdownContainer}>
+                        {/* TODO styles refine, code highlighing, wrap code, latex formula */}
                         <Markdown>{m.content}</Markdown>
                     </div>}
                 <div css={[styles1.messageFooter, m.role == 'assistant' ? styles1.leftMessageFooter : styles1.rightMessageFooter]}>

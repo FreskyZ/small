@@ -29,6 +29,12 @@ function formatDateTime(value: dayjs.Dayjs) {
     return value.format('YYYY-MM-DDTHH:mm:ss[Z]');
 }
 
+// TODO multiple models, I need small models to answer small questions
+// add a model selection ui,
+// add model parameter to complete api
+// add model and api key configuration to servers/yala.json
+// add a model column to message
+
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
 
@@ -287,6 +293,17 @@ async function removeMessageTree(ax: ActionContext, sessionId: number, messageId
     );
 }
 
+// TODO streaming
+// the original request handler only receives data and store in database and memory
+// use another http endpoint to get data from memory, in case of multiple connection and break and restart from middle
+// new connections will receive all current data and continue receive new content if connection keeps,
+// ui also ends after sending request, but connection to other http endpoint to load new contents
+// see https://medium.com/trabe/server-sent-events-sse-streams-with-node-and-koa-d9330677f0bf,
+// note that I don't have to SSE, note that I'm directly assigning ctx.body in forward.ts, and in dispatch function, which is very ok to this
+// client side https://developer.mozilla.org/en-US/docs/Web/API/Streams_API/Using_readable_streams
+
+// import { PassThrough } from 'node:stream';
+
 const fakeComplete = false;
 async function completeMessage(ax: ActionContext, sessionId: number, messageId: number): Promise<I.Message> {
     await validateSessionUser(ax, sessionId);
@@ -365,6 +382,12 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
             console.log(response);
             throw new MyError('internal', 'failed to get response');
         }
+        
+        // const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+        // while (true) {
+        //     const { value, done } = await reader.read();
+
+        // }
 
         interface CompletionAPIResponse {
             choices: {
