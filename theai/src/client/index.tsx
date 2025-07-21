@@ -52,13 +52,13 @@ function PlusOutlined() {
     return <svg viewBox="64 64 896 896" focusable="false" data-icon="plus" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M482 152h60q8 0 8 8v704q0 8-8 8h-60q-8 0-8-8V160q0-8 8-8z"></path><path d="M192 474h672q8 0 8 8v60q0 8-8 8H160q-8 0-8-8v-60q0-8 8-8z"></path></svg>;
 }
 function GithubLogoDark() {
-    return <svg x="0px" y="0px" viewBox="0 0 97.6 96" >
-        <path style={{fill:'#1B1F24'}} d="M48.9,0C21.8,0,0,22,0,49.2C0,71,14,89.4,33.4,95.9c2.4,0.5,3.3-1.1,3.3-2.4c0-1.1-0.1-5.1-0.1-9.1
+    return <svg x="0px" y="0px" viewBox="0 0 97.6 96">
+        <path style={{ fill: '#1B1F24' }} d="M48.9,0C21.8,0,0,22,0,49.2C0,71,14,89.4,33.4,95.9c2.4,0.5,3.3-1.1,3.3-2.4c0-1.1-0.1-5.1-0.1-9.1
             c-13.6,2.9-16.4-5.9-16.4-5.9c-2.2-5.7-5.4-7.2-5.4-7.2c-4.4-3,0.3-3,0.3-3c4.9,0.3,7.5,5.1,7.5,5.1c4.4,7.5,11.4,5.4,14.2,4.1
             c0.4-3.2,1.7-5.4,3.1-6.6c-10.8-1.1-22.2-5.4-22.2-24.3c0-5.4,1.9-9.8,5-13.2c-0.5-1.2-2.2-6.3,0.5-13c0,0,4.1-1.3,13.4,5.1
             c3.9-1.1,8.1-1.6,12.2-1.6s8.3,0.6,12.2,1.6c9.3-6.4,13.4-5.1,13.4-5.1c2.7,6.8,1,11.8,0.5,13c3.2,3.4,5,7.8,5,13.2
             c0,18.9-11.4,23.1-22.3,24.3c1.8,1.5,3.3,4.5,3.3,9.1c0,6.6-0.1,11.9-0.1,13.5c0,1.3,0.9,2.9,3.3,2.4C83.6,89.4,97.6,71,97.6,49.2
-            C97.7,22,75.8,0,48.9,0z"/>
+            C97.7,22,75.8,0,48.9,0z" />
     </svg>;
 }
 // function GithubLogoLight() {
@@ -143,7 +143,7 @@ function parsePrimaryExpression(tokens: string[]): QueryNode {
         tokens.shift(); // consume ')'
         return expr;
     }
-    
+
     // Parse condition like "name = foo" or "tag = bar"
     if (tokens[0] != 'name' && tokens[0] != 'tag') {
         throw new Error(`invalid syntax: expect name or tag, meet ${tokens[0]}`);
@@ -162,9 +162,9 @@ function parseUnaryExpression(tokens: string[]): QueryNode {
     if (tokens.length == 0) {
         throw new Error(`invalid syntax: expect unary expression, meet EOL`);
     }
-    let not = tokens[0] == 'not';
+    const not = tokens[0] == 'not';
     if (not) { tokens.shift(); }
-    let node = parsePrimaryExpression(tokens);
+    const node = parsePrimaryExpression(tokens);
     return not ? { kind: 'not', expr: node } : node;
 }
 function parseAndExpression(tokens: string[]): QueryNode {
@@ -211,7 +211,7 @@ function matchQueryNode(item: I.Session, node: QueryNode): boolean {
 }
 function executeQuery(items: I.Session[], queryString: string): I.Session[] {
     if (!queryString.trim()) return items;
-    
+
     const query = parseExpression(tokenize(queryString));
     return items.filter(item => matchQueryNode(item, query));
 }
@@ -374,6 +374,10 @@ function App() {
         }
     }, [sessionId]);
 
+    // TODO change list to list of anchor and only handle url change
+    // NOTE amazingly no hashchange event for browser history, you need to explicitly interrupt anchor to pushstate
+    // user client back and forward will trigger window.addEventListener(popstate)
+    // but user edit url will always reload, so handle popstate event should be enough to sync url and state
     const handleSelectSession = async (sessions: I.Session[], sessionId: number) => {
         setInfoOpen(false);
         setEditingMessageId(null);
@@ -412,7 +416,7 @@ function App() {
             setEditingSessionTags(session.tags.join(','));
             setInfoOpen(true);
         }
-    }
+    };
     const handleUpdateSession = async (sessionId: number) => {
         const session = sessions.find(s => s.id == sessionId);
         const newSession = {
@@ -453,7 +457,7 @@ function App() {
             notification('Copied to clipboard!');
         }
     };
-    
+
     const handleCreateSession = async () => {
         setCreatingSession(true);
         const session = await callapi(api.addSession({
@@ -514,7 +518,7 @@ function App() {
         const newMessage = {
             ...message,
             content: editingMessageContent,
-        }
+        };
         const result = await callapi(api.updateMessage(sessionId, newMessage));
         setSavingMessageIds(ids => ids.filter(m => m != message.id));
         if (!result) { return; }
@@ -550,7 +554,7 @@ function App() {
         setSessionLoading(true);
         const result = await callapi(api.removeMessageTree(sessionId, messageId));
         if (result === false) { setSessionLoading(false); return; }
-        
+
         let newMessages = messages.filter(m => m.id != messageId);
         let beforeLoopMessagesLength = newMessages.length;
         while (true) {
@@ -694,7 +698,7 @@ function App() {
             </div>
             <div css={styles3.queryContainer}>
                 <input css={styles3.queryString} value={queryString}
-                    onKeyUp={e => { if (e.key == 'Enter') { handleQuery(); } } } onChange={e => setQueryString(e.target.value)} />
+                    onKeyUp={e => { if (e.key == 'Enter') { handleQuery(); } }} onChange={e => setQueryString(e.target.value)} />
                 <button title='Clear search' css={styles3.queryButton} onClick={handleClearQuery}><CloseOutlined /></button>
                 <button title='Search' css={styles3.queryButton} onClick={handleQuery}><SearchOutlined /></button>
             </div>
@@ -721,6 +725,8 @@ function App() {
         <button css={styles4.trigger} title='System Menu' onClick={() => setSystemModalOpen(!systemModalOpen)}><MenuOutlined /></button>
     </>;
 }
+
+/* eslint-disable @stylistic/quote-props -- does not work with object style cssinjs */
 
 // this becomes styles0, currently only the page container
 const createPageStyles = (listOpen: boolean) => ({
@@ -867,7 +873,7 @@ const createMainStyles = (narrow: boolean, infoOpen: boolean, listOpen: boolean)
         },
         'svg': {
             marginRight: '2px',
-        }
+        },
     }),
     deleteButton: css({
         color: '#333',
@@ -922,7 +928,7 @@ const createMainStyles = (narrow: boolean, infoOpen: boolean, listOpen: boolean)
         },
         'svg': {
             marginRight: '2px',
-        }
+        },
     }),
 });
 
@@ -939,7 +945,7 @@ const createInfoStyles = (narrow: boolean, open: boolean, listOpen: boolean) => 
         overflow: 'hidden',
         width: narrow ? '100%' : '400px',
         maxWidth: '400px',
-        display: open ? 'flex': 'none',
+        display: open ? 'flex' : 'none',
         flexDirection: 'column',
         boxSizing: 'border-box',
         transition: 'left 0.3s',
@@ -1038,8 +1044,8 @@ const createListStyles = (open: boolean) => ({
         borderRadius: '4px',
         cursor: 'pointer',
         '&:hover': {
-            background: '#ccc', 
-        }
+            background: '#ccc',
+        },
     }),
     itemsContainer: css({
         marginTop: '12px',
@@ -1091,20 +1097,20 @@ const createListStyles = (open: boolean) => ({
             fontSize: '16px',
             '&:hover': {
                 background: '#aaa',
-            }
+            },
         },
         '&:hover': {
             background: '#ccc',
             'button': {
                 display: 'inline',
-            }
-        }
+            },
+        },
     }),
     activeItem: css({
         background: '#ccc',
         'button': {
             display: 'inline',
-        }
+        },
     }),
 });
 
@@ -1153,7 +1159,7 @@ const createSystemModalStyles = (narrow: boolean) => ({
             cursor: 'default',
             fontSize: '12px',
             lineHeight: '24px',
-        }
+        },
     }),
     balanceButton: css({
         height: '24px',
@@ -1167,7 +1173,7 @@ const createSystemModalStyles = (narrow: boolean) => ({
         marginLeft: '8px',
         '&:hover': {
             background: '#aaa',
-        }
+        },
     }),
 });
 

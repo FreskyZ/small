@@ -10,18 +10,18 @@ import type { MyErrorKind, ActionContext, DispatchContext, DispatchResult } from
 dayjs.extend(utc);
 
 // this is the same config file as core module
-const config = (JSON.parse(await fs.readFile('config', 'utf-8')) as {
+const config = JSON.parse(await fs.readFile('config', 'utf-8')) as {
     aikey: string,
     // so this is the connection options to connect to core module database
     database: mysql.PoolOptions,
-});
+};
 
 type QueryResult<T> = T & mysql.RowDataPacket;
 type ManipulateResult = mysql.ResultSetHeader;
 // so need to change database name to connect to this app's database
 const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: (field, next) =>
     field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1
-    : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss') 
+    : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss')
     : next(),
 });
 
@@ -382,7 +382,7 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
             console.log(response);
             throw new MyError('internal', 'failed to get response');
         }
-        
+
         // const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
         // while (true) {
         //     const { value, done } = await reader.read();
@@ -403,12 +403,12 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
                 prompt_tokens: number,
                 completion_tokens: number,
                 total_tokens: number,
-            };
+            },
         }
         const responseData = await response.json() as CompletionAPIResponse;
         const responseOriginalContent = responseData.choices && responseData.choices[0] ? responseData.choices[0].message.content : '(no response)';
         responseReasoningContent = responseData.choices && responseData.choices[0] ? responseData.choices[0].message.reasoning_content : '(no response)';
-        responseContent = responseOriginalContent.trim()
+        responseContent = responseOriginalContent.trim();
             // .replace(/\r?\n\r?\n/g, '\n') // remove empty line
             // .split('\n').map(v => v.trim()).join('\n') // trim each line
             // additional refinements if need
@@ -416,7 +416,7 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
             // .replaceAll('...', '……') // replace ... with full width …
             // .replaceAll('**', '') // remove markdown bold
 
-        promptTokenCount =  responseData.usage.prompt_tokens;
+        promptTokenCount = responseData.usage.prompt_tokens;
         completionTokenCount = responseData.usage.completion_tokens;
     }
 
@@ -453,7 +453,7 @@ async function shareSession(ax: ActionContext, sessionId: number): Promise<I.Sha
     if (session.Shared) {
         return { id: session.ShareId };
     }
-    
+
     if (!session.ShareId) {
         session.ShareId = crypto.randomUUID();
         await pool.execute(
@@ -493,11 +493,11 @@ async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> 
 async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
     const [sessions] = await pool.query<QueryResult<I.dsession>[]>(
         "SELECT `id`, `seq_id`, `title`, `inserted_at`, `updated_at` FROM `dsession`;",
-    )
+    );
     return sessions.map(s => ({
         ...s,
-        inserted_at: formatDateTime(s.inserted_at as unknown as dayjs.Dayjs),  
-        updated_at: formatDateTime(s.updated_at as unknown as dayjs.Dayjs),  
+        inserted_at: formatDateTime(s.inserted_at as unknown as dayjs.Dayjs),
+        updated_at: formatDateTime(s.updated_at as unknown as dayjs.Dayjs),
     }));
 }
 async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dmessage[]> {
@@ -515,6 +515,7 @@ async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dm
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
+/* eslint-disable @stylistic/lines-between-class-members */
 
 class MyError extends Error {
     // fine error middleware need this to know this is known error type

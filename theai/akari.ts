@@ -1,18 +1,23 @@
 // END IMPORT
-// components: arch, codegen, minify, mypack, sftp, typescript, logger
+// components: arch, codegen, minify, mypack, sftp, typescript, logger, eslint
 // BEGIN LIBRARY
-import chalk from 'chalk-template'
-import dayjs from 'dayjs'
-import fs from 'node:fs/promises'
-import { XMLParser } from 'fast-xml-parser'
-import ts from 'typescript'
-import chalkNotTemplate from 'chalk'
-import { minify } from 'terser'
-import { createHash } from 'node:crypto'
-import path from 'node:path'
-import SFTPClient from 'ssh2-sftp-client'
-import readline from 'node:readline/promises'
-import tls from 'node:tls'
+import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import readline from 'node:readline/promises';
+import tls from 'node:tls';
+import { zstdCompressSync } from 'node:zlib';
+import js from '@eslint/js';
+import stylistic from '@stylistic/eslint-plugin';
+import chalkNotTemplate from 'chalk';
+import chalk from 'chalk-template';
+import dayjs from 'dayjs';
+import { ESLint } from 'eslint';
+import { XMLParser } from 'fast-xml-parser';
+import SFTPClient from 'ssh2-sftp-client';
+import { minify } from 'terser';
+import ts from 'typescript';
+import tseslint from 'typescript-eslint';
 
 // -----------------------------------------
 // ------ script/components/logger.ts ------ 
@@ -78,12 +83,12 @@ interface WebInterfaceActionParameter {
     type: 'id' | 'guid', // for now only this
     optional: boolean,
 }
-interface WebInterfaceAction{
+interface WebInterfaceAction {
     // finally you need something to group actions
     // for now =main is main, =share is for share page
     // for now =temp is temporary investigating actions
     key: string,
-    name: String,
+    name: string,
     public: boolean,
     // method is not in config but comes from name
     // GetXXX => GET, AddXXX => PUT, RemoveXXX => DELETE, other => POST
@@ -209,7 +214,7 @@ function generateDatabaseTypes(config: CodeGenerationConfig): string {
                 'string': 'string',
                 'bool': 'boolean',
             }[field.type];
-            sb += `    ${field.name}${field.nullable ? '?' : ''}: ${type},\n`
+            sb += `    ${field.name}${field.nullable ? '?' : ''}: ${type},\n`;
         }
         sb += `    CreateTime: Dayjs,\n`;
         sb += `    UpdateTime: Dayjs,\n`;
@@ -226,7 +231,7 @@ function generateDatabaseSchema(config: CodeGenerationConfig): string {
     sb += '------ ATTENTION AUTO GENERATED ------\n';
     sb += '--------------------------------------\n';
     sb += '\n';
-    sb += '-- -- first, mysql -u root -p:\n'
+    sb += '-- -- first, mysql -u root -p:\n';
     sb += `-- CREATE DATABASE '${config.dbname}';\n`;
     sb += `-- GRANT ALL PRIVILEGES ON \`${config.dbname}\`.* TO 'fine'@'localhost';\n`;
     sb += '-- FLUSH PRIVILEGES;\n';
@@ -265,7 +270,7 @@ function generateDatabaseSchema(config: CodeGenerationConfig): string {
         sb += `);\n`;
     }
     return hasError ? null : sb;
-} 
+}
 // api.d.ts, return null for not ok
 function generateWebInterfaceTypes(config: CodeGenerationConfig): string {
 
@@ -283,7 +288,7 @@ function generateWebInterfaceTypes(config: CodeGenerationConfig): string {
                 'datetime': 'string',
                 'string': 'string',
             }[field.type] ?? field.type;
-            sb += `    ${field.name}${field.nullable ? '?': ''}: ${type},\n`;
+            sb += `    ${field.name}${field.nullable ? '?' : ''}: ${type},\n`;
         }
         sb += '}\n';
     }
@@ -298,7 +303,8 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
-    sb += '\n'
+    sb += '/* eslint-disable @stylistic/lines-between-class-members */\n';
+    sb += '\n';
     sb += `class MyError extends Error {
     // fine error middleware need this to know this is known error type
     public readonly name: string = 'FineError';
@@ -323,7 +329,7 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
     sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
-    sb += `    const v = new ParameterValidator(searchParams);\n`
+    sb += `    const v = new ParameterValidator(searchParams);\n`;
     sb += `    const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user?.id, userName: ctx.state.user?.name };\n`;
     sb += `    const action = ({\n`;
     for (const action of config.actions) {
@@ -338,7 +344,7 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
         }
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
-    sb += '    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n';
+    sb += `    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n`;
     sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
     sb += `}\n`;
     return sb;
@@ -353,7 +359,7 @@ function generateWebInterfaceClient(config: CodeGenerationConfig, originalConten
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
 
-    // NOTE this is hardcode replaced in make.ts
+    // NOTE this is hardcode replaced in make-akari.ts
     sb += `
 let notificationTimer: any;
 let notificationElement: HTMLSpanElement;
@@ -575,8 +581,116 @@ async function generateCode(config: CodeGenerationConfig, options: CodeGeneratio
     // console.log('scheduled tasks', tasks);
     await Promise.all(tasks.map(t => t.run()));
 
-    hasError ? logError('codegen', 'code generation completed with error') : logInfo('codegen', 'code generation complete');
+    if (hasError) { logError('codegen', 'code generation completed with error'); } else { logInfo('codegen', 'code generation complete'); }
     return !hasError;
+}
+
+// -----------------------------------------
+// ------ script/components/eslint.ts ------ 
+// ------- ATTENTION AUTO GENERATED --------
+// -----------------------------------------
+
+interface ESLintOptions {
+    files: string | string[], // pattern
+    ignore?: string[], // pattern
+    falsyRules?: boolean, // enable falsy rules to check for postential true positives
+    additionalLogHeader?: string,
+}
+// return false for has issues, but build scripts may not fail on this
+async function eslint(options: ESLintOptions) {
+    const eslint = new ESLint({
+        ignorePatterns: options.ignore,
+        overrideConfigFile: true,
+        plugins: {
+            tseslint: tseslint.plugin as any,
+            stylistic,
+        },
+        // ??? these 3 packages use 3 different patterns to provide recommended configurations?
+        overrideConfig: [
+            js.configs.recommended,
+            stylistic.configs.recommended,
+            ...tseslint.configs.recommended as any,
+            {
+                linterOptions: {
+                    reportUnusedDisableDirectives: true,
+                },
+                rules: {
+                    // when-I-use-I-really-need-to-use
+                    '@typescript-eslint/no-explicit-any': 'off',
+                    // when-I-use-I-really-need-to-use
+                    // why do I need to expecting error? I ts-ignore because ts is not clever enough, I do not expect error
+                    '@typescript-eslint/ban-ts-comment': 'off',
+                    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+                    // not interested
+                    '@stylistic/arrow-parens': 'off',
+                    // document says default 1tbs but errors say not
+                    '@stylistic/brace-style': options.falsyRules ? ['error', '1tbs', { 'allowSingleLine': true }] : 'off',
+                    // document says default 4 but errors say default 2, UPDATE: too many false positive on nested ternery expression
+                    '@stylistic/indent': options.falsyRules ? ['error', 4] : 'off',
+                    // why is this a separate rule with 2 space idention?
+                    '@stylistic/indent-binary-ops': 'off',
+                    // not sufficient option to follow my convention
+                    '@stylistic/jsx-closing-bracket-location': 'off',
+                    // not sufficient option to follow my convention, who invented the very strange default value?
+                    '@stylistic/jsx-closing-tag-location': 'off',
+                    // not sufficient option to follow my convention
+                    '@stylistic/jsx-first-prop-new-line': 'off',
+                    // no, fragment already looks like newline
+                    '@stylistic/jsx-function-call-newline': 'off',
+                    // I'm tired of indenting props according to formatting rules
+                    '@stylistic/jsx-indent-props': 'off',
+                    // when-I-use-I-really-need-to-use
+                    '@stylistic/jsx-one-expression-per-line': 'off',
+                    // I need negative rule
+                    '@stylistic/jsx-wrap-multilines': 'off',
+                    // it's meaningless to move properties to next line and fight with idention rules
+                    '@stylistic/jsx-max-props-per-line': 'off',
+                    '@stylistic/jsx-quotes': 'off',
+                    // when-I-use-I-really-need-to-use
+                    '@stylistic/max-statements-per-line': 'off',
+                    '@stylistic/member-delimiter-style': ['error', {
+                        'multiline': {
+                            'delimiter': 'comma',
+                            'requireLast': true,
+                        },
+                        'singleline': {
+                            'delimiter': 'comma',
+                            'requireLast': false,
+                        },
+                    }],
+                    // I'm tired of indenting/spacing ternary expressions according formatting rules
+                    '@stylistic/multiline-ternary': 'off',
+                    '@stylistic/no-multi-spaces': ['error', { ignoreEOLComments: true }],
+                    // not interested
+                    '@stylistic/padded-blocks': 'off',
+                    // in old days I say it's not possible to enable on existing code base
+                    // now I say it's not possible to enforcing overall code base
+                    '@stylistic/quotes': 'off',
+                    '@stylistic/quote-props': ['error', 'consistent'],
+                    '@stylistic/semi': ['error', 'always'],
+                },
+            },
+        ],
+    });
+
+    const lintResults = await eslint.lintFiles(options.files);
+
+    let hasIssue = false;
+    // // the default formatter is extremely bad when one message is long, so have to implement on your own
+    // const formattedResults = (await eslint.loadFormatter('stylish')).format(lintResults);
+    // if (formattedResults) { console.log(formattedResults); }
+    for (const fileResult of lintResults) {
+        if (fileResult.errorCount == 0) { continue; }
+        hasIssue = true;
+        const relativePath = path.relative(process.cwd(), fileResult.filePath);
+        console.log(chalk`\n${relativePath} {yellow ${fileResult.errorCount}} errors`);
+        for (const message of fileResult.messages) {
+            console.log(chalk`{gray ${message.line}:${message.column}} ${message.message} {gray ${message.ruleId}}`);
+        }
+    }
+
+    if (!hasIssue) { logInfo(`eslint${options.additionalLogHeader ?? ''}`, 'clear'); }
+    return !hasIssue;
 }
 
 // ---------------------------------------------
@@ -605,7 +719,7 @@ interface TypeScriptContext {
 function transpile(tcx: TypeScriptContext): TypeScriptContext {
     const logheader = `tsc${tcx.additionalLogHeader ?? ''}`;
     logInfo(logheader, 'transpiling');
-    
+
     // design considerations
     // - the original tool distinguishes ecma module and commonjs, now everything is esm!
     //   the target: esnext, module: nodenext, moduleres: nodenext seems suitable for all usage
@@ -742,7 +856,7 @@ interface UploadAsset {
 
 // return false for not ok
 // nearly every text file need replace example.com to real domain,
-// so name this function 'deploy' so it is reasonable to do the substitution here,
+// so change this function to 'deploy' to make it reasonable to do the substitution,
 // use buffer or Buffer.from(string) to skip that
 async function deploy(config: BuildScriptConfig, assets: UploadAsset[]): Promise<boolean> {
     const client = new SFTPClient();
@@ -824,7 +938,7 @@ interface MyPackModuleRequest {
     defaultName?: string, // default import name, the `a` in `import a from 'module'`
     namespaceName?: string, // the `a` in `import * as a from 'module'`
     // // named import names, name is original name, alias is same as name for normal named import
-    // // e.g. `import { b, c, d as e } from 'module'` result in [{name:b,alias: b},{name:c,alias:c},{name:d,alias:e}] 
+    // // e.g. `import { b, c, d as e } from 'module'` result in [{name:b,alias: b},{name:c,alias:c},{name:d,alias:e}]
     namedNames?: { name: string, alias: string }[],
     cdn?: string, // cdn url for external references if options.cdnfy
     relativeModule?: MyPackModule, // resolved relative import
@@ -865,7 +979,7 @@ function validateTopLevelNames(mcx: MyPackContext): boolean {
                             }
                         }
                     };
-                    extractNames(declaration.name);                
+                    extractNames(declaration.name);
                 }
             } else if (ts.isFunctionDeclaration(node)) {
                 if (ts.isIdentifier(node.name)) {
@@ -878,7 +992,7 @@ function validateTopLevelNames(mcx: MyPackContext): boolean {
                 // export const and export function is normal variable statement or function definition statement
                 hasError = true;
                 const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.pos);
-                logError(mcx.logheader, `${sourceFile.fileName}:${line + 1}:${character + 1}: not support dedicated export statement for now`); //, node);
+                logError(mcx.logheader, `${sourceFile.fileName}:${line + 1}:${character + 1}: not support dedicated export statement for now`); // , node);
             } else if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node)) {
                 // not relavent to js
             } else if (ts.isClassDeclaration(node)) {
@@ -892,7 +1006,7 @@ function validateTopLevelNames(mcx: MyPackContext): boolean {
             } else {
                 hasError = true;
                 const { line, character } = sourceFile.getLineAndCharacterOfPosition(node.pos);
-                logError(mcx.logheader, `${sourceFile.fileName}:${line + 1}:${character + 1}: unknown top level node kind: ${ts.SyntaxKind[node.kind]}`); //, node);
+                logError(mcx.logheader, `${sourceFile.fileName}:${line + 1}:${character + 1}: unknown top level node kind: ${ts.SyntaxKind[node.kind]}`); // , node);
             }
         });
         allNames[sourceFile.fileName] = names;
@@ -990,7 +1104,7 @@ function resolveModuleDependencies(mcx: MyPackContext): boolean {
                 return;
             }
             request.moduleName = match.groups['name'];
-            
+
             if (request.moduleName.startsWith('.')) {
                 const name = request.namedNames.find(n => n.name != n.alias);
                 if (name) {
@@ -1034,6 +1148,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                 mcx.externalRequests.push({ ...moduleImport, namedNames: [...moduleImport.namedNames] });
                 continue;
             }
+            /* eslint-disable @stylistic/indent-binary-ops, @stylistic/comma-dangle -- lazy to find correct formatting rules for following complex conditions */
             if (moduleImport.defaultName) {
                 if (mergedImport.defaultName && mergedImport.defaultName != moduleImport.defaultName) {
                     hasError = true;
@@ -1089,6 +1204,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     mergedImport.namedNames.push(namedName);
                 }
             }
+            /* eslint-enable @stylistic/indent-binary-ops, @stylistic/comma-dangle */
         }
     }
 
@@ -1098,8 +1214,8 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
     mcx.externalRequests.sort((lhs, rhs) => {
         const leftIsNode = lhs.moduleName.startsWith('node:');
         const rightIsNode = rhs.moduleName.startsWith('node:');
-        if (leftIsNode && !rightIsNode) return -1;
-        if (!leftIsNode && rightIsNode) return 1;
+        if (leftIsNode && !rightIsNode) { return -1; }
+        if (!leftIsNode && rightIsNode) { return 1; }
         // this correctly handles rest part after node: and non node module names
         return lhs.moduleName.localeCompare(rhs.moduleName);
     });
@@ -1204,17 +1320,16 @@ function combineModules(mcx: MyPackContext): boolean {
         if (request.defaultName) { resultJs += `${request.defaultName}, `; }
         if (request.namespaceName) { resultJs += `* as ${request.namespaceName}, `; }
         if (request.namespaceName && request.namedNames.length) {
-            resultJs = resultJs.slice(0, -2) + ` from \'${request.moduleName}\'\nimport `;
+            resultJs = resultJs.slice(0, -2) + ` from '${request.moduleName}'\nimport `;
         }
         if (request.namedNames.length) {
             resultJs += `{ `;
             for (const { name, alias } of request.namedNames) {
-                if (name == alias) { resultJs += `${name}, `; }
-                else { resultJs += `${name} as ${alias}, `; }
+                resultJs += name == alias ? `${name}, ` : `${name} as ${alias}, `;
             }
             resultJs = resultJs.slice(0, -2) + ' }, ';
         }
-        resultJs = resultJs.slice(0, -2) + ` from \'${request.cdn ?? request.moduleName}\'\n`;
+        resultJs = resultJs.slice(0, -2) + ` from '${request.cdn ?? request.moduleName}';\n`;
     }
     for (const module of mcx.modules) {
         resultJs += '\n';
@@ -1229,7 +1344,7 @@ function combineModules(mcx: MyPackContext): boolean {
 }
 
 function filesize(size: number) {
-    return `${Math.round(size / 1024 * 100) / 100}kb`;
+    return size < 1024 ? `${size}b` : `${Math.round(size / 1024 * 100) / 100}kb`;
 }
 // if tcx is provided, it overwrites some input properties of mcx
 // if you need to avoid that, avoid tcx or some of tcx properties, when do I need that?
@@ -1240,7 +1355,7 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPa
         // ATTENTION entry is not same
         // if (!Array.isArray(tcx.entry)) { mcx.entry = tcx.entry; }
         if (tcx.target == 'browser') { mcx.cdnfy = true; }
-        if (tcx.additionalLogHeader) { mcx.logheader = 'mypack' + tcx.additionalLogHeader; }
+        if (tcx.additionalLogHeader) { mcx.logheader = 'mypack' + tcx.additionalLogHeader; } else { mcx.logheader = 'mypack'; }
     } else {
         mcx.logheader = mcx.logheader ? (mcx.logheader.startsWith('mypack') ? mcx.logheader : 'mypack' + mcx.logheader) : 'mypack';
     }
@@ -1261,7 +1376,8 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPa
         logInfo(mcx.logheader, chalk`completed with {gray no change}`);
     } else {
         mcx.resultHash = newResultHash;
-        logInfo(mcx.logheader, chalk`completed with {yellow 1} asset {yellow ${filesize(mcx.resultJs.length)}}`);
+        const compressSize = ` (${filesize(zstdCompressSync(mcx.resultJs).length)})`;
+        logInfo(mcx.logheader, chalk`completed with {yellow 1} asset {yellow ${filesize(mcx.resultJs.length)}}${compressSize}`);
         const newResultModules = mcx.modules
             .map(m => ({ path: m.path, size: m.content.length, hash: createHash('sha256').update(m.content).digest('hex') }));
         if (mcx.resultModules) {
@@ -1371,7 +1487,7 @@ async function startCommandCenterClient(
         readlineInterface.prompt();
     }
 }
-// END LIBRARY
+// END LIBRARY e00b940bc572997abba035e534b7cf7f434cbad58079cbfa83934b12548743cb
 
 // this is currently the app server builder base template
 // - server side multiple file,
@@ -1402,6 +1518,7 @@ async function build(client: boolean, server: boolean, codegen: boolean): Promis
         // TODO why is the /vbuild/client/index.js part missing?
         const mcx1 = await mypack({ entry: '/vbuild/index.js' }, tcx1);
         if (!mcx1.success) { logError('akari', 'failed at pack mainclient'); return false; }
+
         assets.push({ data: mcx1.resultJs, remote: 'static/yala/index.js' });
         assets.push({ data: await fs.readFile('src/client/index.html', 'utf-8'), remote: 'static/yala/index.html' });
 
@@ -1409,15 +1526,22 @@ async function build(client: boolean, server: boolean, codegen: boolean): Promis
         if (!tcx2.success) { logError('akari', 'failed at transpile shareclient' ); return false; }
         const mcx2 = await mypack({ entry: '/vbuild/share.js' }, tcx2);
         if (!mcx2.success) { logError('akari', 'failed at pack shareclient'); return false; }
+
         assets.push({ data: mcx2.resultJs, remote: 'static/yala/share.js' });
         assets.push({ data: await fs.readFile('src/client/share.html', 'utf-8'), remote: 'static/yala/share.html' });
+
+        if (!await eslint({ files: 'src/client/*.tsx', additionalLogHeader: '-client' })) { /* return false; */ }
     }
+
     if (server) {
         const tcx = transpile({ entry: 'src/server/index.ts', target: 'node', additionalLogHeader: '-server' });
         if (!tcx.success) { logError('akari', 'failed at transpile server' ); return false; }
         const mcx = await mypack({ entry: '/vbuild/index.js' }, tcx);
         if (!mcx.success) { logError('akari', 'failed at pack server'); return false; }
+
         assets.push({ data: mcx.resultJs, remote: 'servers/index.js' });
+
+        if (!await eslint({ files: 'src/server/index.ts', additionalLogHeader: '-server' })) { /* return false; */ }
     }
 
     const uploadResult = await deploy(config, assets);
@@ -1438,7 +1562,7 @@ async function dispatch(command: string[]) {
     } else if (command[0] == 'nocodegen') {
         // only disable codegen for $ node akari.ts nocodegen
         await build(true, true, false);
-    } else if (command[0] == 'listen') {
+    } else if (command[0] == 'accept') {
         // TODO fine tune communication with remote akari
         startCommandCenterClient(async () => ({ ok: await build(true, true, true) }), async () => {});
     } else {

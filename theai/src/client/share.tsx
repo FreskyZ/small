@@ -110,8 +110,10 @@ function App() {
     </>;
 }
 
+/* eslint-disable @stylistic/quote-props -- does not work with object style cssinjs */
+
 const createSessionAuxiliaryStyles = (listCollapsed: boolean, collapsed: boolean) => ({
-     sessionContainer: css({
+    sessionContainer: css({
         width: listCollapsed ? 'calc(100vw - 20px)' : 'calc(100vw - 300px)',
         marginTop: '-50px',
         display: 'flex',
@@ -210,7 +212,7 @@ const createConversationStyles = (listCollapsed: boolean) => ({
         },
         'svg': {
             marginRight: '2px',
-        }
+        },
     }),
     prevButton: css({
         rotate: '180deg',
