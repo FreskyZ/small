@@ -27,3 +27,10 @@ export interface Message {
     CreateTime: Dayjs,
     UpdateTime: Dayjs,
 }
+export interface UserModel {
+    UserId: number,
+    Name: string,
+    APIKey: string,
+    CreateTime: Dayjs,
+    UpdateTime: Dayjs,
+}

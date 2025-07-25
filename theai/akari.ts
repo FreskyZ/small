@@ -1,12 +1,13 @@
+import readline from 'node:readline/promises';
 // END IMPORT
-// components: arch, codegen, minify, mypack, sftp, typescript, logger, eslint
+// components: codegen, minify, mypack, sftp, typescript, eslint, messenger, common
 // BEGIN LIBRARY
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import readline from 'node:readline/promises';
+import type { Interface } from 'node:readline/promises';
 import tls from 'node:tls';
-import { zstdCompressSync } from 'node:zlib';
+import { zstdCompress, zstdCompressSync } from 'node:zlib';
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import chalkNotTemplate from 'chalk';
@@ -20,22 +21,9 @@ import ts from 'typescript';
 import tseslint from 'typescript-eslint';
 
 // -----------------------------------------
-// ------ script/components/logger.ts ------ 
-// ------- ATTENTION AUTO GENERATED --------
+// ------ script/components/common.ts ------ 
+// -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
-
-interface BuildScriptConfig {
-    domain: string,
-    certificate: string,
-    webroot: string,
-    ssh: { user: string, identity: string, passphrase: string },
-}
-
-// TODO check whether this pattern is useful
-// current color schema
-// error: red
-// target name: cyan
-// watching (the long displayed long message): blue
 
 function logInfo(header: string, message: string, error?: any): void {
     if (error) {
@@ -55,6 +43,16 @@ function logCritical(header: string, message: string): never {
     console.log(chalk`[{green ${dayjs().format('HH:mm:ss.SSS')}} {red ${header}}] ${message}`);
     return process.exit(1);
 }
+
+// build script's config (akari.json), or config for code in 'script' folder,
+// to be distinguished with codegen config (api.xml and database.xml) and core config (/webroot/config)
+interface ScriptConfig {
+    domain: string,
+    webroot: string,
+    certificate: string,
+    ssh: { user: string, identity: string, passphrase: string },
+}
+const scriptconfig: ScriptConfig = JSON.parse(await fs.readFile('akari.json', 'utf-8'));
 
 // ------------------------------------------
 // ------ script/components/codegen.ts ------ 
@@ -585,117 +583,9 @@ async function generateCode(config: CodeGenerationConfig, options: CodeGeneratio
     return !hasError;
 }
 
-// -----------------------------------------
-// ------ script/components/eslint.ts ------ 
-// ------- ATTENTION AUTO GENERATED --------
-// -----------------------------------------
-
-interface ESLintOptions {
-    files: string | string[], // pattern
-    ignore?: string[], // pattern
-    falsyRules?: boolean, // enable falsy rules to check for postential true positives
-    additionalLogHeader?: string,
-}
-// return false for has issues, but build scripts may not fail on this
-async function eslint(options: ESLintOptions) {
-    const eslint = new ESLint({
-        ignorePatterns: options.ignore,
-        overrideConfigFile: true,
-        plugins: {
-            tseslint: tseslint.plugin as any,
-            stylistic,
-        },
-        // ??? these 3 packages use 3 different patterns to provide recommended configurations?
-        overrideConfig: [
-            js.configs.recommended,
-            stylistic.configs.recommended,
-            ...tseslint.configs.recommended as any,
-            {
-                linterOptions: {
-                    reportUnusedDisableDirectives: true,
-                },
-                rules: {
-                    // when-I-use-I-really-need-to-use
-                    '@typescript-eslint/no-explicit-any': 'off',
-                    // when-I-use-I-really-need-to-use
-                    // why do I need to expecting error? I ts-ignore because ts is not clever enough, I do not expect error
-                    '@typescript-eslint/ban-ts-comment': 'off',
-                    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
-                    // not interested
-                    '@stylistic/arrow-parens': 'off',
-                    // document says default 1tbs but errors say not
-                    '@stylistic/brace-style': options.falsyRules ? ['error', '1tbs', { 'allowSingleLine': true }] : 'off',
-                    // document says default 4 but errors say default 2, UPDATE: too many false positive on nested ternery expression
-                    '@stylistic/indent': options.falsyRules ? ['error', 4] : 'off',
-                    // why is this a separate rule with 2 space idention?
-                    '@stylistic/indent-binary-ops': 'off',
-                    // not sufficient option to follow my convention
-                    '@stylistic/jsx-closing-bracket-location': 'off',
-                    // not sufficient option to follow my convention, who invented the very strange default value?
-                    '@stylistic/jsx-closing-tag-location': 'off',
-                    // not sufficient option to follow my convention
-                    '@stylistic/jsx-first-prop-new-line': 'off',
-                    // no, fragment already looks like newline
-                    '@stylistic/jsx-function-call-newline': 'off',
-                    // I'm tired of indenting props according to formatting rules
-                    '@stylistic/jsx-indent-props': 'off',
-                    // when-I-use-I-really-need-to-use
-                    '@stylistic/jsx-one-expression-per-line': 'off',
-                    // I need negative rule
-                    '@stylistic/jsx-wrap-multilines': 'off',
-                    // it's meaningless to move properties to next line and fight with idention rules
-                    '@stylistic/jsx-max-props-per-line': 'off',
-                    '@stylistic/jsx-quotes': 'off',
-                    // when-I-use-I-really-need-to-use
-                    '@stylistic/max-statements-per-line': 'off',
-                    '@stylistic/member-delimiter-style': ['error', {
-                        'multiline': {
-                            'delimiter': 'comma',
-                            'requireLast': true,
-                        },
-                        'singleline': {
-                            'delimiter': 'comma',
-                            'requireLast': false,
-                        },
-                    }],
-                    // I'm tired of indenting/spacing ternary expressions according formatting rules
-                    '@stylistic/multiline-ternary': 'off',
-                    '@stylistic/no-multi-spaces': ['error', { ignoreEOLComments: true }],
-                    // not interested
-                    '@stylistic/padded-blocks': 'off',
-                    // in old days I say it's not possible to enable on existing code base
-                    // now I say it's not possible to enforcing overall code base
-                    '@stylistic/quotes': 'off',
-                    '@stylistic/quote-props': ['error', 'consistent'],
-                    '@stylistic/semi': ['error', 'always'],
-                },
-            },
-        ],
-    });
-
-    const lintResults = await eslint.lintFiles(options.files);
-
-    let hasIssue = false;
-    // // the default formatter is extremely bad when one message is long, so have to implement on your own
-    // const formattedResults = (await eslint.loadFormatter('stylish')).format(lintResults);
-    // if (formattedResults) { console.log(formattedResults); }
-    for (const fileResult of lintResults) {
-        if (fileResult.errorCount == 0) { continue; }
-        hasIssue = true;
-        const relativePath = path.relative(process.cwd(), fileResult.filePath);
-        console.log(chalk`\n${relativePath} {yellow ${fileResult.errorCount}} errors`);
-        for (const message of fileResult.messages) {
-            console.log(chalk`{gray ${message.line}:${message.column}} ${message.message} {gray ${message.ruleId}}`);
-        }
-    }
-
-    if (!hasIssue) { logInfo(`eslint${options.additionalLogHeader ?? ''}`, 'clear'); }
-    return !hasIssue;
-}
-
 // ---------------------------------------------
 // ------ script/components/typescript.ts ------ 
-// --------- ATTENTION AUTO GENERATED ----------
+// ---------- ATTENTION AUTO GENERATED ---------
 // ---------------------------------------------
 
 interface TypeScriptContext {
@@ -714,6 +604,57 @@ interface TypeScriptContext {
     success?: boolean,
     // transpile result files
     files?: Record<string, string>,
+}
+
+// extract SHARED TYPE xxx from source file and target file and compare they are same
+// although this works on string, still put it here because it logically work on type definition
+// return false for not ok
+async function validateSharedTypeDefinition(sourceFile: string, targetFile: string, typename: string): Promise<boolean> {
+
+    const sourceContent = await fs.readFile(sourceFile, 'utf-8');
+    const expectLines = getSharedTypeDefinition(sourceFile, sourceContent, typename);
+    if (!expectLines) { return false; }
+
+    const targetContent = await fs.readFile(targetFile, 'utf-8');
+    const actualLines = getSharedTypeDefinition(targetFile, targetContent, typename);
+    if (!actualLines) { return false; }
+
+    // console.log(expectLines, actualLines);
+    if (expectLines.length != actualLines.length) {
+        logError('share-type', `mismatched SHARED TYPE ${typename} between ${sourceFile} and ${targetFile}, expect ${expectLines.length} lines, actual ${actualLines.length} lines`);
+        return false;
+    }
+    for (const [i, expect] of expectLines.map((r, i) => [i, r] as const)) {
+        if (expect != actualLines[i]) {
+            logError('share-type', `mismatched SHARED TYPE ${typename} between ${sourceFile} and ${targetFile}, line ${i + 1}:`);
+            console.log('   expect: ', expect);
+            console.log('   actual: ', actualLines[i]);
+            return false;
+        }
+    }
+    return true;
+
+    function getSharedTypeDefinition(filename: string, originalContent: string, name: string): string[] {
+        let state: 'before' | 'inside' | 'after' = 'before';
+        const result: string[] = [];
+        for (const line of originalContent.split('\n')) {
+            if (state == 'before' && line == `// BEGIN SHARED TYPE ${name}`) {
+                state = 'inside';
+            } else if (state == 'inside' && line == `// END SHARED TYPE ${name}`) {
+                state = 'after';
+            } else if (state == 'inside') {
+                result.push(line);
+            }
+        }
+        if (state == 'before') {
+            logError('share-type', `${filename}: missing shared type ${name}`);
+            return null;
+        } else if (state == 'inside') {
+            logError('share-type', `${filename}: unexpected EOF in shared type ${name}`);
+            return null;
+        }
+        return result;
+    }
 }
 
 function transpile(tcx: TypeScriptContext): TypeScriptContext {
@@ -825,8 +766,115 @@ function transpile(tcx: TypeScriptContext): TypeScriptContext {
 }
 
 // -----------------------------------------
+// ------ script/components/eslint.ts ------ 
+// -------- ATTENTION AUTO GENERATED -------
+// -----------------------------------------
+
+interface ESLintOptions {
+    files: string | string[], // pattern
+    ignore?: string[], // pattern
+    falsyRules?: boolean, // enable falsy rules to check for postential true positives
+    additionalLogHeader?: string,
+}
+// return false for has issues, but build scripts may not fail on this
+async function eslint(options: ESLintOptions): Promise<boolean> {
+    const eslint = new ESLint({
+        ignorePatterns: options.ignore,
+        overrideConfigFile: true,
+        plugins: {
+            tseslint: tseslint.plugin as any,
+            stylistic,
+        },
+        overrideConfig: [
+            js.configs.recommended,
+            stylistic.configs.recommended,
+            ...tseslint.configs.recommended as any,
+            {
+                linterOptions: {
+                    reportUnusedDisableDirectives: true,
+                },
+                rules: {
+                    // when-I-use-I-really-need-to-use
+                    '@typescript-eslint/no-explicit-any': 'off',
+                    // when-I-use-I-really-need-to-use
+                    // why do I need to expecting error? I ts-ignore because ts is not clever enough, I do not expect error
+                    '@typescript-eslint/ban-ts-comment': 'off',
+                    "@typescript-eslint/no-unused-vars": ["error", { "argsIgnorePattern": "^_" }],
+                    // not interested
+                    '@stylistic/arrow-parens': 'off',
+                    // document says default 1tbs but errors say not
+                    '@stylistic/brace-style': options.falsyRules ? ['error', '1tbs', { 'allowSingleLine': true }] : 'off',
+                    // document says default 4 but errors say default 2, UPDATE: too many false positive on nested ternery expression
+                    '@stylistic/indent': options.falsyRules ? ['error', 4] : 'off',
+                    // why is this a separate rule with 2 space idention?
+                    '@stylistic/indent-binary-ops': 'off',
+                    // not sufficient option to follow my convention
+                    '@stylistic/jsx-closing-bracket-location': 'off',
+                    // not sufficient option to follow my convention, who invented the very strange default value?
+                    '@stylistic/jsx-closing-tag-location': 'off',
+                    // not sufficient option to follow my convention
+                    '@stylistic/jsx-first-prop-new-line': 'off',
+                    // no, fragment already looks like newline
+                    '@stylistic/jsx-function-call-newline': 'off',
+                    // I'm tired of indenting props according to formatting rules
+                    '@stylistic/jsx-indent-props': 'off',
+                    // when-I-use-I-really-need-to-use
+                    '@stylistic/jsx-one-expression-per-line': 'off',
+                    // I need negative rule
+                    '@stylistic/jsx-wrap-multilines': 'off',
+                    // it's meaningless to move properties to next line and fight with idention rules
+                    '@stylistic/jsx-max-props-per-line': 'off',
+                    '@stylistic/jsx-quotes': 'off',
+                    // when-I-use-I-really-need-to-use
+                    '@stylistic/max-statements-per-line': 'off',
+                    '@stylistic/member-delimiter-style': ['error', {
+                        'multiline': {
+                            'delimiter': 'comma',
+                            'requireLast': true,
+                        },
+                        'singleline': {
+                            'delimiter': 'comma',
+                            'requireLast': false,
+                        },
+                    }],
+                    // I'm tired of indenting/spacing ternary expressions according formatting rules
+                    '@stylistic/multiline-ternary': 'off',
+                    '@stylistic/no-multi-spaces': ['error', { ignoreEOLComments: true }],
+                    // not interested
+                    '@stylistic/padded-blocks': 'off',
+                    // in old days I say it's not possible to enable on existing code base
+                    // now I say it's not possible to enforcing overall code base
+                    '@stylistic/quotes': 'off',
+                    '@stylistic/quote-props': ['error', 'consistent'],
+                    '@stylistic/semi': ['error', 'always'],
+                },
+            },
+        ],
+    });
+
+    const lintResults = await eslint.lintFiles(options.files);
+
+    let hasIssue = false;
+    // // the default formatter is extremely bad when one message is long, so have to implement on your own
+    // const formattedResults = (await eslint.loadFormatter('stylish')).format(lintResults);
+    // if (formattedResults) { console.log(formattedResults); }
+    for (const fileResult of lintResults) {
+        if (fileResult.errorCount == 0) { continue; }
+        hasIssue = true;
+        const relativePath = path.relative(process.cwd(), fileResult.filePath);
+        console.log(chalk`\n${relativePath} {yellow ${fileResult.errorCount}} errors`);
+        for (const message of fileResult.messages) {
+            console.log(chalk`{gray ${message.line}:${message.column}} ${message.message} {gray ${message.ruleId}}`);
+        }
+    }
+
+    if (!hasIssue) { logInfo(`eslint${options.additionalLogHeader ?? ''}`, 'clear'); }
+    return !hasIssue;
+}
+
+// -----------------------------------------
 // ------ script/components/minify.ts ------ 
-// ------- ATTENTION AUTO GENERATED --------
+// -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
 
 // the try catch structure of minify is hard to use, return null for not ok
@@ -846,7 +894,7 @@ async function tryminify(input: string) {
 
 // ---------------------------------------
 // ------ script/components/sftp.ts ------ 
-// ------ ATTENTION AUTO GENERATED -------
+// ------- ATTENTION AUTO GENERATED ------
 // ---------------------------------------
 
 interface UploadAsset {
@@ -858,20 +906,20 @@ interface UploadAsset {
 // nearly every text file need replace example.com to real domain,
 // so change this function to 'deploy' to make it reasonable to do the substitution,
 // use buffer or Buffer.from(string) to skip that
-async function deploy(config: BuildScriptConfig, assets: UploadAsset[]): Promise<boolean> {
+async function deploy(assets: UploadAsset[]): Promise<boolean> {
     const client = new SFTPClient();
     try {
         await client.connect({
-            host: config.domain,
-            username: config.ssh.user,
-            privateKey: await fs.readFile(config.ssh.identity),
-            passphrase: config.ssh.passphrase,
+            host: scriptconfig.domain,
+            username: scriptconfig.ssh.user,
+            privateKey: await fs.readFile(scriptconfig.ssh.identity),
+            passphrase: scriptconfig.ssh.passphrase,
         });
         for (const asset of assets) {
-            const fullpath = path.join(config.webroot, asset.remote);
+            const fullpath = path.join(scriptconfig.webroot, asset.remote);
             await client.mkdir(path.dirname(fullpath), true);
             if (!Buffer.isBuffer(asset.data)) {
-                asset.data = Buffer.from(asset.data.replaceAll('example.com', config.domain));
+                asset.data = Buffer.from(asset.data.replaceAll('example.com', scriptconfig.domain));
             }
             await client.put(asset.data, fullpath);
         }
@@ -887,7 +935,7 @@ async function deploy(config: BuildScriptConfig, assets: UploadAsset[]): Promise
 
 // -----------------------------------------
 // ------ script/components/mypack.ts ------ 
-// ------- ATTENTION AUTO GENERATED --------
+// -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
 
 interface MyPackContext {
@@ -1329,7 +1377,7 @@ function combineModules(mcx: MyPackContext): boolean {
             }
             resultJs = resultJs.slice(0, -2) + ' }, ';
         }
-        resultJs = resultJs.slice(0, -2) + ` from '${request.cdn ?? request.moduleName}';\n`;
+        resultJs = resultJs.slice(0, -2) + ` from '${request.cdn ?? request.moduleName}'\n`;
     }
     for (const module of mcx.modules) {
         resultJs += '\n';
@@ -1348,7 +1396,7 @@ function filesize(size: number) {
 }
 // if tcx is provided, it overwrites some input properties of mcx
 // if you need to avoid that, avoid tcx or some of tcx properties, when do I need that?
-async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPackContext> {
+async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext, lastmcx?: MyPackContext): Promise<MyPackContext> {
     if (tcx) {
         mcx.program = tcx.program;
         mcx.files = tcx.files;
@@ -1358,6 +1406,11 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPa
         if (tcx.additionalLogHeader) { mcx.logheader = 'mypack' + tcx.additionalLogHeader; } else { mcx.logheader = 'mypack'; }
     } else {
         mcx.logheader = mcx.logheader ? (mcx.logheader.startsWith('mypack') ? mcx.logheader : 'mypack' + mcx.logheader) : 'mypack';
+    }
+    if (lastmcx) {
+        // not sure whether mcx can reuse, so create new
+        mcx.resultHash = lastmcx.resultHash;
+        mcx.resultModules = lastmcx.resultModules;
     }
     logInfo(mcx.logheader, `pack ${mcx.entry}`);
 
@@ -1376,6 +1429,7 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPa
         logInfo(mcx.logheader, chalk`completed with {gray no change}`);
     } else {
         mcx.resultHash = newResultHash;
+        // TODO compress result should use in uploadwithremoteconnection
         const compressSize = ` (${filesize(zstdCompressSync(mcx.resultJs).length)})`;
         logInfo(mcx.logheader, chalk`completed with {yellow 1} asset {yellow ${filesize(mcx.resultJs.length)}}${compressSize}`);
         const newResultModules = mcx.modules
@@ -1402,169 +1456,395 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext): Promise<MyPa
     return mcx;
 }
 
-// ---------------------------------------
-// ------ script/components/arch.ts ------ 
-// ------ ATTENTION AUTO GENERATED -------
-// ---------------------------------------
+// --------------------------------------------
+// ------ script/components/messenger.ts ------ 
+// --------- ATTENTION AUTO GENERATED ---------
+// --------------------------------------------
 
-// command center client architecture
+// messenger: message sender abbreviated as messenger
 
-const config: BuildScriptConfig = JSON.parse(await fs.readFile('akari.json', 'utf-8'));
+// use this to avoid global variables because currently no other major global variables used
+/* eslint-disable @stylistic/quote-props -- ? */
+interface MessengerContext {
+    '?'?: boolean, // ?
+    readline: Interface,
+    connection?: WebSocket,
+    // id to waker (the promise resolver)
+    wakers?: Record<number, (data: BuildScriptMessageResponse) => void>,
+    nextMessageId?: number,
+    reconnectCount?: number,
+    // store last mcx for report
+    lastmcxStorage?: Record<string, MyPackContext>,
+}
 
-async function startCommandCenterClient(
-    handleRemoteCommand: (command: any) => Promise<any>,
-    handleLocalCommand: (command: string) => Promise<void>,
-) {
-    // ???
-    const myCertificate = await fs.readFile(config.certificate, 'utf-8');
-    const originalCreateSecureContext = tls.createSecureContext;
-    tls.createSecureContext = options => {
-        const originalResult = originalCreateSecureContext(options);
-        if (!options.ca) {
-            originalResult.context.addCACert(myCertificate);
-        }
-        return originalResult;
-    };
+// return true for connected
+async function connectRemote(ecx: MessengerContext) {
+    if (!ecx['?']) {
+        // ???
+        const myCertificate = await fs.readFile(scriptconfig.certificate, 'utf-8');
+        const originalCreateSecureContext = tls.createSecureContext;
+        tls.createSecureContext = options => {
+            const originalResult = originalCreateSecureContext(options);
+            if (!options.ca) {
+                originalResult.context.addCACert(myCertificate);
+            }
+            return originalResult;
+        };
+        ecx['?'] = true;
+        // this place exactly can use to initialize member fields
+        ecx.reconnectCount = 0;
+        ecx.nextMessageId = 1;
+        ecx.wakers = {};
+        ecx.lastmcxStorage = {};
+    }
+    if (ecx.reconnectCount >= 3) {
+        ecx.reconnectCount = 0;
+        logError('tunnel', 'connect retry time >= 3, you may manually reconnect later');
+        return false;
+    }
 
-    let websocket: WebSocket;
-    const readlineInterface = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-    });
-    function connectRemoteCommandCenter() {
-        websocket = new WebSocket(`wss://${config.domain}:8001/for-build`);
+    return new Promise<boolean>(resolve => {
+        const websocket = new WebSocket(`wss://${scriptconfig.domain}:8001`, 'akari');
+
+        // the close event may not be called after error event is called
+        // but normally will, use this to avoid duplicate invocation of reconnect
+        // https://stackoverflow.com/questions/38181156/websockets-is-an-error-event-always-followed-by-a-close-event
+        let reconnectInvoked = false;
+
+        websocket.addEventListener('open', async () => {
+            ecx.reconnectCount = 0;
+            logInfo('tunnel', `connected, you'd better complete authentication quickly`);
+            const token = await ecx.readline.question('> ');
+            websocket.send(token);
+        });
         websocket.addEventListener('close', async () => {
-            logInfo('ccc', `websocket disconnected`);
-            await readlineInterface.question('input anything to reconnect: ');
-            connectRemoteCommandCenter();
+            logInfo('tunnel', `websocket disconnected`);
+            if (!reconnectInvoked) {
+                ecx.reconnectCount += 1;
+                resolve(await connectRemote(ecx));
+            }
         });
         websocket.addEventListener('error', async error => {
-            logInfo('ccc', `websocket error:`, error);
-            await readlineInterface.question('input anything to reconnect: ');
-            connectRemoteCommandCenter();
+            logInfo('tunnel', `websocket error:`, error);
+            reconnectInvoked = true;
+            ecx.reconnectCount += 1;
+            resolve(await connectRemote(ecx));
         });
-        websocket.addEventListener('open', async () => {
-            logInfo('ccc', `websocket connected, you'd better complete authentication quickly`);
-            const token = await readlineInterface.question('> ');
-            websocket.send(token);
-            logInfo('ccc', 'listening to remote request');
-        });
+
         websocket.addEventListener('message', async event => {
-            logInfo('ccc', 'websocket received data', event.data);
-            const result = await handleRemoteCommand(event.data);
-            const response = await fetch(`https://${config.domain}:8001/local-build-complete`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(result),
-            });
-            if (response.ok) {
-                logInfo('ccc', 'POST /local-build-complete ok');
+            if (event.data == 'authenticated') {
+                ecx.connection = websocket;
+                logInfo('tunnel', 'websocket received authenticated');
+                // this resolve should be most normal case
+                resolve(true);
             } else {
-                logError('ccc', 'POST /local-build-complete not ok', response);
+                logInfo('tunnel', 'websocket received', event.data);
+                try {
+                    const response = JSON.parse(event.data);
+                    if (!response.id) {
+                        logError('tunnel', `received response without id, when will this happen?`);
+                    } else if (!(response.id in ecx.wakers)) {
+                        logError('tunnel', `no waker found for received response, when will this happen?`);
+                    } else {
+                        ecx.wakers[response.id](response);
+                        delete ecx.wakers[response.id];
+                    }
+                } catch (error) {
+                    logError('tunnel', `received data failed to parse json`, error);
+                }
             }
         });
-    }
-    connectRemoteCommandCenter();
-    readlineInterface.on('SIGINT', () => {
-        websocket?.close();
-        process.exit(0);
     });
-    for await (const command of readlineInterface) {
-        if (command == 'exit') {
-            websocket?.close();
-            process.exit(0);
-        } else if (command.startsWith('upload ')) {
-            const [, local, remote] = command.split(' ');
-            if (!local || !remote) {
-                console.error('invalid upload command, expecting upload localpath remotepath');
-            } else {
-                await deploy(config, [{ data: await fs.readFile(local), remote }]);
-            }
-        } else if (command.startsWith('build')) {
-            await handleRemoteCommand(command);
-        }
-        await handleLocalCommand(command);
-        readlineInterface.prompt();
-    }
 }
-// END LIBRARY e00b940bc572997abba035e534b7cf7f434cbad58079cbfa83934b12548743cb
 
-// this is currently the app server builder base template
-// - server side multiple file,
-//   currently for server side I'd like to keep it single file, because merge multiple file is very complex,
-//   related type definitions can have separate file and copy around,
-//   shared non-type (actual js) code currently is short and is included auto generated dispatch function
-// - server side auto generated api dispatch,
-//   still needed, but seems no need to namespace, put 10 or 20 apis in one namespace should be ok
-//   I'd consider suggesting making app servers small and no need to be separated in namespace
-// - client side,
-//   for now this specific app is similar to user, single file, use react, no antd,
-//   I'd currently try to keep single file until some app want to use client side routing
+/* eslint-disable @stylistic/operator-linebreak -- false positive for type X =\n| Variant1\n| Variant2 */
+// BEGIN SHARED TYPE BuildScriptMessage
+interface HasId {
+    id: number,
+}
 
-async function build(client: boolean, server: boolean, codegen: boolean): Promise<boolean> {
+// received packet format
+// - magic: NIRA, packet id: u16le, kind: u8
+// - kind: 1 (file), file name length: u8, filename: not zero terminated, buffer length: u32le, buffer
+// - kind: 2 (admin), command kind: u8
+//   - command kind: 1 (static-content:reload), key length: u8, key: not zero terminated
+//   - command kind: 2 (app:reload-server), app length: u8, app: not zero terminated
+// - kind: 3 (reload-browser)
+interface BuildScriptMessageUploadFile {
+    kind: 'file',
+    filename: string,
+    content: Buffer, // this is compressed
+}
+interface BuildScriptMessageAdminInterfaceCommand {
+    kind: 'admin',
+    command:
+        // remote-akari knows AdminInterfaceCommand type, local akari don't
+        // this also explicitly limit local admin command range, which is ok
+        | { kind: 'static-content:reload', key: string }
+        | { kind: 'app:reload-server', name: string },
+}
+interface BuildScriptMessageReloadBrowser {
+    kind: 'reload-browser',
+}
+type BuildScriptMessage =
+    | BuildScriptMessageUploadFile
+    | BuildScriptMessageAdminInterfaceCommand
+    | BuildScriptMessageReloadBrowser;
+
+// response packet format
+// - magic: NIRA, packet id: u16le, kind: u8
+// - kind: 1 (file), status: u8
+// - kind: 2 (admin)
+// - kind: 3 (reload-browser)
+interface BuildScriptMessageResponseUploadFile {
+    kind: 'file',
+    // filename path is not in returned data but assigned at local side
+    filename?: string,
+    // no error message in response, it is displayed here
+    status: 'ok' | 'error' | 'nodiff',
+}
+interface BuildScriptMessageResponseAdminInterfaceCommand {
+    kind: 'admin',
+    // command is not in returned data but assigned at local side
+    command?: BuildScriptMessageAdminInterfaceCommand['command'],
+    // response is not in returned data but displayed here
+}
+interface BuildScriptMessageResponseReloadBrowser {
+    kind: 'reload-browser',
+}
+type BuildScriptMessageResponse =
+    | BuildScriptMessageResponseUploadFile
+    | BuildScriptMessageResponseAdminInterfaceCommand
+    | BuildScriptMessageResponseReloadBrowser;
+// END SHARED TYPE BuildScriptMessage
+
+async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageUploadFile): Promise<BuildScriptMessageResponseUploadFile>;
+async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageAdminInterfaceCommand): Promise<BuildScriptMessageResponseAdminInterfaceCommand>;
+async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageReloadBrowser): Promise<BuildScriptMessageResponseReloadBrowser>;
+async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessage): Promise<BuildScriptMessageResponse> {
+    if (!ecx.connection) {
+        logError('tunnel', "not connected, type 'connect remote' to reconnect");
+        return null;
+    }
+
+    const messageId = ecx.nextMessageId;
+    ecx.nextMessageId += 1;
+
+    let buffer: Buffer;
+    if (message.kind == 'file') {
+        buffer = Buffer.alloc(12 + message.filename.length + message.content.length);
+        buffer.write('NIRA', 0); // magic size 4
+        buffer.writeUInt16LE(messageId, 4); // packet id size 2
+        buffer.writeUInt8(1, 6); // kind size 1
+        buffer.writeUInt8(message.filename.length, 7); // file name length size 1
+        buffer.write(message.filename, 8);
+        buffer.writeUInt32LE(message.content.length, message.filename.length + 8); // content length size 4
+        message.content.copy(buffer, 12 + message.filename.length, 0);
+        logInfo('tunnel', `send #${messageId} file ${message.filename} compress size ${message.content.length}`);
+    } else if (message.kind == 'admin') {
+        if (message.command.kind == 'static-content:reload') {
+            buffer = Buffer.alloc(9 + message.command.key.length);
+            buffer.write('NIRA', 0); // magic size 4
+            buffer.writeUInt16LE(messageId, 4); // packet id size 2
+            buffer.writeUInt8(2, 6); // kind size 1
+            buffer.writeUInt8(1, 7); // command kind size 1
+            buffer.writeUInt8(message.command.key.length, 8); // key length size 1
+            buffer.write(message.command.key, 9);
+            logInfo('tunnel', `send #${messageId} static-content:reload ${message.command.key}`);
+        } else if (message.command.kind == 'app:reload-server') {
+            buffer = Buffer.alloc(9 + message.command.name.length);
+            buffer.write('NIRA', 0); // magic size 4
+            buffer.writeUInt16LE(messageId, 4); // packet id size 2
+            buffer.writeUInt8(2, 6); // kind size 1
+            buffer.writeUInt8(2, 7); // command kind size 1
+            buffer.writeUInt8(message.command.name.length, 8); // name length size 1
+            buffer.write(message.command.name, 9);
+            logInfo('tunnel', `send #${messageId} app:reload-server ${message.command.name}`);
+        }
+    } else if (message.kind == 'reload-browser') {
+        buffer = Buffer.alloc(7);
+        buffer.write('NIRA', 0); // magic size 4
+        buffer.writeUInt16LE(messageId, 4); // packet id size 2
+        buffer.writeUInt8(3, 6); // kind size 1
+        logInfo('tunnel', `send #${messageId} reload-browser`);
+    }
+
+    ecx.connection.send(buffer);
+    let timeout: any;
+    const received = new Promise<BuildScriptMessageResponse>(resolve => {
+        ecx.wakers[messageId] = response => {
+            if (timeout) { clearTimeout(timeout); }
+            if (message.kind == 'file' && response.kind == 'file') {
+                response.filename = message.filename;
+            } else if (message.kind == 'admin' && response.kind == 'admin') {
+                response.command = message.command;
+            }
+            resolve(response);
+        };
+    });
+
+    return await Promise.any([
+        received,
+        new Promise<BuildScriptMessageResponse>(resolve => {
+            timeout = setTimeout(() => {
+                delete ecx.wakers[messageId];
+                logError('tunnel', `message ${messageId} timeout`);
+                resolve(null);
+            }, 30_000);
+        }),
+    ]);
+}
+
+// upload through websocket connection eliminate the time to establish tls connection and ssh connection
+// this also have centralized handling of example.com replacement
+// return item is null for not ok
+async function deployWithRemoteConnect(ecx: MessengerContext, assets: UploadAsset[]): Promise<BuildScriptMessageResponseUploadFile[]> {
+    // compare to the not know whether can parallel sftp, this is designed to be parallel
+    return await Promise.all(assets.map(async asset => {
+        // webroot base path and parent path mkdir is handled in remote akari
+        if (!Buffer.isBuffer(asset.data)) {
+            asset.data = Buffer.from(asset.data.replaceAll('example.com', scriptconfig.domain));
+        }
+        const data = await new Promise<Buffer>(resolve => zstdCompress(asset.data, (error, data) => {
+            if (error) {
+                logError('messenger-upload', `failed to compress ${asset.remote}`, error);
+                resolve(null);
+            } else {
+                resolve(data);
+            }
+        }));
+        if (data) {
+            return await sendRemoteMessage(ecx, { kind: 'file', filename: asset.remote, content: data });
+        } else {
+            return null;
+        }
+    }));
+}
+// END LIBRARY 7ee9f67deba3b56f1f39fffad52b3fc0096909210c772849708959cde7112e2e
+
+async function build(ecx: MessengerContext, client: boolean, server: boolean, codegen: boolean) {
     const targetName = [client ? 'client' : '', server ? 'server' : ''].filter(x => x).join(' + ');
     logInfo('akari', chalk`build {cyan ${targetName}}`);
 
     const codeGenerationConfig = await readCodeGenerationConfig();
-    if (!codeGenerationConfig) { logError('akari', 'failed at read codegen config'); return false; }
+    if (!codeGenerationConfig) { logError('akari', 'failed at read codegen config'); return; }
     const codeGenerationResult = await generateCode(codeGenerationConfig, { client, server, emit: codegen })
-    if (!codeGenerationResult) { logError('akari', 'failed at code generation'); return false; }
+    if (!codeGenerationResult) { logError('akari', 'failed at code generation'); return; }
 
     const assets: UploadAsset[] = [];
 
     if (client) {
         const tcx1 = transpile({ entry: 'src/client/index.tsx', target: 'browser', additionalLogHeader: '-mainclient' });
-        if (!tcx1.success) { logError('akari', 'failed at transpile mainclient' ); return false; }
+        if (!tcx1.success) { logError('akari', 'failed at transpile mainclient' ); return; }
         // TODO why is the /vbuild/client/index.js part missing?
-        const mcx1 = await mypack({ entry: '/vbuild/index.js' }, tcx1);
-        if (!mcx1.success) { logError('akari', 'failed at pack mainclient'); return false; }
+        const mcx1 = await mypack({ entry: '/vbuild/index.js' }, tcx1, ecx.lastmcxStorage[tcx1.additionalLogHeader]);
+        if (!mcx1.success) { logError('akari', 'failed at pack mainclient'); return; }
 
+        ecx.lastmcxStorage[tcx1.additionalLogHeader] = mcx1;
         assets.push({ data: mcx1.resultJs, remote: 'static/yala/index.js' });
         assets.push({ data: await fs.readFile('src/client/index.html', 'utf-8'), remote: 'static/yala/index.html' });
 
         const tcx2 = transpile({ entry: 'src/client/share.tsx', target: 'browser', additionalLogHeader: '-shareclient' });
-        if (!tcx2.success) { logError('akari', 'failed at transpile shareclient' ); return false; }
-        const mcx2 = await mypack({ entry: '/vbuild/share.js' }, tcx2);
-        if (!mcx2.success) { logError('akari', 'failed at pack shareclient'); return false; }
+        if (!tcx2.success) { logError('akari', 'failed at transpile shareclient' ); return; }
+        const mcx2 = await mypack({ entry: '/vbuild/share.js' }, tcx2, ecx.lastmcxStorage[tcx2.additionalLogHeader]);
+        if (!mcx2.success) { logError('akari', 'failed at pack shareclient'); return; }
 
+        ecx.lastmcxStorage[tcx2.additionalLogHeader] = mcx2;
         assets.push({ data: mcx2.resultJs, remote: 'static/yala/share.js' });
         assets.push({ data: await fs.readFile('src/client/share.html', 'utf-8'), remote: 'static/yala/share.html' });
 
-        if (!await eslint({ files: 'src/client/*.tsx', additionalLogHeader: '-client' })) { /* return false; */ }
+        if (!await eslint({ files: 'src/client/*.tsx', additionalLogHeader: '-client' })) { /* return; */ }
     }
 
     if (server) {
         const tcx = transpile({ entry: 'src/server/index.ts', target: 'node', additionalLogHeader: '-server' });
-        if (!tcx.success) { logError('akari', 'failed at transpile server' ); return false; }
-        const mcx = await mypack({ entry: '/vbuild/index.js' }, tcx);
-        if (!mcx.success) { logError('akari', 'failed at pack server'); return false; }
+        if (!tcx.success) { logError('akari', 'failed at transpile server' ); return; }
+        const mcx = await mypack({ entry: '/vbuild/index.js' }, tcx, ecx.lastmcxStorage[tcx.additionalLogHeader]);
+        if (!mcx.success) { logError('akari', 'failed at pack server'); return; }
 
-        assets.push({ data: mcx.resultJs, remote: 'servers/index.js' });
+        ecx.lastmcxStorage[tcx.additionalLogHeader] = mcx;
+        assets.push({ data: mcx.resultJs, remote: 'servers/yala.js' });
 
-        if (!await eslint({ files: 'src/server/index.ts', additionalLogHeader: '-server' })) { /* return false; */ }
+        if (!await eslint({ files: 'src/server/index.ts', additionalLogHeader: '-server' })) { /* return; */ }
     }
 
-    const uploadResult = await deploy(config, assets);
-    if (!uploadResult) { logError('akari', 'failed at upload'); return false; }
+    if (ecx) {
+        const uploadResults = await deployWithRemoteConnect(ecx, assets);
+        if (uploadResults.some(r => !r || r.status == 'error')) {
+            logError('akari', chalk`{cyan ${targetName}} failed at upload`); return;
+        } else if (!uploadResults.some(r => r.status == 'ok')) {
+            logInfo('akari', chalk`build {cyan ${targetName}} completed with no change`); return;
+        } else {
+            const reloadRequests: BuildScriptMessageAdminInterfaceCommand['command'][] = [];
+            if (uploadResults.some(r => r.filename.startsWith('static/yala') && r.status == 'ok')) {
+                reloadRequests.push({ kind: 'static-content:reload', key: 'yala' });
+            }
+            if (uploadResults.some(r => r.filename.startsWith('servers/yala') && r.status == 'ok')) {
+                reloadRequests.push({ kind: 'app:reload-server', name: 'yala' });
+            }
+            await Promise.all(reloadRequests.map(r => sendRemoteMessage(ecx, { kind: 'admin', command: r })));
+            // TODO now you really need admin command ok to skip reload browser
+            await sendRemoteMessage(ecx, { kind: 'reload-browser' });
+        }
+    } else {
+        const uploadResult = await deploy(assets);
+        if (!uploadResult) { logError('akari', 'failed at upload'); return; }
+    }
 
-    logInfo('akari', chalk`build {cyan ${targetName}} completed successfully`); return true;
+    logInfo('akari', chalk`build {cyan ${targetName}} completed successfully`); return;
 }
 
 async function dispatch(command: string[]) {
     if (typeof command[0] == 'undefined') {
-        await build(true, true, true);
+        await build(null, true, true, true);
     } else if (command[0] == 'client') {
         // only disable codegen for $ node akari.ts client nocodegen
-        await build(true, false, command[1] != 'nocodegen');
+        await build(null, true, false, command[1] != 'nocodegen');
     } else if (command[0] == 'server') {
         // only disable codegen for $ node akari.ts server nocodegen
-        await build(false, true, command[1] != 'nocodegen');
+        await build(null, false, true, command[1] != 'nocodegen');
     } else if (command[0] == 'nocodegen') {
         // only disable codegen for $ node akari.ts nocodegen
-        await build(true, true, false);
-    } else if (command[0] == 'accept') {
-        // TODO fine tune communication with remote akari
-        startCommandCenterClient(async () => ({ ok: await build(true, true, true) }), async () => {});
+        await build(null, true, true, false);
+    } else if (command[0] == 'with' && command[1] == 'remote') {
+        const ecx: MessengerContext = {
+            readline: readline.createInterface({
+                input: process.stdin,
+                output: process.stdout,
+                removeHistoryDuplicates: true,
+            }),
+        };
+        await connectRemote(ecx);
+        ecx.readline.on('SIGINT', () => process.exit(0));
+        ecx.readline.prompt();
+        for await (const raw of ecx.readline) {
+            const line = raw.trim();
+            if (line.length == 0) {
+                // nothing
+            } else if (line == 'exit') {
+                // it's more complex to disable websocket auto reconnect
+                process.exit(0);
+            } else if (line.startsWith('connect')) {
+                await connectRemote(ecx);
+            } else if (line == 'all') {
+                await build(ecx, true, true, true);
+            } else if (line == 'client') {
+                await build(ecx, true, false, true);
+            } else if (line == 'server') {
+                await build(ecx, false, true, true);
+            } else if (line == 'nocodegen') {
+                await build(ecx, true, true, false);
+            } else if (line == 'client nocodegen') {
+                await build(ecx, true, false, false);
+            } else if (line == 'server nocodegen') {
+                await build(ecx, false, true, false);
+            } else if (line.startsWith('upload ')) {
+                // TODO upload arbitrary file
+            } else { // TODO download arbitrary file?
+                logError('akari', `unknown command`);
+            }
+            ecx.readline.prompt();
+        }
     } else {
         logError('akari', 'unknown command');
     }

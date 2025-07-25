@@ -28,4 +28,10 @@
     <field name="PromptTokenCount" type="int?" />
     <field name="CompletionTokenCount" type="int?" />
   </table>
+  <table name="UserModel">
+    <primary-key field="UserId" />
+    <field name="UserId" type="id" />
+    <field name="Name" type="string" size="100" />
+    <field name="APIKey" type="string" size="100" />
+  </table>
 </database>

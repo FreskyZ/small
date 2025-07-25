@@ -21,6 +21,10 @@
 // my conversations have branch, except normal full path embedding or shared path + distinct path embedding,
 // ai is also suggesting turn by turn embedding, I'd like to try that
 
+// UPDATE after you build vector database, create relationships between entities should be very useful
+// the vector embeddings should show similar distance (vector subtract) with similar relationship
+// e.g. king - man + woman about= queue, if you can collect a experienced relationship vector knowledge it should be more useful
+
 use std::collections::HashMap;
 use std::io::{Read, Seek, Write};
 use std::fs;

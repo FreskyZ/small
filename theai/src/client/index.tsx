@@ -268,6 +268,7 @@ function App() {
 
     // region: the list
     const [sessions, setSessions] = useState<I.Session[]>([]);
+    // TODO query string is missing after select session
     const [queryString, setQueryString] = useState<string>('');
     // only update this when clicking apply
     const [displaySessions, setDisplaySessions] = useState<I.Session[]>([]);
@@ -395,6 +396,7 @@ function App() {
             session.messages = []; // don't save messages in state.sessions
             // session's message list cannot be empty, so this find must have result
             const messagePath: number[] = [messages.find(m => !m.parentId).id];
+            // TODO use currentmessageid to select newer branch instead of first ones
             while (messages.some(m => m.parentId == messagePath[messagePath.length - 1])) {
                 messagePath.push(messages.find(m => m.parentId == messagePath[messagePath.length - 1]).id);
             }
@@ -618,7 +620,7 @@ function App() {
                     {!editingMessageId && <button css={styles1.headerButton}
                         onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>}
                     {/* do not display all complete button when editing any message, when any message is completing */}
-                    {!editingMessageId && m.role == 'user' && <button css={styles1.headerButton}
+                    {!editingMessageId && !completingMessageId && m.role == 'user' && <button css={styles1.headerButton}
                         disabled={m.id == completingMessageId} onClick={() => handleCompleteMessage(m.id)}>
                         <Loading loading={m.id == completingMessageId}><CaretRightOutlined /></Loading>COMPLETE</button>}
                     {m.id == editingMessageId && <button css={styles1.headerButton}
@@ -647,7 +649,7 @@ function App() {
                 </div>
             </div>)}
             <div>
-                <button onClick={handleAddMessage}>ADD</button>
+                <button disabled={!!completingMessageId} onClick={handleAddMessage}>ADD</button>
             </div>
         </div> : sessionId === 0 && <div css={styles1.newSessionContainer}>
             <div>Start New Chat</div>

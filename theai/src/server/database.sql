@@ -34,3 +34,11 @@ CREATE TABLE `Message` (
     CONSTRAINT `PK_Message` PRIMARY KEY (`SessionId`,`MessageId`),
     CONSTRAINT `FK_Message_Session` FOREIGN KEY (`SessionId`) REFERENCES `Session`(`SessionId`)
 );
+CREATE TABLE `UserModel` (
+    `UserId` INT NOT NULL AUTO_INCREMENT,
+    `Name` VARCHAR(100) NOT NULL,
+    `APIKey` VARCHAR(100) NOT NULL,
+    `CreateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
+    `UpdateTime` DATETIME NOT NULL DEFAULT (UTC_TIMESTAMP),
+    CONSTRAINT `PK_UserModel` PRIMARY KEY (`UserId`)
+);
