@@ -2,7 +2,7 @@ import readline from 'node:readline/promises';
 // END IMPORT
 // components: codegen, minify, mypack, sftp, typescript, eslint, messenger, common
 // BEGIN LIBRARY
-import { createHash } from 'node:crypto';
+import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Interface } from 'node:readline/promises';
@@ -110,6 +110,7 @@ interface WebInterfaceActionType {
 }
 
 interface CodeGenerationConfig {
+    options: CodeGenerationOptions,
     dbname: string,
     tables: DatabaseModelTable[],
     appname: string,
@@ -119,7 +120,7 @@ interface CodeGenerationConfig {
 
 // currently input files are at fixed path
 // return null for read error, currently no expected error
-async function readCodeGenerationConfig(): Promise<CodeGenerationConfig> {
+async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise<CodeGenerationConfig> {
 
     const parser = new XMLParser({
         preserveOrder: true,
@@ -188,7 +189,7 @@ async function readCodeGenerationConfig(): Promise<CodeGenerationConfig> {
     });
     // console.log(JSON.stringify(actionTypes, undefined, 2), actions);
 
-    return { dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
+    return { options, dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
 }
 
 // database.d.ts, return null for not ok
@@ -292,12 +293,35 @@ function generateWebInterfaceTypes(config: CodeGenerationConfig): string {
     }
     return sb;
 }
+
+// return original manual content (content before mark), return null for have error
+function checkPartialGeneratedContentHash(config: CodeGenerationConfig, taskName: string, originalContent: string): string {
+    const markIndex = originalContent.indexOf('// AUTOGEN');
+    const markEndIndex = originalContent.indexOf('\n', markIndex);
+    const expectHash = originalContent.substring(markIndex + 11, markEndIndex);
+    const actualHash = crypto.hash('sha256', originalContent.substring(markEndIndex + 1));
+    if (expectHash != actualHash) {
+        const expectShortHash = expectHash.substring(0, 6);
+        const actualShortHash = actualHash.substring(0, 6);
+        if (actualShortHash != expectShortHash) {
+            logError('codegen', `${taskName}: hash mismatch expect ${expectShortHash} actual ${actualShortHash}`);
+        } else {
+            logError('codegen', `${taskName}: hash mismatch expect ${expectHash} actual ${actualHash}`);
+        }
+        if (!config.options.ignoreHashMismatch) {
+            logError('codegen', `${taskName}: generated content seems unexpectedly changed, use ignorehash to ignore and overwrite`);
+            return null;
+        }
+    }
+    return originalContent.substring(0, markIndex);
+}
+
 // index.ts, return null for not ok
 function generateWebInterfaceServer(config: CodeGenerationConfig, originalContent: string): string {
 
-    let sb = originalContent;
-    sb = sb.substring(0, sb.indexOf('// AUTOGEN'));
-    sb += '// AUTOGEN\n';
+    const manualContent = checkPartialGeneratedContentHash(config, 'actions-server', originalContent);
+    if (!manualContent) { return null; }
+    let sb = '';
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
@@ -345,14 +369,16 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     sb += `    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n`;
     sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
     sb += `}\n`;
-    return sb;
+
+    const hash = crypto.hash('sha256', sb);
+    return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
 }
 // index.tsx, return null for not ok
 function generateWebInterfaceClient(config: CodeGenerationConfig, originalContent: string): string {
 
-    let sb = originalContent;
-    sb = sb.substring(0, sb.indexOf('// AUTOGEN'));
-    sb += '// AUTOGEN\n';
+    const manualContent = checkPartialGeneratedContentHash(config, 'actions-client', originalContent);
+    if (!manualContent) { return null; }
+    let sb = '';
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
@@ -532,16 +558,19 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
     sb += '};\n';
-    return sb;
+
+    const hash = crypto.hash('sha256', sb);
+    return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
 }
 
 interface CodeGenerationOptions {
     emit: boolean, // actually write file
     client: boolean, // include client side targets
     server: boolean, // include server side targets
+    ignoreHashMismatch: boolean,
 }
 // return true for ok, false for not ok
-async function generateCode(config: CodeGenerationConfig, options: CodeGenerationOptions): Promise<boolean> {
+async function generateCode(config: CodeGenerationConfig): Promise<boolean> {
     logInfo('codegen', 'code generation');
     let hasError = false;
 
@@ -550,7 +579,7 @@ async function generateCode(config: CodeGenerationConfig, options: CodeGeneratio
         if (!generatedContent) {
             hasError = true;
         }
-        if (options.emit && generatedContent) {
+        if (config.options.emit && generatedContent) {
             // write file may throw error, but actually you don't need to care about that
             logInfo('codegen', chalk`write {yellow ${path}}`);
             await fs.writeFile(path, generatedContent);
@@ -562,7 +591,7 @@ async function generateCode(config: CodeGenerationConfig, options: CodeGeneratio
         if (!generatedContent) {
             hasError = true;
         }
-        if (options.emit && generatedContent) {
+        if (config.options.emit && generatedContent) {
             // write file may throw error, but actually you don't need to care about that
             logInfo('codegen', chalk`write {yellow ${path}}`);
             await fs.writeFile(path, generatedContent);
@@ -575,7 +604,7 @@ async function generateCode(config: CodeGenerationConfig, options: CodeGeneratio
         { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api.d.ts', generateWebInterfaceTypes) },
         { kind: 'server', name: 'index.ts', run: createPartialTask('src/server/index.ts', generateWebInterfaceServer) },
         { kind: 'client', name: 'index.tsx', run: createPartialTask('src/client/index.tsx', generateWebInterfaceClient) },
-    ].filter(t => (options.client && t.kind.includes('client')) || (options.server && t.kind.includes('server')));
+    ].filter(t => (config.options.client && t.kind.includes('client')) || (config.options.server && t.kind.includes('server')));
     // console.log('scheduled tasks', tasks);
     await Promise.all(tasks.map(t => t.run()));
 
@@ -1720,49 +1749,51 @@ async function deployWithRemoteConnect(ecx: MessengerContext, assets: UploadAsse
         }
     }));
 }
-// END LIBRARY 7ee9f67deba3b56f1f39fffad52b3fc0096909210c772849708959cde7112e2e
+// END LIBRARY fb94dd84041ca12347ef435e23f4012419f38fb9d7ec4d52e8a5eb4c4b476aa1
 
-async function build(ecx: MessengerContext, client: boolean, server: boolean, codegen: boolean) {
-    const targetName = [client ? 'client' : '', server ? 'server' : ''].filter(x => x).join(' + ');
+async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
+    if (!options.client && !options.server) { return; }
+    const targetName = [options.client ? 'client' : '', options.server ? 'server' : ''].filter(x => x).join(' + ');
     logInfo('akari', chalk`build {cyan ${targetName}}`);
 
-    const codeGenerationConfig = await readCodeGenerationConfig();
+    const codeGenerationConfig = await readCodeGenerationConfig(options);
     if (!codeGenerationConfig) { logError('akari', 'failed at read codegen config'); return; }
-    const codeGenerationResult = await generateCode(codeGenerationConfig, { client, server, emit: codegen })
+    const codeGenerationResult = await generateCode(codeGenerationConfig, )
     if (!codeGenerationResult) { logError('akari', 'failed at code generation'); return; }
 
     const assets: UploadAsset[] = [];
+    const lastmcx = ecx?.lastmcxStorage ?? {};
 
-    if (client) {
+    if (options.client) {
         const tcx1 = transpile({ entry: 'src/client/index.tsx', target: 'browser', additionalLogHeader: '-mainclient' });
         if (!tcx1.success) { logError('akari', 'failed at transpile mainclient' ); return; }
         // TODO why is the /vbuild/client/index.js part missing?
-        const mcx1 = await mypack({ entry: '/vbuild/index.js' }, tcx1, ecx.lastmcxStorage[tcx1.additionalLogHeader]);
+        const mcx1 = await mypack({ entry: '/vbuild/index.js' }, tcx1, lastmcx[tcx1.additionalLogHeader]);
         if (!mcx1.success) { logError('akari', 'failed at pack mainclient'); return; }
 
-        ecx.lastmcxStorage[tcx1.additionalLogHeader] = mcx1;
+        lastmcx[tcx1.additionalLogHeader] = mcx1;
         assets.push({ data: mcx1.resultJs, remote: 'static/yala/index.js' });
         assets.push({ data: await fs.readFile('src/client/index.html', 'utf-8'), remote: 'static/yala/index.html' });
 
         const tcx2 = transpile({ entry: 'src/client/share.tsx', target: 'browser', additionalLogHeader: '-shareclient' });
         if (!tcx2.success) { logError('akari', 'failed at transpile shareclient' ); return; }
-        const mcx2 = await mypack({ entry: '/vbuild/share.js' }, tcx2, ecx.lastmcxStorage[tcx2.additionalLogHeader]);
+        const mcx2 = await mypack({ entry: '/vbuild/share.js' }, tcx2, lastmcx[tcx2.additionalLogHeader]);
         if (!mcx2.success) { logError('akari', 'failed at pack shareclient'); return; }
 
-        ecx.lastmcxStorage[tcx2.additionalLogHeader] = mcx2;
+        lastmcx[tcx2.additionalLogHeader] = mcx2;
         assets.push({ data: mcx2.resultJs, remote: 'static/yala/share.js' });
         assets.push({ data: await fs.readFile('src/client/share.html', 'utf-8'), remote: 'static/yala/share.html' });
 
         if (!await eslint({ files: 'src/client/*.tsx', additionalLogHeader: '-client' })) { /* return; */ }
     }
 
-    if (server) {
+    if (options.server) {
         const tcx = transpile({ entry: 'src/server/index.ts', target: 'node', additionalLogHeader: '-server' });
         if (!tcx.success) { logError('akari', 'failed at transpile server' ); return; }
-        const mcx = await mypack({ entry: '/vbuild/index.js' }, tcx, ecx.lastmcxStorage[tcx.additionalLogHeader]);
+        const mcx = await mypack({ entry: '/vbuild/index.js' }, tcx, lastmcx[tcx.additionalLogHeader]);
         if (!mcx.success) { logError('akari', 'failed at pack server'); return; }
 
-        ecx.lastmcxStorage[tcx.additionalLogHeader] = mcx;
+        lastmcx[tcx.additionalLogHeader] = mcx;
         assets.push({ data: mcx.resultJs, remote: 'servers/yala.js' });
 
         if (!await eslint({ files: 'src/server/index.ts', additionalLogHeader: '-server' })) { /* return; */ }
@@ -1796,16 +1827,14 @@ async function build(ecx: MessengerContext, client: boolean, server: boolean, co
 
 async function dispatch(command: string[]) {
     if (typeof command[0] == 'undefined') {
-        await build(null, true, true, true);
-    } else if (command[0] == 'client') {
-        // only disable codegen for $ node akari.ts client nocodegen
-        await build(null, true, false, command[1] != 'nocodegen');
-    } else if (command[0] == 'server') {
-        // only disable codegen for $ node akari.ts server nocodegen
-        await build(null, false, true, command[1] != 'nocodegen');
-    } else if (command[0] == 'nocodegen') {
-        // only disable codegen for $ node akari.ts nocodegen
-        await build(null, true, true, false);
+        await build(null, { client: true, server: true, emit: true, ignoreHashMismatch: false });
+    } else if (command[0] != 'with' || command[1] != 'remote') {
+        await build(null, {
+            client: !command.includes('noclient'),
+            server: !command.includes('noserver'),
+            emit: !command.includes('nocodegen'),
+            ignoreHashMismatch: command.includes('ignorehash'),
+        });
     } else if (command[0] == 'with' && command[1] == 'remote') {
         const ecx: MessengerContext = {
             readline: readline.createInterface({
@@ -1826,18 +1855,15 @@ async function dispatch(command: string[]) {
                 process.exit(0);
             } else if (line.startsWith('connect')) {
                 await connectRemote(ecx);
-            } else if (line == 'all') {
-                await build(ecx, true, true, true);
-            } else if (line == 'client') {
-                await build(ecx, true, false, true);
-            } else if (line == 'server') {
-                await build(ecx, false, true, true);
-            } else if (line == 'nocodegen') {
-                await build(ecx, true, true, false);
-            } else if (line == 'client nocodegen') {
-                await build(ecx, true, false, false);
-            } else if (line == 'server nocodegen') {
-                await build(ecx, false, true, false);
+            } else if (line == 'app') {
+                await build(ecx, { client: true, server: true, emit: true, ignoreHashMismatch: false });
+            } else if (line.startsWith('app')) {
+                await build(ecx, {
+                    client: !line.includes('noclient'),
+                    server: !line.includes('noserver'),
+                    emit: !line.includes('nocodegen'),
+                    ignoreHashMismatch: line.includes('ignorehash'),
+                });
             } else if (line.startsWith('upload ')) {
                 // TODO upload arbitrary file
             } else { // TODO download arbitrary file?
