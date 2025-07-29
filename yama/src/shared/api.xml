@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<api name="yama">
+  <type name="Book">
+    <field name="id" type="id" />
+    <field name="name" type="string" />
+    <!-- datetime is utc and iso8601 -->
+    <field name="createTime" type="datetime?" />
+    <field name="updateTime" type="datetime?" />
+    <!-- sections contained in this book -->
+    <field name="sections" type="Section[]" />
+    <!-- pages that belong directly to book (not in any section) -->
+    <field name="pages" type="Page[]" />
+  </type>
+  <type name="Section">
+    <field name="id" type="id" />
+    <field name="bookId" type="id" />
+    <!-- null for parent means root level section -->
+    <field name="parentSectionId" type="id?" />
+    <field name="name" type="string" />
+    <field name="createTime" type="datetime?" />
+    <field name="updateTime" type="datetime?" />
+    <!-- child sections -->
+    <field name="sections" type="Section[]" />
+    <!-- pages in this section -->
+    <field name="pages" type="Page[]" />
+  </type>
+  <type name="Page">
+    <field name="id" type="id" />
+    <field name="bookId" type="id" />
+    <!-- null means page belongs directly to book, not in any section -->
+    <field name="sectionId" type="id?" />
+    <field name="name" type="string" />
+    <field name="content" type="string" />
+    <field name="createTime" type="datetime?" />
+    <field name="updateTime" type="datetime?" />
+    <field name="shareId" type="string?" />
+    <!-- embedded files in this page -->
+    <field name="files" type="EmbeddedFile[]" />
+    <!-- page history versions -->
+    <field name="history" type="PageHistory[]" />
+  </type>
+  <type name="PageHistory">
+    <field name="id" type="id" />
+    <field name="pageId" type="id" />
+    <field name="name" type="string" />
+    <field name="createTime" type="datetime?" />
+    <!-- operations that convert from previous version to this version -->
+    <field name="operations" type="PageOperation[]" />
+  </type>
+  <type name="PageOperation">
+    <field name="historyId" type="id" />
+    <field name="kind" type="string" />
+    <field name="originalLine" type="int" />
+    <field name="newLine" type="int" />
+    <field name="content" type="string" />
+  </type>
+  <type name="EmbeddedFile">
+    <field name="id" type="id" />
+    <field name="pageId" type="id" />
+    <field name="name" type="string" />
+    <!-- base64 encoded binary content -->
+    <field name="content" type="string" />
+    <field name="createTime" type="datetime?" />
+  </type>
+  <type name="SharePageResult">
+    <field name="id" type="string" />
+  </type>
+  <!-- Book CRUD operations -->
+  <action key="main" name="GetBooks" return="Book[]" />
+  <action key="main" name="GetBook" a1="bookId" return="Book" />
+  <action key="main" name="AddBook" body="Book" return="Book" />
+  <action key="main" name="UpdateBook" body="Book" return="Book" />
+  <action key="main" name="RemoveBook" a1="bookId" />
+  <!-- Section CRUD operations -->
+  <action key="main" name="GetSections" a1="bookId" return="Section[]" />
+  <action key="main" name="GetSection" a1="sectionId" return="Section" />
+  <!-- creates section in specified book, under optional parent section -->
+  <action key="main" name="AddSection" a1="bookId" body="Section" return="Section" />
+  <action key="main" name="UpdateSection" body="Section" return="Section" />
+  <!-- removes section and all child sections and pages -->
+  <action key="main" name="RemoveSection" a1="sectionId" />
+  <!-- move section to different parent (or to root level) -->
+  <action key="main" name="MoveSectionToParent" a1="sectionId" a2="newParentSectionId?" />
+  <!-- Page CRUD operations -->
+  <!-- TODO ai suggest use optional sectionId?, but has error in codegen, check later -->
+  <action key="main" name="GetPages" a1="bookId" a2="sectionId" return="Page[]" />
+  <action key="main" name="GetPage" a1="pageId" return="Page" />
+  <!-- creates page in specified book and optional section -->
+  <!-- TODO ai suggest use optional sectionId?, but has error in codegen, check later -->
+  <action key="main" name="AddPage" a1="bookId" a2="sectionId" body="Page" return="Page" />
+  <action key="main" name="UpdatePage" body="Page" return="Page" />
+  <action key="main" name="RemovePage" a1="pageId" />
+  <!-- move page to different section (or to book root) -->
+  <!-- TODO ai suggest use optional newSectionId?, but has error in codegen, check later -->
+  <action key="main" name="MovePageToSection" a1="pageId" a2="newSectionId" />
+  <!-- Page sharing operations -->
+  <action key="main" name="SharePage" a1="pageId" return="SharePageResult" />
+  <action key="main" name="UnsharePage" a1="pageId" />
+  <!-- public API for accessing shared pages -->
+  <action key="share" name="PublicGetPage" public="true" a1="shareId:guid" return="Page" />
+  <!-- Page history operations -->
+  <action key="main" name="GetPageHistory" a1="pageId" return="PageHistory[]" />
+  <action key="main" name="GetPageHistoryVersion" a1="historyId" return="PageHistory" />
+  <!-- create new history version (manual save) -->
+  <action key="main" name="SavePageVersion" a1="pageId" body="PageHistory" return="PageHistory" />
+  <!-- restore page content to a specific history version -->
+  <action key="main" name="RestorePageVersion" a1="pageId" a2="historyId" return="Page" />
+  <action key="main" name="RemovePageVersion" a1="historyId" />
+  <!-- Embedded file operations -->
+  <action key="main" name="GetPageFiles" a1="pageId" return="EmbeddedFile[]" />
+  <action key="main" name="GetPageFile" a1="fileId" return="EmbeddedFile" />
+  <action key="main" name="AddPageFile" a1="pageId" body="EmbeddedFile" return="EmbeddedFile" />
+  <action key="main" name="UpdatePageFile" body="EmbeddedFile" return="EmbeddedFile" />
+  <action key="main" name="RemovePageFile" a1="fileId" />
+  <!-- Search operations -->
+  <action key="main" name="SearchPages" a1="query" a2="bookId?" return="Page[]" />
+  <action key="main" name="SearchInBook" a1="bookId" a2="query" return="Page[]" />
+</api>
