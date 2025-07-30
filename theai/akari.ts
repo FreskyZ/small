@@ -119,8 +119,9 @@ interface CodeGenerationConfig {
 }
 
 // currently input files are at fixed path
-// return null for read error, currently no expected error
+// return null for read error
 async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise<CodeGenerationConfig> {
+    let hasError = false;
 
     const parser = new XMLParser({
         preserveOrder: true,
@@ -133,17 +134,24 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
     // console.log(JSON.stringify(rawDatabaseModel, undefined, 2));
 
     const databaseName = rawDatabaseModel[1][':@'].name;
-    const databaseTables = (rawDatabaseModel[1].database as any[]).map<DatabaseModelTable>(c => ({
-        name: c[':@'].name,
-        primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
-        foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
-        fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
-            name: f[':@'].name,
-            type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
-            nullable: f[':@'].type.endsWith('?'),
-            size: f[':@'].size ? parseInt(f[':@'].size) : null,
-        })),
-    }));
+    const databaseTables = (rawDatabaseModel[1].database as any[]).map<DatabaseModelTable>(c => {
+        if (!c.table) {
+            hasError = true;
+            logError('codegen', 'database.xml: unknown element tag, expect table');
+            return null;
+        }
+        return {
+            name: c[':@'].name,
+            primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
+            foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
+            fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
+                name: f[':@'].name,
+                type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
+                nullable: f[':@'].type.endsWith('?'),
+                size: f[':@'].size ? parseInt(f[':@'].size) : null,
+            })),
+        };
+    });
     // console.log(JSON.stringify(databaseModel, undefined, 2));
 
     const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
@@ -189,7 +197,7 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
     });
     // console.log(JSON.stringify(actionTypes, undefined, 2), actions);
 
-    return { options, dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
+    return hasError ? null : { options, dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
 }
 
 // database.d.ts, return null for not ok
@@ -231,7 +239,7 @@ function generateDatabaseSchema(config: CodeGenerationConfig): string {
     sb += '--------------------------------------\n';
     sb += '\n';
     sb += '-- -- first, mysql -u root -p:\n';
-    sb += `-- CREATE DATABASE '${config.dbname}';\n`;
+    sb += `-- CREATE DATABASE \`${config.dbname}\`;\n`;
     sb += `-- GRANT ALL PRIVILEGES ON \`${config.dbname}\`.* TO 'fine'@'localhost';\n`;
     sb += '-- FLUSH PRIVILEGES;\n';
     sb += '-- -- then, mysql -p\n';
@@ -343,10 +351,9 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
         if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
+    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }\n`;
-    // append more helper methods if need
-    // public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
 
     sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
@@ -358,8 +365,10 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
         sb += `        '${action.method} ${action.public ? '/public' : ''}/v1/${action.path}': () => ${functionName}(ax, `;
         for (const parameter of action.parameters) {
+            const optional = parameter.name.endsWith('?');
+            const parameterName = optional ? parameter.name.substring(0, parameter.name.length - 1) : parameter.name;
             const method = parameter.type == 'id' ? 'id' : 'string';
-            sb += `v.${method}('${parameter.name}'), `;
+            sb += `v.${method}${optional ? 'opt' : ''}('${parameterName}'), `;
         }
         if (action.body) {
             sb += 'ctx.body, ';
@@ -530,8 +539,11 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
         sb += `    ${functionName}: (`;
         for (const parameter of action.parameters) {
+            const optional = parameter.name.endsWith('?');
+            const parameterName = optional ? parameter.name.substring(0, parameter.name.length - 1) : parameter.name;
             const type = parameter.type == 'id' ? 'number' : 'string';
-            sb += `${parameter.name}: ${type}, `;
+            // use `T | undefined` for optional parameter, or else notnullable body cannot be after optional parameter
+            sb += `${parameterName}: ${type}${optional ? ' | undefined' : ''}, `;
         }
         if (action.body) {
             sb += `data: I.${action.body}, `;
@@ -545,7 +557,9 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         if (action.parameters.length) {
             sb += `{ `;
             for (const parameter of action.parameters) {
-                sb += `${parameter.name}, `;
+                const optional = parameter.name.endsWith('?');
+                const parameterName = optional ? parameter.name.substring(0, parameter.name.length - 1) : parameter.name;
+                sb += `${parameterName}, `;
             }
             sb = sb.substring(0, sb.length - 2);
             sb += ` }, `;
@@ -1553,8 +1567,9 @@ async function connectRemote(ecx: MessengerContext) {
                 resolve(await connectRemote(ecx));
             }
         });
-        websocket.addEventListener('error', async error => {
-            logInfo('tunnel', `websocket error:`, error);
+        websocket.addEventListener('error', async () => {
+            // this event have error parameter, but that does not have any meaningful property, so omit
+            logError('tunnel', `websocket error`);
             reconnectInvoked = true;
             ecx.reconnectCount += 1;
             resolve(await connectRemote(ecx));
@@ -1749,7 +1764,7 @@ async function deployWithRemoteConnect(ecx: MessengerContext, assets: UploadAsse
         }
     }));
 }
-// END LIBRARY fb94dd84041ca12347ef435e23f4012419f38fb9d7ec4d52e8a5eb4c4b476aa1
+// END LIBRARY cda2b707f83971fa7d22d1ec570f31dae8fbeee557e9ef190b0c9251e0b1efad
 
 async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
     if (!options.client && !options.server) { return; }

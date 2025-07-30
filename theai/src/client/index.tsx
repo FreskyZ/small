@@ -433,6 +433,8 @@ function App() {
         setInfoSaving(false);
         if (!updatedSession) { return; }
         setSessions(sessions.map(s => s.id == sessionId ? updatedSession : s));
+        // display normalized result
+        setEditingSessionTags(newSession.tags.join(','));
         notification('saved successfully');
     };
     const handleShareClick = async () => {
@@ -620,7 +622,7 @@ function App() {
                     {!editingMessageId && <button css={styles1.headerButton}
                         onClick={() => handleBranchMessage(m)}><BranchOutlined />BRANCH</button>}
                     {/* do not display all complete button when editing any message, when any message is completing */}
-                    {!editingMessageId && !completingMessageId && m.role == 'user' && <button css={styles1.headerButton}
+                    {!editingMessageId && (!completingMessageId || completingMessageId == m.id) && m.role == 'user' && <button css={styles1.headerButton}
                         disabled={m.id == completingMessageId} onClick={() => handleCompleteMessage(m.id)}>
                         <Loading loading={m.id == completingMessageId}><CaretRightOutlined /></Loading>COMPLETE</button>}
                     {m.id == editingMessageId && <button css={styles1.headerButton}
@@ -635,6 +637,7 @@ function App() {
                         value={editingMessageContent} onChange={e => setEditingMessageContent(e.target.value)} />
                     : <div css={styles1.markdownContainer}>
                         {/* TODO styles refine, code highlighing, wrap code, latex formula */}
+                        {/* TODO github table does not render */}
                         <Markdown>{m.content}</Markdown>
                     </div>}
                 <div css={[styles1.messageFooter, m.role == 'assistant' ? styles1.leftMessageFooter : styles1.rightMessageFooter]}>
