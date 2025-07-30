@@ -38,19 +38,33 @@ export interface PageHistory {
     UpdateTime: Dayjs,
 }
 export interface PageOperation {
+    PageOperationId: number,
     PageHistoryId: number,
     Kind: string,
-    OriginalLine: number,
-    NewLine: number,
+    Line: number,
     Content: string,
     CreateTime: Dayjs,
     UpdateTime: Dayjs,
 }
-export interface EmbeddedFiles {
+export interface EmbeddedFile {
     FileId: number,
+    UserId: number,
     PageId: number,
     Name: string,
     Content: undefined,
+    CreateTime: Dayjs,
+    UpdateTime: Dayjs,
+}
+export interface Query {
+    QueryId: number,
+    UserId: number,
+    BookId?: number,
+    IncludeBookName: boolean,
+    IncludeSectionName: boolean,
+    IncludePageName: boolean,
+    IncludePageContent: boolean,
+    UseRegularExpression: boolean,
+    Content: string,
     CreateTime: Dayjs,
     UpdateTime: Dayjs,
 }

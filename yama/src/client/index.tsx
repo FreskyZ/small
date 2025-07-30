@@ -1,45 +1,87 @@
 /** @jsxImportSource @emotion/react */
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
-import { useState } from 'react';
-import type * as I from '../shared/api.js';
-
-// app name is YAMA, db name is YAMA, host is note.example.com
-// the full-flat tag based note list seems too flat for a note, the tree structure seems complicated,
-// I may try to use a fixed tree structure, e.g. book => section => page, which is same as onenote
-
-// the book => section => page selection part have to be an overlay on mobile page
-// in that case, I'd like to make yala's session list also overlay on mobile page, also session info overlay,
-// while keep normal sidebar on pc page
-
-// note need auto save
-// preview page is a side view on pc page, and a switch button on mobile page
-// preview content is always saved content
-// need history management, consider auto history (every save) and manual named history
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import Editor from 'react-simple-code-editor';
+import Markdown from 'react-markdown';
+import * as I from '../shared/api.js';
 
 // note content is one markdown document
 // it supports basic formatting, tables, external links
 // and special external links to my drive's file, audio and video
 // it supports share like note.freskyz.com/share/shareid in readonly mode
 
-// for now the chat.example.com/\d+ seems kind of not ok, and conflict with chat.example.com/404
-// consider using note.example.com?id=\d+, and note.example.com/s?id=guid
-
 // code highlight maybe need this https://highlightjs.org/, if markdown library does not support syntax highlighting
-
 // add a <clipboard> element that add a container and allows copy to clipboard
+// TODO don't forget auto save
 
 function App() {
-    const [] = useState(false);
-    console.log(api);
-    return <>"helloworld"</>;
+    const styles1 = useMemo(() => createMainStyles(), []);
+
+    const [page, setPage] = useState<I.Page>(null);
+    const [editingContent, setEditingContent] = useState('');
+
+    useEffect(() => {
+        api.getPage(1).then(result => {
+            setPage(result);
+            setEditingContent(result.content);
+        }, error => {
+            notification(error?.message ?? 'Something went wrong.');
+        });
+    }, []);
+
+    const handleSave = useCallback(() => {
+        const newPage = { ...page, content: editingContent };
+        api.updatePage(newPage).then(() => {
+            setPage(newPage);
+            notification('Saved successfully.');
+        }, error => {
+            notification(error?.message ?? 'Something went wrong.');
+        });
+    }, [page, editingContent]);
+
+    const WhyDontYouTypeCheckEditor = Editor as any;
+    return <>
+        <button css={styles1.saveButton} onClick={handleSave}>SAVE</button>
+        <div css={styles1.editorAndMarkdownContainer}>
+            <WhyDontYouTypeCheckEditor
+                css={styles1.editorContainer}
+                padding={8}
+                value={editingContent}
+                onValueChange={(newValue: string) => setEditingContent(newValue)}
+                highlight={(v: string) => v} />
+            <div css={styles1.markdownContainer}>
+                <Markdown>{editingContent}</Markdown>
+            </div>
+        </div>
+        <span>{page?.updateTime}</span>
+    </>;
 }
+const createMainStyles = () => ({
+    saveButton: css({
+        marginLeft: '300px',
+    }),
+    editorAndMarkdownContainer: css({
+        marginTop: '50px',
+        width: 'calc(100vw - 24px)',
+        height: 'calc(100vh - 72px)',
+        overflow: 'hidden',
+        display: 'flex',
+        gap: '8px',
+    }),
+    editorContainer: css({
+        width: 'calc(50vw - 32px)',
+    }),
+    markdownContainer: css({
+        width: 'calc(50vw - 32px)',
+    }),
+});
 
 const root = createRoot(document.querySelector('main'));
 startup(() => root.render(<App />));
 const emptytext = "What draws you here - chance or curiosity? And what sends you away - emptiness or the whisper of something unseen? Like a door ajar in the wind, this space may beckon or repel, yet who can say if arrival or departure holds more meaning? To stay is to touch the unknown; to go is to carry its shadow. Perhaps the truest contact is the absence of answers, the silent exchange between seeker and void. And if you reach out, do you seek me, or the echo of your own unanswered questions? In the end, is any path but a circle?";
 
-// AUTOGEN e704a77701da1b36e349390c675ea04aac16fc65eb5eb5eaccff092244fba859
+// AUTOGEN 55141d2e10bbde76e184778c82e97fd6620b9aa7214d786849da6da4a1cbd1e1
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
@@ -187,22 +229,19 @@ const api = {
     addBook: (data: I.Book): Promise<I.Book> => sendRequest('PUT', '/v1/add-book', {}, data),
     updateBook: (data: I.Book): Promise<I.Book> => sendRequest('POST', '/v1/update-book', {}, data),
     removeBook: (bookId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-book', { bookId }),
-    getSections: (bookId: number): Promise<I.Section[]> => sendRequest('GET', '/v1/sections', { bookId }),
-    getSection: (sectionId: number): Promise<I.Section> => sendRequest('GET', '/v1/section', { sectionId }),
-    addSection: (bookId: number, data: I.Section): Promise<I.Section> => sendRequest('PUT', '/v1/add-section', { bookId }, data),
-    updateSection: (data: I.Section): Promise<I.Section> => sendRequest('POST', '/v1/update-section', {}, data),
-    removeSection: (sectionId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-section', { sectionId }),
-    moveSectionToParent: (sectionId: number, newParentSectionId?: number): Promise<void> => sendRequest('POST', '/v1/move-section-to-parent', { sectionId, newParentSectionId }),
-    getPages: (bookId: number, sectionId: number): Promise<I.Page[]> => sendRequest('GET', '/v1/pages', { bookId, sectionId }),
+    addSection: (bookId: number, sectionId: number | undefined): Promise<I.Section> => sendRequest('PUT', '/v1/add-section', { bookId, sectionId }),
+    updateSection: (bookId: number, data: I.Section): Promise<I.Section> => sendRequest('POST', '/v1/update-section', { bookId }, data),
+    moveSection: (bookId: number, sectionId: number, newParentId: number | undefined): Promise<void> => sendRequest('POST', '/v1/move-section', { bookId, sectionId, newParentId }),
+    removeSection: (bookId: number, sectionId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-section', { bookId, sectionId }),
     getPage: (pageId: number): Promise<I.Page> => sendRequest('GET', '/v1/page', { pageId }),
-    addPage: (bookId: number, sectionId: number, data: I.Page): Promise<I.Page> => sendRequest('PUT', '/v1/add-page', { bookId, sectionId }, data),
+    addPage: (bookId: number, sectionId: number | undefined, data: I.Page): Promise<I.Page> => sendRequest('PUT', '/v1/add-page', { bookId, sectionId }, data),
     updatePage: (data: I.Page): Promise<I.Page> => sendRequest('POST', '/v1/update-page', {}, data),
-    removePage: (pageId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-page', { pageId }),
-    movePageToSection: (pageId: number, newSectionId: number): Promise<void> => sendRequest('POST', '/v1/move-page-to-section', { pageId, newSectionId }),
+    movePage: (pageId: number, newSectionId: number | undefined): Promise<void> => sendRequest('POST', '/v1/move-page', { pageId, newSectionId }),
     sharePage: (pageId: number): Promise<I.SharePageResult> => sendRequest('POST', '/v1/share-page', { pageId }),
     unsharePage: (pageId: number): Promise<void> => sendRequest('POST', '/v1/unshare-page', { pageId }),
-    getPageHistory: (pageId: number): Promise<I.PageHistory[]> => sendRequest('GET', '/v1/page-history', { pageId }),
-    getPageHistoryVersion: (historyId: number): Promise<I.PageHistory> => sendRequest('GET', '/v1/page-history-version', { historyId }),
+    removePage: (pageId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-page', { pageId }),
+    getPageHistories: (pageId: number): Promise<I.PageHistory[]> => sendRequest('GET', '/v1/page-histories', { pageId }),
+    getPageHistory: (historyId: number): Promise<I.PageHistory> => sendRequest('GET', '/v1/page-history', { historyId }),
     savePageVersion: (pageId: number, data: I.PageHistory): Promise<I.PageHistory> => sendRequest('POST', '/v1/save-page-version', { pageId }, data),
     restorePageVersion: (pageId: number, historyId: number): Promise<I.Page> => sendRequest('POST', '/v1/restore-page-version', { pageId, historyId }),
     removePageVersion: (historyId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-page-version', { historyId }),
@@ -211,6 +250,5 @@ const api = {
     addPageFile: (pageId: number, data: I.EmbeddedFile): Promise<I.EmbeddedFile> => sendRequest('PUT', '/v1/add-page-file', { pageId }, data),
     updatePageFile: (data: I.EmbeddedFile): Promise<I.EmbeddedFile> => sendRequest('POST', '/v1/update-page-file', {}, data),
     removePageFile: (fileId: number): Promise<void> => sendRequest('DELETE', '/v1/remove-page-file', { fileId }),
-    searchPages: (query: number, bookId?: number): Promise<I.Page[]> => sendRequest('POST', '/v1/search-pages', { query, bookId }),
-    searchInBook: (bookId: number, query: number): Promise<I.Page[]> => sendRequest('POST', '/v1/search-in-book', { bookId, query }),
+    search: (data: I.Query): Promise<I.QueryResult> => sendRequest('POST', '/v1/search', {}, data),
 };

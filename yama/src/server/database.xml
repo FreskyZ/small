@@ -14,6 +14,7 @@
     <field name="SectionId" type="id" />
     <field name="BookId" type="id" />
     <field name="ParentSectionId" type="id?" />
+    <!-- section name is unique in book -->
     <field name="Name" type="string" size="100" />
   </table>
   <table name="Page">
@@ -24,6 +25,7 @@
     <field name="BookId" type="id" />
     <!-- if no section id, then belongs to virtual root -->
     <field name="SectionId" type="id?" />
+    <!-- page name is unique in book -->
     <field name="Name" type="string" size="100" />
     <field name="Content" type="text" />
     <field name="Shared" type="bool" />
@@ -43,20 +45,39 @@
    in other words, operations convert old version into new version,
    but only current version is saved and to show old version need to be reverse calculated -->
   <table name="PageOperation">
-    <primary-key field="PageHistoryId" />
+    <primary-key field="PageOperationId" />
     <foreign-key field="PageHistoryId" table="PageHistory" />
+    <field name="PageOperationId" type="id" />
     <field name="PageHistoryId" type="id" />
+    <!-- add | remove -->
     <field name="Kind" type="string" size="20" />
-    <field name="OriginalLine" type="int" />
-    <field name="NewLine" type="int" />
-    <!-- this is per line, but still don't know the appropriote string length so text -->
+    <!-- when applying, start with newcontent=originalcontent,
+      for add, insert content at line, making this record's content become this line,
+      for remove, remove content at this line -->
+    <!-- line is the real time line, if inserted something, later insert's line is counted after this insertion -->
+    <field name="Line" type="int" />
+    <!-- this is per line, but still don't know the appropriote string length so use text -->
     <field name="Content" type="text" />
   </table>
-  <table name="EmbeddedFiles">
+  <table name="EmbeddedFile">
     <primary-key field="FileId" />
     <field name="FileId" type="id" />
+    <field name="UserId" type="int" />
     <field name="PageId" type="id" />
     <field name="Name" type="string" size="100" />
     <field name="Content" type="binary" />
+  </table> 
+  <table name="Query">
+    <primary-key field="QueryId" />
+    <foreign-key field="BookId" table="Book" />
+    <field name="QueryId" type="id" />
+    <field name="UserId" type="int" />
+    <field name="BookId" type="id?" />
+    <field name="IncludeBookName" type="bool" />
+    <field name="IncludeSectionName" type="bool" />
+    <field name="IncludePageName" type="bool" />
+    <field name="IncludePageContent" type="bool" />
+    <field name="UseRegularExpression" type="bool" />
+    <field name="Content" type="string" />
   </table>
 </database>
