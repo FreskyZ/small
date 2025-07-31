@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YATC</title>
+</head>
+<body style="background-color:#f3f3f3;font-family:'Segoe UI',Roboto,sans-serif;">
+  <div style="position:fixed;left:8px;top:8px;">
+    <div style="font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;font-style:italic;font-weight:600;text-decoration:none;"><a href='#'>YATC</a></div>
+    <div style="font-size:10px;color:#666">Yet Another oTp appliCation.</div>
+  </div>
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%, -50%);text-align:center;">
+    <input type="text" id="input">
+    <div><span id="output"></span></div>
+  </div>
+
+  <script type="module">
+    const inputElement = document.querySelector('input#input');
+    const outputElement = document.querySelector('span#output');
+    const urlquery = new URLSearchParams(window.location.search);
+    if (urlquery.has('k')) { inputElement.value = urlquery.get('k'); }
+
+    async function getAccessToken() {
+      const localStorageAccessToken = localStorage['access-token'];
+      const authorizationCode = new URLSearchParams(window.location.search).get('code');
+
+      if (localStorageAccessToken) {
+        // ATTENTION for non-subdomain apps, need manually set referrer policy
+        const response = await fetch('https://api.example.com/user-credential', {
+          referrer: 'https://app.example.com/yatc',
+          referrerPolicy: 'unsafe-url', // why is this unsafe?
+          headers: { authorization: 'Bearer ' + localStorageAccessToken },
+        });
+        if (response.ok) { return localStorageAccessToken; }
+      }
+      if (!authorizationCode) {
+        // ATTENTION unlike major apps, this include path, or else backend have no way to find app name
+        window.location.assign(`https://id.example.com?return=https://${window.location.host}/yatc`);
+      } else {
+        const url = new URL(window.location.toString());
+        url.searchParams.delete('code');
+        window.history.replaceState(null, '', url.toString());
+        const response = await fetch('https://api.example.com/signin', {
+          method: 'POST', 
+          referrer: 'https://app.example.com/yatc',
+          referrerPolicy: 'unsafe-url',
+          headers: { authorization: 'Bearer ' + authorizationCode },
+        });
+        if (response.status != 200) { alert('Failed to sign in, how does that happen?'); return null; }
+        else { return localStorage['access-token'] = (await response.json()).accessToken; }
+      }
+    }
+    const accessToken = await getAccessToken();
+    if (accessToken) {
+      inputElement.addEventListener('keydown', async e => {
+        if (e.key == 'Enter') {
+          const name = inputElement.value;
+          // this have path segment so no need referrer policy
+          const response = await fetch(`https://api.example.com/yatc/v1/value?name=${encodeURIComponent(name)}`, { headers: { authorization: 'Bearer ' + accessToken } });
+          if (response.status != 200) {
+            alert('Failed to get value, how does that happen?');
+          } else {
+            const data = await response.json();
+            outputElement.textContent = `${data.code} ${data.time}s`;
+          }
+        }
+      });
+    }
+
+  </script>
+</body>
+</html>

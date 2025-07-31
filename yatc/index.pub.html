@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YATC</title>
+</head>
+<body style="background-color:#f3f3f3;font-family:'Segoe UI',Roboto,sans-serif;">
+  <div style="position:fixed;left:8px;top:8px;">
+    <div style="font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;font-style:italic;font-weight:600;text-decoration:none;"><a href='#'>YATC</a></div>
+    <div style="font-size:10px;color:#666">Yet Another oTp appliCation.</div>
+  </div>
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%, -50%);text-align:center;">
+    <input type="text" id="input">
+    <div><span id="output"></span></div>
+  </div>
+
+  <script src="https://unpkg.com/@otplib/preset-browser@^12.0.0/buffer.js"></script>
+  <script src="https://unpkg.com/@otplib/preset-browser@^12.0.0/index.js"></script>
+  <script>
+    const inputElement = document.querySelector('input#input');
+    const outputElement = document.querySelector('span#output');
+
+    const query = new URLSearchParams(window.location.search);
+    if (query.has('k')) { inputElement.value = query.get('k'); }
+    inputElement.addEventListener('keydown', e => {
+      if (e.key == 'Enter') {
+        const time = window.otplib.authenticator.timeRemaining();
+        const code = window.otplib.authenticator.generate(inputElement.value);
+        outputElement.textContent = `${code} ${time}s`;
+      }
+    });
+  </script>
+</body>
+</html>
