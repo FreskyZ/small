@@ -1,6 +1,3 @@
-.vscode
-/bilibili-replace/av*
-/bilibili-replace/COOKIE
 target
-/theai/akari.json
 node_modules
+akari.json

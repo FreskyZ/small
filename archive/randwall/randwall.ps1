@@ -6,6 +6,8 @@ Add-Type -AssemblyName System.Drawing
     random, iw233, top (recommend), yin (silver hair), cat, xing (stars), mp (vertical), pc (horizontal)
 #>
 
+# UPDATE 2025: service closed
+
 function randwall {
     param(
         [Parameter(Position = 0)][string]$sort = "random"
