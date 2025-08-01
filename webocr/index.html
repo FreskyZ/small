@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebOCR</title>
+</head>
+<body style="background-color:#f3f3f3;font-family:'Segoe UI',Roboto,sans-serif;">
+  <div style="position:fixed;left:8px;top:8px;">
+    <div style="font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;font-style:italic;font-weight:600;text-decoration:none;"><a href='#'>WebOCR</a></div>
+    <div style="font-size:10px;color:#666">Browser side OCR.</div>
+  </div>
+
+  <div style="margin:100px auto;display:flex;flex-flow:column;align-items:center;gap:12px;">
+    <label for="file" style="font-size: 16px; color: #333;">Past or Select Image</label>
+    <input type="file" id="file" accept="image/*" style="display:none" />
+    <canvas></canvas>
+    <span>
+      <button type="button" id="copyimage">COPY IMAGE</button>
+      <button type="button" id="saveimage">SAVE IMAGE</button>
+    </span>
+    <span>Text</span>
+    <textarea id="text" placeholder="text" cols="60" rows="8" style="max-width:100%"></textarea>
+    <button type="button" id="copytext">COPY TEXT</button>
+  </div>
+
+  <script defer type="module">
+    import dayjs from 'https://esm.sh/dayjs@1.11.13';
+    // akari.ts upload small/webocr/node_modules/tesseract-wasm/dist/lib.js public/ocr/tesseract.js
+    // akari.ts upload small/webocr/node_modules/tesseract-wasm/dist/tesseract-worker.js public/ocr/tesseract-worker.js
+    // akari.ts upload small/webocr/node_modules/tesseract-wasm/dist/tesseract-core.wasm public/ocr/tesseract-core.wasm
+    // akari.ts upload small/webocr/node_modules/tesseract-wasm/dist/tesseract-core-fallback.wasm public/ocr/tesseract-core-faklback.wasm
+    // akari.ts upload small/webocr/index.html public/ocr/index.html
+    import * as tesseract from './tesseract.js';
+
+    const canvasElement = document.querySelector('canvas');
+    const textElement = document.querySelector('textarea');
+
+    document.querySelector('button#copyimage').addEventListener('click', () => {
+      canvasElement.toBlob(blob => navigator.clipboard.write([new ClipboardItem({ 'image/jpeg': blob })]), 'image/jpeg', 0.9);
+    });
+    document.querySelector('button#saveimage').addEventListener('click', () => {
+      const link = document.createElement('a');
+      link.download = `webocr-${dayjs().format('YYYYMMDD-hhmmss')}.jpg`;
+      canvasElement.toBlob(blob => {
+        link.href = URL.createObjectURL(blob);
+        link.click();
+        URL.revokeObjectURL(link.href);
+      }, 'image/jpeg', 0.9);
+    });
+    document.querySelector('button#copytext').addEventListener('click', () => {
+      window.navigator.clipboard.writeText(textElement.value);
+    });
+
+    document.querySelector('input#file').addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = e => decodeImage(e.target.result);
+        reader.readAsDataURL(file);
+      }
+    });
+    document.addEventListener('paste', e => {
+      const items = e.clipboardData.items;
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.startsWith('image/')) {
+          const reader = new FileReader();
+          reader.onload = e => decodeImage(e.target.result);
+          reader.readAsDataURL(items[i].getAsFile());
+        }
+      }
+    });
+
+    let ocrclient;
+    function decodeImage(imageData) {
+      const imageElement = new Image();
+      imageElement.onload = async () => {
+        const aspectRatio = imageElement.width / imageElement.height;
+        if (imageElement.width > window.innerWidth) {
+          canvasElement.width = window.innerWidth;
+          canvasElement.height = canvasElement.width / aspectRatio;
+        } else {
+          canvasElement.width = imageElement.width;
+          canvasElement.height = imageElement.height;
+        }
+        const ctx = canvasElement.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(imageElement, 0, 0);
+        const imageData = ctx.getImageData(0, 0, imageElement.width, imageElement.height);
+        const imageBitmap = await createImageBitmap(imageData);
+
+        try {
+          if (!ocrclient) {
+            ocrclient = new tesseract.OCRClient();
+            // ATTENTION tesseract-core.wasm and these trainneddata both need compression, consider nas/oss/s3 them
+            // UPDATE also tesseract-core.wasm does not respect must-revalidate (for now add to static-content only enables compression), so have to nas/oss/s3
+            // await ocrclient.loadModel('https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata');
+            await ocrclient.loadModel('https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/chi_sim.traineddata');
+          }
+          await ocrclient.loadImage(imageBitmap);
+          const text = await ocrclient.getText();
+          textElement.value = text;
+        } catch (error) {
+          textElement.value = '(Something went wrong)';
+          console.error(error);
+        }
+      };
+      imageElement.src = imageData;
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "webocr",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {},
+  "devDependencies": {
+    "tesseract-wasm": "^0.10.0"
+  }
+}
