@@ -1,10 +1,13 @@
 {
-  "name": "aliyun-oss-sync",
+  "name": "alioss",
   "version": "1.0.0",
-  "main": "index.mjs",
-  "scripts": {
-  },
+  "type": "module",
+  "scripts": {},
   "dependencies": {
-    "ali-oss": "^6.18.1"
+    "ali-oss": "^6.23.0"
+  },
+  "devDependencies": {
+    "@types/ali-oss": "^6.16.11",
+    "@types/node": "^24.1.0"
   }
 }
