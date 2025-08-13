@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>路灯</title>
+</head>
+<body>
+    <div style="display: flex; flex-direction: column; align-items: center; margin-top: 40px;">
+        <input type="text" id="file-name" placeholder="Enter file name (e.g., myfile.txt)">
+        <div>
+            <label for="liver">主播:</label>
+            <input type="text" id="liver" name="liver">
+        </div>
+        <div>
+            <label for="title">直播标题:</label>
+            <input type="text" id="title" name="title">
+        </div>
+        <div>
+            <label for="date">日期:</label>
+            <input type="date" id="date" name="date">
+        </div>
+        <div>
+            <label for="content">内容:</label>
+            <input type="text" id="content" name="content">
+        </div>
+        <div>
+            <label for="preview">文件内容预览:</label>
+            <textarea id="preview" rows="10" cols="50" readonly></textarea>
+        </div>
+        <button id="add">添加记录</button>
+        <button id="export">导出</button>
+    </div>
+
+    <script>
+        const records = [];
+        function getCsvContent(records) {
+            const headers = ['主播', '直播标题', '日期', '时间', '内容'];
+            const rows = records.map(record => [
+                record.liver,
+                record.title,
+                new Date(record.date).toLocaleDateString(),
+                record.time,
+                record.content
+            ]);
+            return [headers, ...rows]
+                .map(row => row.map(field => `"${(field ?? '').replace(/"/g, '""')}"`).join(','))
+                .join('\r\n');
+        }
+
+        document.querySelector('#add').addEventListener('click', () => {
+            const liver = document.querySelector('#liver').value;
+            const title = document.querySelector('#title').value;
+            const dateInput = document.querySelector('#date').value;
+            const content = document.querySelector('#content').value;
+
+            const date = dateInput ? new Date(dateInput).getTime() : Date.now();
+            const now = new Date();
+            const time = now.toTimeString().slice(0, 8);
+
+            records.push({
+                liver,
+                title,
+                date,
+                time,
+                content
+            });
+
+            // Update preview after adding the new record
+            document.getElementById('preview').value = getCsvContent(records);
+        });
+
+        document.querySelector('#export').addEventListener('click', () => {
+            // Always update preview before exporting
+            document.getElementById('preview').value = getCsvContent(records);
+
+            const csvContent = getCsvContent(records);
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = (document.querySelector('#file-name').value || 'export.csv');
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+</html>
