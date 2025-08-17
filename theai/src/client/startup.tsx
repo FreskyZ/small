@@ -102,7 +102,7 @@ export async function startup<T>(
             accessToken = localStorageAccessToken;
             mainRoot.render(mainElement());
         }
-    } else if (!authorizationCode && window.location.pathname.length == 1) {
+    } else if (!authorizationCode && window.location.pathname.length == 1 && !window.location.search) {
         // only display placeholder when no access token, no authorization code and no path, else directly goto signin
         await new Promise<void>(resolve => mainRoot.render(<PlaceholderPage content={placeholderText} handleContinue={resolve} />));
     }
@@ -110,6 +110,8 @@ export async function startup<T>(
         if (!authorizationCode) {
             if (window.location.pathname.length > 1) {
                 localStorage['return-pathname'] = window.location.pathname;
+            }
+            if (window.location.search) {
                 localStorage['return-searchparams'] = window.location.search;
             }
             window.location.assign(`https://id.example.com?return=https://${window.location.host}`);
