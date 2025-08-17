@@ -511,16 +511,14 @@ async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dm
     }));
 }
 
-// AUTOGEN ccd68a1bfb30a2aec6dd66866169c8e66ae5de5452283089fe8ffc4383b7c5cd
+// AUTOGEN 08e799478b5e1d6ab0beda980cf8aca6e11839cc8627b5bedd81f80eacd578d3
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
 /* eslint-disable @stylistic/lines-between-class-members */
 
 class MyError extends Error {
-    // fine error middleware need this to know this is known error type
-    public readonly name: string = 'FineError';
-    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
+    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); this.name = 'MyError'; }
 }
 class ParameterValidator {
     public constructor(private readonly parameters: URLSearchParams) {}
@@ -533,6 +531,7 @@ class ParameterValidator {
         if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
     }
     public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
+    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
     public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
 }
 export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {

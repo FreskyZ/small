@@ -3,7 +3,7 @@
 --------------------------------------
 
 -- -- first, mysql -u root -p:
--- CREATE DATABASE 'YALA';
+-- CREATE DATABASE `YALA`;
 -- GRANT ALL PRIVILEGES ON `YALA`.* TO 'fine'@'localhost';
 -- FLUSH PRIVILEGES;
 -- -- then, mysql -p

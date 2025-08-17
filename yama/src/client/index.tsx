@@ -64,6 +64,7 @@ const createMainStyles = () => ({
     editorAndMarkdownContainer: css({
         marginTop: '50px',
         width: 'calc(100vw - 24px)',
+        // TODO seems not work with this
         height: 'calc(100vh - 72px)',
         overflow: 'hidden',
         display: 'flex',
