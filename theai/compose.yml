@@ -1,0 +1,27 @@
+# setup .env file for AKARI_ACTIVESECRET
+# use docker compose up -d to create container
+# use docker compose attach node to attach
+# use ctrl+p+q to detach
+
+name: small-theai
+services:
+  node:
+    image: node:24.5.0-alpine3.22
+    entrypoint: /bin/sh
+    tty: true
+    stdin_open: true
+    hostname: docker-theai-node
+    volumes:
+      - .:/workspace
+    secrets:
+      - ssh-id
+      - akari-config
+    environment:
+      PS1: "[\\h:\\w:\\t]\\n🐋 \\$ "
+      AKARI_SSH_ID: /run/secrets/ssh-id
+      AKARI_CONFIG_FILE: /run/secrets/akari-config
+secrets:
+  ssh-id:
+    file: ${AKARI_ACTIVESECRET}/id_remote
+  akari-config:
+    file: ${AKARI_ACTIVESECRET}/akari.json

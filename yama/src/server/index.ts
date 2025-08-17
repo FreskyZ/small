@@ -3,28 +3,28 @@ import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import mysql from 'mysql2/promise';
-import * as I from '../shared/api.js';
-import * as D from './database.js';
-import type { MyErrorKind, ActionContext, DispatchContext, DispatchResult } from './dispatch.js';
+import type * as I from '../shared/api-types.js';
+import type * as D from './database-types.js';
+import type { ActionServerRequest, ActionServerResponse } from './action-types.js';
+import type { QueryResult, ManipulateResult } from './database-helper.js';
+import { MyError } from './error.js';
+import { ParameterValidator } from './validate.js';
+import { databaseTypeCast, toISOString } from './database-helper.js';
 
 dayjs.extend(utc);
-// this is the same config file as core module
+
+// use same database connection config as core module
 const config = JSON.parse(await fs.readFile('config', 'utf-8')) as {
     // so this is the connection options to connect to core module database
     database: mysql.PoolOptions,
 };
-
-type QueryResult<T> = T & mysql.RowDataPacket;
-type ManipulateResult = mysql.ResultSetHeader;
 // so need to change database name to connect to this app's database
-const pool = mysql.createPool({ ...config.database, database: 'YAMA', typeCast: (field, next) =>
-    field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1
-    : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss')
-    : next(),
-});
+const pool = mysql.createPool({ ...config.database, database: 'YAMA', typeCast: databaseTypeCast });
 
-function formatDateTime(value: dayjs.Dayjs) {
-    return value.format('YYYY-MM-DDTHH:mm:ss[Z]');
+interface ActionContext {
+    now: dayjs.Dayjs,
+    userId: number,
+    userName: string,
 }
 
 async function validateBookUser(ax: ActionContext, bookId: number) {
@@ -93,8 +93,8 @@ async function getPage(ax: ActionContext, pageId: number): Promise<I.Page> {
         id: page.PageId,
         name: page.Name,
         content: page.Content,
-        createTime: formatDateTime(page.CreateTime),
-        updateTime: formatDateTime(page.UpdateTime),
+        createTime: toISOString(page.CreateTime),
+        updateTime: toISOString(page.UpdateTime),
         files: [],
     };
 }
@@ -127,7 +127,7 @@ async function updatePage(ax: ActionContext, page: I.Page): Promise<I.Page> {
         'UPDATE `Page` SET `Name` = ?, `Content` = ?, `UpdateTime` = ? WHERE `PageId` = ?',
         [page.name, page.content ?? '', ax.now.format('YYYY-MM-DD HH:mm:ss'), page.id],
     );
-    page.updateTime = formatDateTime(ax.now);
+    page.updateTime = toISOString(ax.now);
     return page;
 }
 
@@ -186,32 +186,12 @@ async function search(ax: ActionContext, body: I.Query): Promise<I.QueryResult> 
     return null;
 }
 
-// AUTOGEN 338a3ed783d232aa2083fcd9dc160ca85b8c859193309165170e6ba1ff5a4c2c
+// AUTOGEN 0e47548816901eb94075bcba2332a6f86e72fded129cf73d6c6eced5054f3339
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
-/* eslint-disable @stylistic/lines-between-class-members */
 
-class MyError extends Error {
-    // fine error middleware need this to know this is known error type
-    public readonly name: string = 'FineError';
-    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
-}
-class ParameterValidator {
-    public constructor(private readonly parameters: URLSearchParams) {}
-    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
-        if (!this.parameters.has(name)) {
-            if (optional) { return null; } else { throw new MyError('common', `missing required parameter ${name}`); }
-        }
-        const raw = this.parameters.get(name);
-        const result = convert(raw);
-        if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
-    }
-    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
-    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
-}
-export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
+export async function dispatch(ctx: ActionServerRequest): Promise<ActionServerResponse> {
     const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');
     const v = new ParameterValidator(searchParams);
     const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user?.id, userName: ctx.state.user?.name };
@@ -245,5 +225,5 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
         'DELETE /v1/remove-page-file': () => removePageFile(ax, v.id('fileId')),
         'POST /v1/search': () => search(ax, ctx.body),
     } as Record<string, () => Promise<any>>)[`${ctx.method} ${pathname}`];
-    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };
+    return action ? { body: await action() } : { error: new MyError('not-found', 'action not found') };
 }

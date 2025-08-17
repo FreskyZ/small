@@ -1,13 +1,13 @@
 import readline from 'node:readline/promises';
 // END IMPORT
-// components: codegen, minify, mypack, sftp, typescript, eslint, messenger, common
+// components: codegen, mypack, sftp, typescript, eslint, messenger, common
+// adk: access-types, action-types, error, database, validate, notification, client-startup
 // BEGIN LIBRARY
 import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Interface } from 'node:readline/promises';
-import tls from 'node:tls';
-import { zstdCompress, zstdCompressSync } from 'node:zlib';
+import { zstdCompress, zstdCompressSync, zstdDecompress } from 'node:zlib';
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
 import chalkNotTemplate from 'chalk';
@@ -52,7 +52,7 @@ interface ScriptConfig {
     certificate: string,
     ssh: { user: string, identity: string, passphrase: string },
 }
-const scriptconfig: ScriptConfig = JSON.parse(await fs.readFile('akari.json', 'utf-8'));
+const scriptconfig: ScriptConfig = JSON.parse(await fs.readFile(process.env['AKARI_CONFIG_FILE'] || 'akari.json', 'utf-8'));
 
 // ------------------------------------------
 // ------ script/components/codegen.ts ------ 
@@ -129,39 +129,30 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
         attributeNamePrefix: '',
         parseAttributeValue: true,
     });
-    // the result of preserveOrder: boolean is too complex and not that worthy to type
-    const rawDatabaseModel = parser.parse(await fs.readFile('src/server/database.xml'));
-    // console.log(JSON.stringify(rawDatabaseModel, undefined, 2));
+    // the result of preserveOrder is too complex and not that worthy to type
+    const rawShapes = parser.parse(await fs.readFile('shapes.xml'));
+    // console.log(JSON.stringify(rawShapes, undefined, 2));
 
-    const databaseName = rawDatabaseModel[1][':@'].name;
-    const databaseTables = (rawDatabaseModel[1].database as any[]).map<DatabaseModelTable>(c => {
-        if (!c.table) {
-            hasError = true;
-            logError('codegen', 'database.xml: unknown element tag, expect table');
-            return null;
-        }
-        return {
-            name: c[':@'].name,
-            primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
-            foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
-            fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
-                name: f[':@'].name,
-                type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
-                nullable: f[':@'].type.endsWith('?'),
-                size: f[':@'].size ? parseInt(f[':@'].size) : null,
-            })),
-        };
-    });
-    // console.log(JSON.stringify(databaseModel, undefined, 2));
+    const appname = rawShapes[1][':@'].app;
+    const dbname = rawShapes[1][':@'].database;
 
-    const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
-    // console.log(JSON.stringify(rawWebInterfaces, undefined, 2));
-
+    const tables: DatabaseModelTable[] = [];
     const actions: WebInterfaceAction[] = [];
     const actionTypes: WebInterfaceActionType[] = [];
-    const applicationName = rawWebInterfaces[1][':@'].name;
-    rawWebInterfaces[1].api.forEach((c: any) => {
-        if ('type' in c) {
+    rawShapes[1].shapes.forEach((c: any) => {
+        if ('table' in c) {
+            tables.push({
+                name: c[':@'].name,
+                primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
+                foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
+                fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
+                    name: f[':@'].name,
+                    type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
+                    nullable: f[':@'].type.endsWith('?'),
+                    size: f[':@'].size ? parseInt(f[':@'].size) : null,
+                })),
+            });
+        } else if ('type' in c) {
             actionTypes.push({
                 name: c[':@'].name,
                 fields: c.type.map((f: any) => ({
@@ -170,7 +161,7 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
                     nullable: f[':@'].type.endsWith('?'),
                 })),
             });
-        } else {
+        } else if ('action' in c) {
             const key = c[':@'].key;
             const name = c[':@'].name;
             const $public = !!c[':@'].public;
@@ -193,11 +184,15 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
                 }
             });
             actions.push({ key, name, public: $public, method, path, body, return: $return, parameters });
+        // ? you cannot get tag name in preserveOrder?
+        } else if (!('----------------------------------------------' in c)) {
+            hasError = true;
+            logError('codegen', 'database.xml: unknown element tag, expect table/type/action');
         }
     });
-    // console.log(JSON.stringify(actionTypes, undefined, 2), actions);
+    // console.log(tables, JSON.stringify(actionTypes, undefined, 2), actions);
 
-    return hasError ? null : { options, dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
+    return hasError ? null : { options, dbname, tables, appname, actions, actionTypes };
 }
 
 // database.d.ts, return null for not ok
@@ -334,29 +329,8 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
-    sb += '/* eslint-disable @stylistic/lines-between-class-members */\n';
     sb += '\n';
-    sb += `class MyError extends Error {
-    // fine error middleware need this to know this is known error type
-    public readonly name: string = 'FineError';
-    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); }
-}\n`;
-    sb += `class ParameterValidator {
-    public constructor(private readonly parameters: URLSearchParams) {}
-    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
-        if (!this.parameters.has(name)) {
-            if (optional) { return null; } else { throw new MyError('common', \`missing required parameter \${name}\`); }
-        }
-        const raw = this.parameters.get(name);
-        const result = convert(raw);
-        if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
-    }
-    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
-    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
-}\n`;
-
-    sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
+    sb += 'export async function dispatch(ctx: ActionServerRequest): Promise<ActionServerResponse> {\n';
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
     sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
     sb += `    const v = new ParameterValidator(searchParams);\n`;
@@ -377,164 +351,24 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
     sb += `    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n`;
-    sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
+    sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'action not found') };\n`;
     sb += `}\n`;
 
     const hash = crypto.hash('sha256', sb);
     return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
 }
-// index.tsx, return null for not ok
-function generateWebInterfaceClient(config: CodeGenerationConfig, originalContent: string): string {
+// api.ts, return null for not ok
+function generateWebInterfaceClient(config: CodeGenerationConfig): string {
 
-    const manualContent = checkPartialGeneratedContentHash(config, 'actions-client', originalContent);
-    if (!manualContent) { return null; }
     let sb = '';
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
-
-    // NOTE this is hardcode replaced in make-akari.ts
-    sb += `
-let notificationTimer: any;
-let notificationElement: HTMLSpanElement;
-function notification(message: string) {
-    if (!notificationElement) {
-        const container = document.createElement('div');
-        container.style = 'position:fixed;inset:0;text-align:center;cursor:default;pointer-events:none';
-        notificationElement = document.createElement('span');
-        notificationElement.style = 'padding:8px;background-color:white;margin-top:4em;'
-            + 'display:none;border-radius:4px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);max-width:320px';
-        container.appendChild(notificationElement);
-        document.body.appendChild(container);
-    }
-    if (notificationTimer) {
-        clearTimeout(notificationTimer);
-    }
-    notificationElement.style.display = 'inline-block';
-    notificationElement.innerText = message;
-    notificationTimer = setTimeout(() => { notificationElement.style.display = 'none'; }, 10_000);
-}
-
-function EmptyPage({ handleContinue }: {
-    handleContinue: () => void,
-}) {
-    const styles = {
-        app: css({ maxWidth: '360px', margin: '32vh auto' }),
-        fakeText: css({ fontSize: '14px' }),
-        mainText: css({ fontSize: '10px', color: '#666', marginTop: '8px' }),
-        button: css({ border: 'none', outline: 'none', background: 'transparent', cursor: 'pointer', fontSize: '14px', borderRadius: '4px', '&:hover': { background: '#ccc' } }),
-    };
-    return <div css={styles.app}>
-        <div css={styles.fakeText}>{emptytext}</div>
-        <div css={styles.mainText}>
-            I mean, access token not found, if you are me, click <button css={styles.button} onClick={handleContinue}>CONTINUE</button>, or else you seems to be here by accident or curious, you may leave here because there is no content for you, or you may continue your curiosity by finding my contact information.
-        </div>
-    </div>;
-}
-
-let accessToken: string;
-(window as any)['setaccesstoken'] = (v: string) => accessToken = v; // test access token expiration
-
-function gotoIdentityProvider() {
-    if (window.location.pathname.length > 1) {
-        localStorage['return-pathname'] = window.location.pathname;
-        localStorage['return-searchparams'] = window.location.search;
-    }
-    window.location.assign(\`https://id.example.com?return=https://\${window.location.host}\`);
-}
-
-async function startup(render: () => void) {
-    const localStorageAccessToken = localStorage['access-token'];
-    const authorizationCode = new URLSearchParams(window.location.search).get('code');
-
-    if (localStorageAccessToken) {
-        const response = await fetch('https://api.example.com/user-credential', { headers: { authorization: 'Bearer ' + localStorageAccessToken } });
-        if (response.ok) { accessToken = localStorageAccessToken; render(); return; } // else goto signin
-    } else if (!authorizationCode && window.location.pathname.length == 1) { // only display emptyapp when no code and no path
-        await new Promise<void>(resolve => root.render(<EmptyPage handleContinue={resolve} />));
-    }
-    if (!authorizationCode) {
-        gotoIdentityProvider();
-    } else {
-        const url = new URL(window.location.toString());
-        url.searchParams.delete('code');
-        if (localStorage['return-pathname']) { url.pathname = localStorage['return-pathname']; localStorage.removeItem('return-pathname'); }
-        if (localStorage['return-searchparams']) { url.search = localStorage['return-searchparams']; localStorage.removeItem('return-searchparams'); }
-        window.history.replaceState(null, '', url.toString());
-        const response = await fetch('https://api.example.com/signin', { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
-        if (response.status != 200) { notification('Failed to sign in, how does that happen?'); }
-        else { accessToken = localStorage['access-token'] = (await response.json()).accessToken; render(); }
-    }
-}
-
-let gotoIdModalMaskElement: HTMLDivElement;
-let gotoIdModalContainerElement: HTMLDivElement;
-let gotoIdModalOKButton: HTMLButtonElement;
-let gotoIdModalCancelButton: HTMLButtonElement;
-function confirmGotoIdentityProvider() {
-    if (!gotoIdModalMaskElement) {
-        gotoIdModalMaskElement = document.createElement('div');
-        gotoIdModalMaskElement.style = 'position:fixed;inset:0;background-color:#7777;display:none';
-        gotoIdModalContainerElement = document.createElement('div');
-        gotoIdModalContainerElement.style = 'z-index:100;position:relative;margin:60px auto;padding:12px;'
-            + 'border-radius:8px;background-color:white;max-width:320px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);';
-        const titleElement = document.createElement('div');
-        titleElement.style = 'font-weight:bold;margin-bottom:8px';
-        titleElement.innerText = 'CONFIRM';
-        const contentElement = document.createElement('div');
-        contentElement.innerText = 'Authentication failed, click OK to authenticate again, it is likely to lose unsaved changes, click CANCEL to try again later.';
-        const buttonContainerElement = document.createElement('div');
-        buttonContainerElement.style = 'display:flex;flex-flow:row-reverse;gap:12px;margin-top:12px';
-        gotoIdModalOKButton = document.createElement('button');
-        gotoIdModalOKButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
-        gotoIdModalOKButton.innerText = 'OK';
-        gotoIdModalCancelButton = document.createElement('button');
-        gotoIdModalCancelButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
-        gotoIdModalCancelButton.innerText = 'CANCEL';
-        buttonContainerElement.appendChild(gotoIdModalOKButton);
-        buttonContainerElement.appendChild(gotoIdModalCancelButton);
-        gotoIdModalContainerElement.appendChild(titleElement);
-        gotoIdModalContainerElement.appendChild(contentElement);
-        gotoIdModalContainerElement.appendChild(buttonContainerElement);
-        document.body.appendChild(gotoIdModalMaskElement);
-        document.body.appendChild(gotoIdModalContainerElement);
-    }
-    const handleCancel = () => {
-        gotoIdModalCancelButton.removeEventListener('click', handleCancel);
-        gotoIdModalMaskElement.style.display = 'none';
-        gotoIdModalContainerElement.style.display = 'none';
-    };
-    gotoIdModalCancelButton.addEventListener('click', handleCancel);
-    const handleOk = () => {
-        gotoIdModalOKButton.removeEventListener('click', handleOk);
-        localStorage.removeItem('access-token');
-        gotoIdentityProvider();
-    };
-    gotoIdModalOKButton.addEventListener('click', handleOk);
-    gotoIdModalMaskElement.style.display = 'block';
-    gotoIdModalContainerElement.style.display = 'block';
-}
-
-async function sendRequest(method: string, path: string, parameters?: any, data?: any): Promise<any> {
-    const url = new URL(\`https://api.example.com/example\${path}\`);
-    Object.entries(parameters || {}).forEach(p => url.searchParams.append(p[0], p[1].toString()));
-    const response = await fetch(url.toString(), data ? {
-        method,
-        body: JSON.stringify(data),
-        headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
-    } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
-    if (response.status == 401) { confirmGotoIdentityProvider(); return Promise.reject('Authentication failed.'); }
-    // normal/error both return json body, but void do not
-    const hasJsonBody = response.headers.has('content-Type') && response.headers.get('content-Type').includes('application/json');
-    const responseData = hasJsonBody ? await response.json() : {};
-    return response.ok ? Promise.resolve(responseData)
-        : response.status >= 400 && response.status < 500 ? Promise.reject(responseData)
-        : response.status >= 500 ? Promise.reject({ message: 'internal error' })
-        : Promise.reject({ message: 'unknown error' });
-}
-`.replaceAll('api.example.com/example', `api.example.com/${config.appname}`);
-
-    sb += 'const api = {\n';
+    sb += '\n';
+    sb += `import type { startup } from './startup.js';\n`;
+    sb += `import type * as I from '../shared/api-types.js';\n`;
+    sb += '\n';
+    sb += 'export const makeapi = (sendRequest: Parameters<Parameters<typeof startup>[5]>[0]) => ({\n';
     // for now now action.key only used here
     for (const action of config.actions.filter(a => a.key == 'main')) {
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
@@ -572,10 +406,8 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         }
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
-    sb += '};\n';
-
-    const hash = crypto.hash('sha256', sb);
-    return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
+    sb += `});\n`;
+    return sb;
 }
 
 interface CodeGenerationOptions {
@@ -614,11 +446,11 @@ async function generateCode(config: CodeGenerationConfig): Promise<boolean> {
     };
 
     const tasks = [
-        { kind: 'server', name: 'database.d.ts', run: createTask('src/server/database.d.ts', generateDatabaseTypes) },
-        { kind: 'server', name: 'database.sql', run: createTask('src/server/database.sql', generateDatabaseSchema) },
-        { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api.d.ts', generateWebInterfaceTypes) },
+        { kind: 'server', name: 'database-types.d.ts', run: createTask('src/server/database-types.d.ts', generateDatabaseTypes) },
+        { kind: 'server', name: 'database.sql', run: createTask('src/database.sql', generateDatabaseSchema) },
+        { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api-types.d.ts', generateWebInterfaceTypes) },
+        { kind: 'client', name: 'index.tsx', run: createTask('src/client/api.ts', generateWebInterfaceClient) },
         { kind: 'server', name: 'index.ts', run: createPartialTask('src/server/index.ts', generateWebInterfaceServer) },
-        { kind: 'client', name: 'index.tsx', run: createPartialTask('src/client/index.tsx', generateWebInterfaceClient) },
     ].filter(t => (config.options.client && t.kind.includes('client')) || (config.options.server && t.kind.includes('server')));
     // console.log('scheduled tasks', tasks);
     await Promise.all(tasks.map(t => t.run()));
@@ -852,6 +684,7 @@ async function eslint(options: ESLintOptions): Promise<boolean> {
                     '@stylistic/indent': options.falsyRules ? ['error', 4] : 'off',
                     // why is this a separate rule with 2 space idention?
                     '@stylistic/indent-binary-ops': 'off',
+                    '@stylistic/lines-between-class-members': 'off',
                     // not sufficient option to follow my convention
                     '@stylistic/jsx-closing-bracket-location': 'off',
                     // not sufficient option to follow my convention, who invented the very strange default value?
@@ -889,7 +722,8 @@ async function eslint(options: ESLintOptions): Promise<boolean> {
                     // in old days I say it's not possible to enable on existing code base
                     // now I say it's not possible to enforcing overall code base
                     '@stylistic/quotes': 'off',
-                    '@stylistic/quote-props': ['error', 'consistent'],
+                    // when-I-use-I-really-need-to-use
+                    '@stylistic/quote-props': 'off', // ['error', 'consistent'],
                     '@stylistic/semi': ['error', 'always'],
                 },
             },
@@ -916,26 +750,6 @@ async function eslint(options: ESLintOptions): Promise<boolean> {
     return !hasIssue;
 }
 
-// -----------------------------------------
-// ------ script/components/minify.ts ------ 
-// -------- ATTENTION AUTO GENERATED -------
-// -----------------------------------------
-
-// the try catch structure of minify is hard to use, return null for not ok
-async function tryminify(input: string) {
-    try {
-        const minifyResult = await minify(input, {
-            module: true,
-            compress: { ecma: 2022 as any },
-            format: { max_line_len: 160 },
-        });
-        return minifyResult.code;
-    } catch (err) {
-        logError('terser', `minify error`, { err, input });
-        return null;
-    }
-}
-
 // ---------------------------------------
 // ------ script/components/sftp.ts ------ 
 // ------- ATTENTION AUTO GENERATED ------
@@ -956,7 +770,7 @@ async function deploy(assets: UploadAsset[]): Promise<boolean> {
         await client.connect({
             host: scriptconfig.domain,
             username: scriptconfig.ssh.user,
-            privateKey: await fs.readFile(scriptconfig.ssh.identity),
+            privateKey: await fs.readFile(process.env['AKARI_SSH_ID'] || scriptconfig.ssh.identity),
             passphrase: scriptconfig.ssh.passphrase,
         });
         for (const asset of assets) {
@@ -1234,6 +1048,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
     mcx.externalRequests = [];
     for (const module of mcx.modules) {
         for (const moduleImport of module.requests.filter(d => !d.moduleName.startsWith('.'))) {
+            // if (mcx.logheader == 'mypack-mainclient' && moduleImport.moduleName == '@emotion/react/jsx-runtime') { console.log(moduleImport); }
             const mergedImport = mcx.externalRequests.find(m => m.moduleName == moduleImport.moduleName);
             if (!mergedImport) {
                 // deep clone, currently modify original object does not cause error, but don't do that
@@ -1252,7 +1067,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared in other import declarations from other modules`);
                 } else if (mergedImport.namedNames.some(n => n.alias == moduleImport.defaultName)) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared previous named imports from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared in previous named imports from this module, when will this happen?`);
                 } else if (!moduleImport.defaultName) {
                     mergedImport.defaultName = moduleImport.defaultName;
                 }
@@ -1268,7 +1083,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared in other import declarations from other modules`);
                 } else if (mergedImport.namedNames.some(n => n.alias == moduleImport.namespaceName)) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared previous named imports from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared in previous named imports from this module, when will this happen?`);
                 } else if (!moduleImport.namespaceName) {
                     mergedImport.namespaceName = moduleImport.namespaceName;
                 }
@@ -1281,7 +1096,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared in other import declarations`);
                 } else if (mergedImport.namespaceName == namedName.alias || mergedImport.defaultName == namedName.alias) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared previous namespace import or default import from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared in previous namespace import or default import from this module, when will this happen?`);
                 } else if (mergedImport.namedNames.some(e => e.name != namedName.name && e.alias == namedName.alias)) {
                     hasError = true;
                     const previous = mergedImport.namedNames.find(e => e.name != namedName.name && e.alias == namedName.alias);
@@ -1292,7 +1107,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                 // name == name and alias != alias: same name can be imported as different alias
                 // name == name and alias == alias: normal same name import
                 // so add record by finding alias is enough
-                if (!mergedImport.namedNames.some(e => e.alias != namedName.alias)) {
+                if (!mergedImport.namedNames.some(e => e.alias == namedName.alias)) {
                     mergedImport.namedNames.push(namedName);
                 }
             }
@@ -1312,10 +1127,12 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
         return lhs.moduleName.localeCompare(rhs.moduleName);
     });
 
-    // console.log('final external references: ');
-    // for (const declaration of externalRequests) {
-    //     console.log(`   from: ${declaration.moduleName}, default: ${declaration.defaultName
-    //         || ''}, namespace: ${declaration.namespaceName || ''}, names: ${declaration.names.join(',')}`);
+    // if (mcx.logheader == 'mypack-mainclient') {
+    //     console.log(`final external references:`);
+    //     for (const declaration of mcx.externalRequests) {
+    //         console.log(`   from: ${declaration.moduleName}, default: ${declaration.defaultName
+    //             || ''}, namespace: ${declaration.namespaceName || ''}, names: ${declaration.namedNames.join(',')}`);
+    //     }
     // }
 
     // https://nodejs.org/api/esm.html#resolution-algorithm
@@ -1435,6 +1252,21 @@ function combineModules(mcx: MyPackContext): boolean {
     return true;
 }
 
+// the try catch structure of minify is hard to use, return null for not ok
+async function tryminify(input: string) {
+    try {
+        const minifyResult = await minify(input, {
+            module: true,
+            compress: { ecma: 2022 as any },
+            format: { max_line_len: 160 },
+        });
+        return minifyResult.code;
+    } catch (err) {
+        logError('terser', `minify error`, { err, input });
+        return null;
+    }
+}
+
 function filesize(size: number) {
     return size < 1024 ? `${size}b` : `${Math.round(size / 1024 * 100) / 100}kb`;
 }
@@ -1521,19 +1353,223 @@ interface MessengerContext {
     lastmcxStorage?: Record<string, MyPackContext>,
 }
 
+/* eslint-disable @stylistic/operator-linebreak -- false positive for type X =\n| Variant1\n| Variant2 */
+// BEGIN SHARED TYPE BuildScriptMessage
+interface HasId {
+    id: number,
+}
+
+// local to remote packet format
+// - magic: b'NIRA', packet id: u16le, kind: u8
+// - kind: 1 (upload), path length: u8, path: not zero terminated, content length: u32le, content
+// - kind: 2 (download), path length: u8, path: not zero terminated
+// - kind: 3 (admin), command kind: u8
+//   - command kind: 1 (static-content:reload), key length: u8, key: not zero terminated
+//   - command kind: 2 (content-server:reload), name length: u8, name: not zero terminated
+//   - command kind: 3 (actions-server:reload), name length: u8, name: not zero terminated
+// - kind: 4 (reload-browser)
+interface BuildScriptMessageUploadFile {
+    kind: 'upload',
+    path: string, // relative path from webroot
+    content: Buffer, // this is compressed
+}
+interface BuildScriptMessageDownloadFile {
+    kind: 'download',
+    path: string, // relative path from webroot
+}
+interface BuildScriptMessageAdminInterfaceCommand {
+    kind: 'admin',
+    command:
+        // remote-akari knows AdminInterfaceCommand type, local akari don't
+        // explicitly write these kinds also explicitly limit local admin command kinds, which is ok
+        | { kind: 'static-content:reload', key: string }
+        | { kind: 'content-server:reload', name: string }
+        | { kind: 'actions-server:reload', name: string },
+}
+interface BuildScriptMessageReloadBrowser {
+    kind: 'reload-browser',
+}
+type BuildScriptMessage =
+    | BuildScriptMessageUploadFile
+    | BuildScriptMessageDownloadFile
+    | BuildScriptMessageAdminInterfaceCommand
+    | BuildScriptMessageReloadBrowser;
+
+// remote to local packet format
+// - magic: b'NIRA', packet id: u16le, kind: u8
+// - kind: 1 (upload), status: u8 (1: ok, 2: error, 3: nodiff)
+// - kind: 2 (download), content length: u32le (maybe 0 for error or empty), content
+// - kind: 3 (admin), ok: u8 (0 not ok, 1 ok)
+// - kind: 4 (reload-browser)
+interface BuildScriptMessageResponseUploadFile {
+    kind: 'upload',
+    // path is not in returned data but assigned at local side
+    path?: string,
+    // error message is not in returned data but displayed here
+    status: 'ok' | 'error' | 'nodiff',
+}
+interface BuildScriptMessageResponseDownloadFile {
+    kind: 'download',
+    // path is not in returned data but assigned at local side
+    path?: string,
+    // this is compressed
+    // empty means error or empty
+    // error message is not in returned data but displayed here
+    content: Buffer,
+}
+interface BuildScriptMessageResponseAdminInterfaceCommand {
+    kind: 'admin',
+    // response log is not in returned data but displayed here
+    ok: boolean,
+    // command is not in returned data but assigned at local side
+    command?: BuildScriptMessageAdminInterfaceCommand['command'],
+}
+interface BuildScriptMessageResponseReloadBrowser {
+    kind: 'reload-browser',
+}
+type BuildScriptMessageResponse =
+    | BuildScriptMessageResponseUploadFile
+    | BuildScriptMessageResponseDownloadFile
+    | BuildScriptMessageResponseAdminInterfaceCommand
+    | BuildScriptMessageResponseReloadBrowser;
+// END SHARED TYPE BuildScriptMessage
+
+const DebugBuildScriptMessageParser = false;
+class BuildScriptMessageResponseParser {
+
+    private chunk: Buffer = Buffer.allocUnsafe(0); // working chunk
+    public push(newChunk: Buffer) {
+        this.chunk = Buffer.concat([this.chunk, newChunk]);
+    }
+
+    private position: number = 0; // working position
+    private state:
+        | 'magic'
+        | 'skip-to-next-magic'
+        | 'packet-id'
+        | 'packet-kind'
+        | 'upload-status'
+        | 'download-content-length'
+        | 'download-content'
+        | 'admin-command-status' = 'magic';
+    private packetId: number;
+    private packetKind: number;
+    private downloadContentLength: number;
+
+    private hasEnoughLength(expect: number) {
+        return this.chunk.length - this.position >= expect;
+    }
+    // reset and cleanup after finished one message
+    private reset() {
+        this.state = 'magic';
+        this.chunk = this.chunk.subarray(this.position);
+        this.position = 0;
+    }
+
+    // try pull one message, if not enough, return null
+    public pull(): BuildScriptMessageResponse & HasId {
+        while (true) {
+            if (this.state == 'magic') {
+                if (!this.hasEnoughLength(4)) { return null; }
+                const maybeMagic = this.chunk.toString('utf-8', this.position, this.position + 4);
+                if (maybeMagic != 'NIRA') {
+                    logError('parser', `state = ${this.state}, meet ${maybeMagic} (${this.chunk.subarray(this.position, this.position + 4)})`);
+                    this.state = 'skip-to-next-magic';
+                } else {
+                    this.position += 4;
+                    this.state = 'packet-id';
+                }
+            } else if (this.state == 'skip-to-next-magic') {
+                if (!this.hasEnoughLength(4)) { return null; }
+                const maybeIndex = this.chunk.indexOf('NIRA', this.position);
+                // NOTE this 0 happens when previous packet is completely skipped and next packet is correct
+                if (maybeIndex >= 0) {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, skip ${maybeIndex} bytes and find next magic`); }
+                    this.position += maybeIndex + 4;
+                    this.state = 'packet-id';
+                } else {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, skip ${this.chunk.length - this.position} bytes and still seeking next magic`); }
+                    this.chunk = Buffer.allocUnsafe(0); // cleanup by the way
+                    this.position = 0;
+                }
+            } else if (this.state == 'packet-id') {
+                if (!this.hasEnoughLength(2)) { return null; }
+                this.packetId = this.chunk.readUInt16LE(this.position);
+                this.position += 2;
+                if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, packet id ${this.packetId}`); }
+                this.state = 'packet-kind';
+            } else if (this.state == 'packet-kind') {
+                if (!this.hasEnoughLength(1)) { return null; }
+                this.packetKind = this.chunk.readUInt8(this.position);
+                this.position += 1;
+                if (this.packetKind == 1) {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, packet kind ${this.packetKind} upload`); }
+                    this.state = 'upload-status';
+                } else if (this.packetKind == 2) {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, packet kind ${this.packetKind} download`); }
+                    this.state = 'download-content-length';
+                } else if (this.packetKind == 3) {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, packet kind ${this.packetKind} admin`); }
+                    this.state = 'admin-command-status';
+                } else if (this.packetKind == 4) {
+                    if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, packet kind ${this.packetKind} reload-browser`); }
+                    this.reset();
+                    return { id: this.packetId, kind: 'reload-browser' };
+                } else {
+                    logError('parser', `state = ${this.state}, packet kind ${this.packetKind} invalid`);
+                    this.state = 'skip-to-next-magic';
+                }
+            } else if (this.state == 'upload-status') {
+                if (!this.hasEnoughLength(1)) { return null; }
+                const uploadStatus = this.chunk.readUInt8(this.position);
+                const statusName = uploadStatus == 1 ? 'ok' : uploadStatus == 2 ? 'error' : uploadStatus == 3 ? 'nodiff' : 'error';
+                this.position += 1;
+                if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, kind = upload, status ${uploadStatus} (${statusName})`); }
+                this.reset();
+                return { id: this.packetId, kind: 'upload', status: statusName };
+            } else if (this.state == 'download-content-length') {
+                if (!this.hasEnoughLength(4)) { return null; }
+                this.downloadContentLength = this.chunk.readUint32LE(this.position);
+                this.position += 4;
+                if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, kind = download, content length ${this.downloadContentLength}`); }
+                this.state = 'download-content';
+            } else if (this.state == 'download-content') {
+                if (!this.hasEnoughLength(this.downloadContentLength)) { return null; }
+                const content = this.chunk.subarray(this.position, this.position + this.downloadContentLength);
+                this.position += this.downloadContentLength;
+                if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, kind = download, content full filled`); }
+                this.reset();
+                return { id: this.packetId, kind: 'download', content };
+            } else if (this.state == 'admin-command-status') {
+                if (!this.hasEnoughLength(1)) { return null; }
+                const commandStatus = this.chunk.readUInt8(this.position);
+                const commandStatusOk = commandStatus == 1;
+                this.position += 1;
+                if (DebugBuildScriptMessageParser) { logInfo('parser', `state = ${this.state}, kind = admin, status ${commandStatus} (${commandStatusOk})`); }
+                this.reset();
+                return { id: this.packetId, kind: 'admin', ok: commandStatusOk };
+            } else {
+                logError('parser', `invalid state? ${this.state}`);
+            }
+        }
+    }
+}
+const buildScriptMessageResponseParser = new BuildScriptMessageResponseParser();
+
 // return true for connected
 async function connectRemote(ecx: MessengerContext) {
     if (!ecx['?']) {
-        // ???
-        const myCertificate = await fs.readFile(scriptconfig.certificate, 'utf-8');
-        const originalCreateSecureContext = tls.createSecureContext;
-        tls.createSecureContext = options => {
-            const originalResult = originalCreateSecureContext(options);
-            if (!options.ca) {
-                originalResult.context.addCACert(myCertificate);
-            }
-            return originalResult;
-        };
+        // // ???
+        // // UPDATE this was needed and is not needed now?
+        // const myCertificate = await fs.readFile(scriptconfig.certificate, 'utf-8');
+        // const originalCreateSecureContext = tls.createSecureContext;
+        // tls.createSecureContext = options => {
+        //     const originalResult = originalCreateSecureContext(options);
+        //     if (!options.ca) {
+        //         originalResult.context.addCACert(myCertificate);
+        //     }
+        //     return originalResult;
+        // };
         ecx['?'] = true;
         // this place exactly can use to initialize member fields
         ecx.reconnectCount = 0;
@@ -1583,87 +1619,33 @@ async function connectRemote(ecx: MessengerContext) {
                 // this resolve should be most normal case
                 resolve(true);
             } else {
-                logInfo('tunnel', 'websocket received', event.data);
-                try {
-                    const response = JSON.parse(event.data);
-                    if (!response.id) {
-                        logError('tunnel', `received response without id, when will this happen?`);
-                    } else if (!(response.id in ecx.wakers)) {
-                        logError('tunnel', `no waker found for received response, when will this happen?`);
-                    } else {
-                        ecx.wakers[response.id](response);
-                        delete ecx.wakers[response.id];
+                // logInfo('tunnel', 'websocket received', event.data);
+                const buffers = Array.isArray(event.data) ? event.data
+                    : Buffer.isBuffer(event.data) ? [event.data]
+                    : event.data instanceof Blob ? [Buffer.from(await event.data.arrayBuffer())]
+                    : [Buffer.from(event.data)];
+                for (const buffer of buffers) {
+                    logInfo(`tunnel`, `receive raw data ${buffer.length} bytes`);
+                    buildScriptMessageResponseParser.push(buffer);
+                    const response = buildScriptMessageResponseParser.pull();
+                    if (response) {
+                        if (!response.id) {
+                            logError('tunnel', `received response without id, when will this happen?`);
+                        } else if (!(response.id in ecx.wakers)) {
+                            logError('tunnel', `no waker found for received response, when will this happen?`);
+                        } else {
+                            ecx.wakers[response.id](response);
+                            delete ecx.wakers[response.id];
+                        }
                     }
-                } catch (error) {
-                    logError('tunnel', `received data failed to parse json`, error);
                 }
             }
         });
     });
 }
 
-/* eslint-disable @stylistic/operator-linebreak -- false positive for type X =\n| Variant1\n| Variant2 */
-// BEGIN SHARED TYPE BuildScriptMessage
-interface HasId {
-    id: number,
-}
-
-// received packet format
-// - magic: NIRA, packet id: u16le, kind: u8
-// - kind: 1 (file), file name length: u8, filename: not zero terminated, buffer length: u32le, buffer
-// - kind: 2 (admin), command kind: u8
-//   - command kind: 1 (static-content:reload), key length: u8, key: not zero terminated
-//   - command kind: 2 (app:reload-server), app length: u8, app: not zero terminated
-// - kind: 3 (reload-browser)
-interface BuildScriptMessageUploadFile {
-    kind: 'file',
-    filename: string,
-    content: Buffer, // this is compressed
-}
-interface BuildScriptMessageAdminInterfaceCommand {
-    kind: 'admin',
-    command:
-        // remote-akari knows AdminInterfaceCommand type, local akari don't
-        // this also explicitly limit local admin command range, which is ok
-        | { kind: 'static-content:reload', key: string }
-        | { kind: 'app:reload-server', name: string },
-}
-interface BuildScriptMessageReloadBrowser {
-    kind: 'reload-browser',
-}
-type BuildScriptMessage =
-    | BuildScriptMessageUploadFile
-    | BuildScriptMessageAdminInterfaceCommand
-    | BuildScriptMessageReloadBrowser;
-
-// response packet format
-// - magic: NIRA, packet id: u16le, kind: u8
-// - kind: 1 (file), status: u8
-// - kind: 2 (admin)
-// - kind: 3 (reload-browser)
-interface BuildScriptMessageResponseUploadFile {
-    kind: 'file',
-    // filename path is not in returned data but assigned at local side
-    filename?: string,
-    // no error message in response, it is displayed here
-    status: 'ok' | 'error' | 'nodiff',
-}
-interface BuildScriptMessageResponseAdminInterfaceCommand {
-    kind: 'admin',
-    // command is not in returned data but assigned at local side
-    command?: BuildScriptMessageAdminInterfaceCommand['command'],
-    // response is not in returned data but displayed here
-}
-interface BuildScriptMessageResponseReloadBrowser {
-    kind: 'reload-browser',
-}
-type BuildScriptMessageResponse =
-    | BuildScriptMessageResponseUploadFile
-    | BuildScriptMessageResponseAdminInterfaceCommand
-    | BuildScriptMessageResponseReloadBrowser;
-// END SHARED TYPE BuildScriptMessage
-
 async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageUploadFile): Promise<BuildScriptMessageResponseUploadFile>;
+async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageDownloadFile): Promise<BuildScriptMessageResponseDownloadFile>;
 async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageAdminInterfaceCommand): Promise<BuildScriptMessageResponseAdminInterfaceCommand>;
 async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessageReloadBrowser): Promise<BuildScriptMessageResponseReloadBrowser>;
 async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMessage): Promise<BuildScriptMessageResponse> {
@@ -1676,41 +1658,58 @@ async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMess
     ecx.nextMessageId += 1;
 
     let buffer: Buffer;
-    if (message.kind == 'file') {
-        buffer = Buffer.alloc(12 + message.filename.length + message.content.length);
+    if (message.kind == 'upload') {
+        buffer = Buffer.alloc(12 + message.path.length + message.content.length);
         buffer.write('NIRA', 0); // magic size 4
         buffer.writeUInt16LE(messageId, 4); // packet id size 2
         buffer.writeUInt8(1, 6); // kind size 1
-        buffer.writeUInt8(message.filename.length, 7); // file name length size 1
-        buffer.write(message.filename, 8);
-        buffer.writeUInt32LE(message.content.length, message.filename.length + 8); // content length size 4
-        message.content.copy(buffer, 12 + message.filename.length, 0);
-        logInfo('tunnel', `send #${messageId} file ${message.filename} compress size ${message.content.length}`);
+        buffer.writeUInt8(message.path.length, 7); // path length size 1
+        buffer.write(message.path, 8);
+        buffer.writeUInt32LE(message.content.length, message.path.length + 8); // content length size 4
+        message.content.copy(buffer, 12 + message.path.length, 0);
+        logInfo('tunnel', `send #${messageId} upload ${message.path} compress size ${message.content.length} bytes`);
+    } else if (message.kind == 'download') {
+        buffer = Buffer.alloc(8 + message.path.length);
+        buffer.write('NIRA', 0); // magic size 4
+        buffer.writeUInt16LE(messageId, 4); // packet id size 2
+        buffer.writeUInt8(2, 6); // kind size 1
+        buffer.writeUInt8(message.path.length, 7); // path length size 1
+        buffer.write(message.path, 8);
+        logInfo('tunnel', `send #${messageId} download ${message.path}`);
     } else if (message.kind == 'admin') {
         if (message.command.kind == 'static-content:reload') {
             buffer = Buffer.alloc(9 + message.command.key.length);
             buffer.write('NIRA', 0); // magic size 4
             buffer.writeUInt16LE(messageId, 4); // packet id size 2
-            buffer.writeUInt8(2, 6); // kind size 1
+            buffer.writeUInt8(3, 6); // kind size 1
             buffer.writeUInt8(1, 7); // command kind size 1
             buffer.writeUInt8(message.command.key.length, 8); // key length size 1
             buffer.write(message.command.key, 9);
             logInfo('tunnel', `send #${messageId} static-content:reload ${message.command.key}`);
-        } else if (message.command.kind == 'app:reload-server') {
+        } else if (message.command.kind == 'content-server:reload') {
             buffer = Buffer.alloc(9 + message.command.name.length);
             buffer.write('NIRA', 0); // magic size 4
             buffer.writeUInt16LE(messageId, 4); // packet id size 2
-            buffer.writeUInt8(2, 6); // kind size 1
+            buffer.writeUInt8(3, 6); // kind size 1
             buffer.writeUInt8(2, 7); // command kind size 1
             buffer.writeUInt8(message.command.name.length, 8); // name length size 1
             buffer.write(message.command.name, 9);
-            logInfo('tunnel', `send #${messageId} app:reload-server ${message.command.name}`);
+            logInfo('tunnel', `send #${messageId} content-server:reload ${message.command.name}`);
+        } else if (message.command.kind == 'actions-server:reload') {
+            buffer = Buffer.alloc(9 + message.command.name.length);
+            buffer.write('NIRA', 0); // magic size 4
+            buffer.writeUInt16LE(messageId, 4); // packet id size 2
+            buffer.writeUInt8(3, 6); // kind size 1
+            buffer.writeUInt8(3, 7); // command kind size 1
+            buffer.writeUInt8(message.command.name.length, 8); // name length size 1
+            buffer.write(message.command.name, 9);
+            logInfo('tunnel', `send #${messageId} actions-server:reload ${message.command.name}`);
         }
     } else if (message.kind == 'reload-browser') {
         buffer = Buffer.alloc(7);
         buffer.write('NIRA', 0); // magic size 4
         buffer.writeUInt16LE(messageId, 4); // packet id size 2
-        buffer.writeUInt8(3, 6); // kind size 1
+        buffer.writeUInt8(4, 6); // kind size 1
         logInfo('tunnel', `send #${messageId} reload-browser`);
     }
 
@@ -1719,10 +1718,17 @@ async function sendRemoteMessage(ecx: MessengerContext, message: BuildScriptMess
     const received = new Promise<BuildScriptMessageResponse>(resolve => {
         ecx.wakers[messageId] = response => {
             if (timeout) { clearTimeout(timeout); }
-            if (message.kind == 'file' && response.kind == 'file') {
-                response.filename = message.filename;
+            if (message.kind == 'upload' && response.kind == 'upload') {
+                response.path = message.path;
+                logInfo('tunnel', `receive #${messageId} upload ${message.path} status ${response.status}`);
+            } else if (message.kind == 'download' && response.kind == 'download') {
+                response.path = message.path;
+                logInfo('tunnel', `receive #${messageId} download ${message.path} compress size ${response.content.length}`);
             } else if (message.kind == 'admin' && response.kind == 'admin') {
                 response.command = message.command;
+                logInfo('tunnel', `receive #${messageId} admin response ${response.ok ? 'ok' : 'not ok'}`);
+            } else if (message.kind == 'reload-browser' && response.kind == 'reload-browser') {
+                logInfo('tunnel', `receive #${messageId} reload-browser`);
             }
             resolve(response);
         };
@@ -1759,13 +1765,131 @@ async function deployWithRemoteConnect(ecx: MessengerContext, assets: UploadAsse
             }
         }));
         if (data) {
-            return await sendRemoteMessage(ecx, { kind: 'file', filename: asset.remote, content: data });
+            return await sendRemoteMessage(ecx, { kind: 'upload', path: asset.remote, content: data });
         } else {
             return null;
         }
     }));
 }
-// END LIBRARY dd4698e6bb3ab46d61a6cce565e15f2f1cc2b39318943d27fbcf60b47c23b76b
+
+// return matching file content, null for not ok
+async function downloadWithRemoteConnection(ecx: MessengerContext, filepaths: string[]): Promise<Buffer[]> {
+    return await Promise.all(filepaths.map(async filepath => {
+        const response = await sendRemoteMessage(ecx, { kind: 'download', path: filepath });
+        return response.content.length == 0 ? response.content : await new Promise<Buffer>(resolve => zstdDecompress(
+            response.content,
+            (error, decompressedContent) => {
+                if (error) {
+                    logError('messenger-download', `download content decompress error`, error);
+                    resolve(null);
+                } else {
+                    resolve(decompressedContent);
+                }
+            },
+        ));
+    }));
+}
+const adksource = {
+    'access-types': `
+KLUv/QBYrQcAsk4pHmBn2wYD0fF7eWnfN9pJIgtIITbdQF3wswVPggcCHEaCQMCVHUr7RK2DXEFliiN2ij0BElSfCB2uEsFh1ZQru+RSrrpgQLQ8SomV6MWmvaO0667s
+/IQhvOusX8gHovm6KKLZmCNvoJZzwYCSbRsIvpVUP5DXAv/YQX4veXOh4obxxNB5XYzOrIuY5zrmpPqS0XXxocfFGj0NoVZW7q1j1Z9jNsYIHQB4I2XHBTWKjiZDiRvJ
+PABIAptQGQi0U4IGoCKCACRDACnufDt+U+9XsfkBxIEK2qaTAydVvEAJbzvvALBjrMpwmkUSpgSa10gc1B4=
+    `,
+    'action-types': `
+KLUv/QBYFQoAphI6IkCptgF4ir8lEiLLLh4/rXWLszbOx2Xca9k+tvb41VHAAXIxAC8AMgBtokolDg5hXPl9gLs+Ty7mEGV7p5A2QasnqITBIS8hA0rbDaygQ14WIAWV
+3+P3stQCynDb/hmoqIW1+uRSo10H2dMiZ2KHa/2OjDkXtrAOEVFRUD+f8a5TRA9Qn2y0vgveHo+4FgIB0OgUpUSgkbKTFQ7XHq/S+mokq2HOJe3DaMRSTpRpnIiwMMC1
+oH28Sq2SDqqilt7uBTJFb7cqHrSOu2V/LpE9aB2mn++PT16/TgHZa50iqNAUPa7h8p2MASEgMAIjKKTsBgjAv6wZROiRI8cZBqZ/lJUkFSsAAbz0LgT10IZCAjgJ4AEG
+FRcwRYDhO7j3MOziteEk9HFLgEvtJe6x/mJGpcycV4RvHmHeEZpQPPJ7Ag==
+    `,
+    'client-startup': `
+KLUv/QBYXVsASo10GDGwjIo4B4IU0C/btbJd/RpCYYsY3N4uNF1xe7cs34PZteQeeLX5pt9egGJnZ2cX/RccbQF8AXoB13U2TRMAmUdMboWpaIE5YI+m5ZpeOA7jOKU1
+3WENV2qcUGWzRw1aLCeUSSML3WuL77CFDNkjuU1yBHK3FSmAPYoMefDgAQDskeTHE3RaXaKDBvZoJXAYDVnSl4UsRSWO4zrjtvRUhUED9gi6idTqDrtEhgcN2COqm2vg
+otUzzZzToxj1/6XPfZie7+m4Gk5zXPlDuqN55Eygkz0f/W9kHl1fC7qGHLGvQaXuNNyGPD3T7EQtLCZoSRqVZMmhm/A71GP0xelaxdOzL1Z62ae5L4Ur0H1i1PL0UKn+
+BLqeK7eh+0quvpG3ZzE1D0ENuBTuz7nTpG+LqXaWw438BvU70fil+g06yfdF3ni5VPO34nm4lOVy22NqJ33xENRoOLBZ4YEeyK51chLXDOeE694EVdwWNPPFtq6cHBh7
+xVLy69vaGFzthJ3WnW1M0ZPuxTN3DUiA96QrIciuuVoDvpO0GKMlx2riMisYcAEEgAKSG+PpxM+S3UwQM/XSMbL3goLjuKJO7rCdcisrF1hYvgQu+yR32GWfhEVU3M0H
+tMcR9qipidsGGrJkX7t2ENDwOAyNRibyl+jgl8jQ8Ets8EtswB5ZuCmFceEIg3aUpYD/7BIZNLBHE+ha03jnEhkesEdbca1vpcPA0PDosg1OSCAXOj2jTPwi7BCRwyBA
+gAAhguFR74TuDmt7cRL2CLJrNzlSplZN03BwcIaDY+dTSSOdgoTeeWcCXVN+GXApDIlgWdg8ejtBnd6z4KVbFkIQ1H3MkUdwIzePZvOo98UKbqzoxeidzzRPG09ouFRb
+EdppA42r4fBUkiXQvSetPoEOEzmm3bQYM1mMuWTJGX66/k5Lp63ovmO0cqbFTlrTJb/hNjdNekzkK5f6Rs79We3OnW8v+c4DepBggGICQlER8bgkyuReBORfD6dM7k13
+tvpKvcWYS9ydBi2WvBnegbrVJ/6/4hr0cGUe1xuPK0Z9MtKc0yuuPRxKq1c6BI45K5VqQU1SF0PCBQO3LLz0bRzxgH45Ks0D8ZBeyUiXdLixIiM9NHIbXPk47Oud732N
+9J6QJ0jkaDiQBwbqw05XsbT4Q7pDW9sdDNRHEFNub6WSao1vTPVWzaOea0WwFw26qEvZSmGMCp1WTxtXEiZAFHjUcKt9Es18AZ1WzQPyEK2W2rMlx8s22va08bLQukx3
+JpDfMe/pyk/36ag+BFUuvdJcOgXWO1mGAwP1U99w8bKUiatDUMNhH/TwuB4XhYRFxeNyMArUF3mA3ZGspB5+DdzIj4UbdJaM1PZFdLr2yG19574EiQiKCBH9rLnylGmp
+6dx34AIiccGt39bJvWi1c59CwqKi7XMq+WPCxUQC0+OiTK0gICj8nut5Meh0opcb+dNiV1kZMbLvtMW8Z0ksDNY0FH6aS9z1a4Czy5W6B7BHEjjJVFv6zKMpt+lSz9xh
+T13DbSunBXKnBbmoEBTN2E2xhpp6JW+nFr30nZDjXEmBLWAZ0neiAY2r4eC4oIUhBVrX2Z9C9mgnOudWzzAwEPAHhkfk0FYEIE7hK/Poh5CurQg0c5v1JuiehYU7IM1U
+6nkwjQ+APBeYSjXDc3tbkTuYxpFDnhWo5sglS7nQ00oyPARNF/XQvbVd+LbQSbZB6xQVExAKCQgkwiHoDg9retoKKx8Fl97A4OCS1Ih+XWeQZwUIsovKHrGNmF7A7jD2
+X1tbg5G4h6ICY4FHmAZxCg0Z8Q4FhozYtIf02FCTSkiWPI4r8wkmeDPXyYb79LQVIhVUa8wEcGUCaBrX43A0kGeF5tI3RqXeSvXncruFqTvQ/QkwMDC4pODTau35OAyC
+UWHBHMbuvGfBZuWDkdzTUY6m2p7YClcrnyetb+/b9jxp/T8G95MWBFdPpjIBSBAQNHDi5tQonQJbwDIa/shIV18WkpEeHtK38niubB7NccWyEDo4cfPcPDnm9bTSNYdh
+4+kOQ8yDfAhS8IWFN1ySTvUE7nu2Uki1xi8sKGgucY7mEse28cSa3skTgiqo4mMQUwoxZGhIRkaSJI0BUggQDAqLxomg7T4SYMCAJI+iIOakUQaRGRkREUk5SZJhDbI6
+8Nb+qIHgsGesNSMclwd7zY4jBG6JjzhoOKS5AQwnVg7+fMtqWhjmzaiZ8ItzmNDFOTtDTgXAMbsbZfzbMxaC3YYSc1cqG14cl4TmVg4lzh/2E4hKs7whBIwh37QjUfr0
+ScgZkL35cU8M+jCf3s3EIuhVuQGBhxvENEQSoSJ9sENuExNlsEFJH2GRfO6E9xt5YZVFhKAPqWVNbMh7vVwKoSKSGz/SvDRhjZfxflcazdvc+2Bp7r8CPMyCVcBlDPEX
+OqM1NJZcQo1eXx16wDoEl650EKsE0NL30k5Em42mCteEGcIc+3FWv8NcmwTR0Cv4F+aMXwDzwZhGFTDu3QIk0wg+65euhogAVM2gXQ+hcBPNVCU/js+gBkvaeRsoF3jg
+WKKb/blJdC1SGKwOVDQE5NtovWCIMCXdranNJccpF8fRT4TdJNj1MarJOL7+DGA2qA/cw4QdeM00egGTE4Lt8qKpAZ7GRzzqDlQ4HAogjEmHJWbw8wloQhNUpMn6VN3b
+kQ2YdsUFZo1WxhBx2NcZLvCnN637cA43Qjz3iGu9lyC0WH0P/w/DkCIYB1ocLdtp0HhQhQ/8YasaaeRCGif8xHgLn9/nyU4H52CMiDh9Syn/jNL5gEZzcl0m364LI9HD
+EptHoJtLMkvjLNgVdghOvbP36a5ZZfJBHKdPC8y2YciX78DFb8XF0CWHUPvm2GDCEpbkOLMo0XUUfqrKRf0QCphbJBb79zYOEdOYGgtfad+gYsu+qJw8RXUYOX6ogOET
+50WQUilIkxYQJmoSVNy8qCG4/cT86QJa2qkLTLa9qowg6gMkqhqhLGe/GYkYBwelGismzqpDsqcl1qXfwLh1Odi35wgYD+qkm+MIAgAgzTIYPAsAf9BuEupQqxaTx1RM
+2QJJB9AF7g0xW7OoqStBWil0aVEsbT2kLktZ6NlDIR7oll5i+HTnZ3nTUF38w6SDsMQQQNQ7FICPIbz+kon2MCXBRLeMtduV/lYym2uFOzbRoKaIIuNuoynle1BnvJTK
+QK8prrBnzvUZfDd/WmNLvylaMcbU4C3yxnQM7Iu3w27hu9XJ2orz1ysNql5aXZIuwBrMP4bSpAzTdoZh8Fkt37hCwQ3QA17LrqVLABgh19LYgqjCbF1oEQl6yeiIvBso
+LIq1GRDpJnoswHeEH+PgWQyqVQxfbhIPjqefL/CRZjk/ZXBLiKaZlMJdQ8cYSw4OC4Wgo9m7uG9oOJGRGGOIwl7M/6U8w65nnBEaGh4GEFxKOviBHg840vbfzEEZQ5Pr
+b1qPa53l9/YE3VQLGkLYfYI93R3PaZILaGbDW3pg08qd2ieobZVLdA+5gDTaGIEnMlm9pr7+P4Itdwh74jEWmjwvUqTSYqzHnE2CbmBLzMUE9SjZwqJwI9h05Cusxg4e
+mVKdo0mKk12QnAyPb9qgUCVXHW/uruQO/iScOYzl7iBAUy6RSJEP4H9LxjS0mz380UJuCLKcwM9EfJwRyFHMDua0aSkGsl+8aOekiJYt/EclTYm0x9aSkCS/iu+SyZVa
+1NBqnVW1Pv2xwibJ0yPE0ncANqDoDOjIHCQAN+VkBFgFr1XUkKLeltPwajQNXC+jFdMTazWUClKTMlZur25FBvZzqUMikJF3wvJ80WHSOpJwKtt8oY6SRgBFFoppU4M7
+N0S/DOpruHTpMKHCjmD5hINqtoJVsgMTNtkKjSQ/6f2R6JWLyck6tpETMD3Anl80hIl/CA==
+    `,
+    'database': `
+KLUv/QBY9RQANql2JgBxnQMWWOSVbZ7LYMNvkS382AlzeDs948bG8nxD4PZT3P//3f9eZwBoAG4Aj9J3Oacucl/42xtNphRnWk+991Rn0yinc+UtY9zpjGV9uPFVb8qz
+1W+NOeWMvU6f1e9a+aM5Y1qI7Y0sUuKOOT7K11Os1LPJVeOtMYykYfouObFGADVodkma5pec1ClGtu49JXY9JtAjTVeBsUxiuhVGMtktMzRPQOdztbWKC7cXVuzFnXx7
+3em7NT3L8gc3Q3aNex1WW0+m8Z2Sn2+NkUAALh26gVTQsFKWyCbXiAszdB/c6U2OXH0yBtmS9K0xjyfryZic2B3PVzV4vooBfzxOFd9sCpm6HryJRK7YyeldpdXPcgzb
+V/FhEvIGu/PcV5mdelxNSb2bKN0jvgiSwZ54Pvd4VSinL0wapAUJIfqC9ODw1i4ELB5nMkXVysEHDkG3uooMAQDeSA0JzSEI8v+MAfSnLxz/cJAf5TxMByN5mosKCylb
+S1Y5T7awS0rwzC1PuO9a6Vpx3At5ynj6Tt9bYyYeJhpkQx7fey52F+XE9EH4rrsnN7aDkTAw/HpSByN5GgfyOGvz5PgT4Qp3w+HeKOq9pqQepy8cn4bSyHVFLOtRFDCZ
+BFAoFEoTS6gRHYLGGGYkqIAUFximMSBCgpRj2gESiCVJkklENGHL/63bBBoDJ9AQRhhpkcRcpIkiKWKiSMwH8oN8BADcL8/pd2i5S4ywfipwrSC19cpd6Iz7LBld9F5A
+SzOaF+kRyVmqiirjm3BULY6jkU499Ony1L92m3q8UjCaLA2Il+kJh95LxLADx2TNEvDjOEyruqx3T7R6rIU7hAAgOBgnuiL2IzJALc35+Gj4PorMEbLXCyEvEaAG4xNY
+wYM7kWOuFA==
+    `,
+    'error': `
+KLUv/QBY9Q0Ahp1PIFBt0gYj+ButfS1lR9Lbn4homtEJ3bSNbtNdmDJmhm7WRwBDAEUA5lCQMezye+kRVMqUxVMQPvbMJiYp5Wt5xbDHsecthbmHR1H9OY9dhm5hQ1k8
+xSHD4FFYwraTAqNLComZCBALfgOx3sTm4UmpYdbSmquf5uuyc8Zh2mNGZ9Y8JK/e+x4eL64WQsZPPIqXJdEInoOVMic2EjNvm5clSQgUu/BMWkUlg/wkSF4hLPINe1au
+Hh43MPIEeZrhgKHByxJhRfd9uM/YCaB64XD+OMZ1A3/OVi/5urx4Z+drJ6lmocO06VLjyKqmjv9Y28uSLHTTLVMByUQyoVC4wJoeSxAAkG+W2nYANi5BGULmuJSrHjBY
+DKBLDoZQh8iePkkxVmPbAA5UdpjqGed1+f7InuGHpuW4tJpQfs9YWuPEMyAggqqSesJDFDHJE41sGnPKCMDsUnfRoh0kAs0+1BlcFzdw8aCabEeICcBMCEAIeKfjsHBj
+8aaJiBsZt8IMKAygIqTZLqJcz3FwD/zzwnMaKwUoGneAW3rNLbycGGyUZYyNZ4D+EGIMQ/GW20ztZRR0F08vH9ykKidChDI=
+    `,
+    'notification': `
+KLUv/QBYRQ4AFtxSIzBr7INBHeQOSZAn+iqk1qhisDgrsUa0Sx1OkP7mucwoLoQBRgBFAEoATh+N28y+venL9qaqCrCog1VVEwhloub4UtVGTMqVlnb+1pNDPzqcmywG
+GRQWGgmqvlfah7AizVTFlbjRzs8aO/i99fclAawZlMq2t5Lf+7BN3G92uP5NzLFORZdxaivu9zbVET/W/NxfjvqVzcvtZIdq52fpUNFH90VeJhajPLBTln22sSW+V5qa
+B1AUdUKGTugodMKFTrhQEHfsIZvp0JqQoeTEjsUmrosOrQh7ULJTNEBVVVnSMhT0b5qjyKS1zw+Iiv68Na4nj5FDY9CasEBFzc4FSUSyGMdxGhyFCkQohBo8yiy/Uh/V
+R39uI243OzR/ULPNr1nRRxM/+UrciGxfRMQ5tLjHjwPXCyFLTOgMLNTjHUOayaTFECgSAs7CAi8gEBIBgc7ydwzw0AJafkwJKgMXQHvAriy3FHjf7Yy5yysOImUQ5OAp
+h9YA/h3uIheruqAihxiWi8gRWYCtQ8sX6GcAX6Qf/RIcNGOWg3A1JRo00DYiOAGqHKUMgZgEFus22zBuBo7Ge+l+9EDcBTE5t+pnoUssfr5O
+    `,
+    'validate': `
+KLUv/QBYzQ0ANppMJCCNOAfl2EiTkmsSxhdIpW1L4sWVw5S86FNlhyO5dMAfEMIFiEEAQgBCANv8oHOnuQcp+n+FekPCmdM5EqooCzuf5jJ+tRXKzej6NP5qXOU3GorS
+LBiCsXBXG4zFIbiRV1+4SzBxcOq9MIJaLuM6owvkD8fZlLvO9Gp80PnyUh2ED2dcPtg6gl8kr23zGYXyrQdkQJWKOuOJs6kLBgoMZ3jCPfik7rUzto3Wwnak1RvmUCmU
+jwL4o9ukCN1LXmNukMOXxYMQBJ3FmvR9gjvpU1d2+uqNc9L7W6l1T50xxjlhMLhNWrEeaf8POcMgZ1QKSqVUb1hURGm7Iyjwx+MDAs7iQkgEboo/HI9f+hUob0ZflF1G
+viiU72lTLgXwv8aWdj4t0qbc5Xg7ibVpldzxKfcBNCAgQkIYxB3TJMsuVMkg9g1cCgNZP0csZtJqYFipVGVwNxI2AP8efCIjDEiA+FaMrqvGg6PF3lqixMDd3LcpKb4Y
+1ZAbCJMcXcOoBQ3OXugb0Fs+KttukpOfkECMgLZhxEvI3ApJpoAmcFt6/sy0HxR2kekAI5bKliQOFtIT5WeNI2Az
+    `,
+};
+async function getADKSource(name: string): Promise<Buffer> {
+    if (!(name in adksource)) { return null; }
+    return new Promise<Buffer>(resolve => {
+        zstdDecompress(Buffer.from(adksource[name].trim(), 'base64'), (error, decompressedContent) => {
+            if (error) { resolve(null); } else { resolve(decompressedContent); }
+        })
+    });
+}
+// END LIBRARY b91351c8b438bb4e09a50e65a2c89e29192b70a8ed31a55ba2c3417773c4304b
+
+async function deployADK() {
+    await Promise.all([
+        ['access-types', 'src/server/access-types.d.ts'],
+        ['action-types', 'src/server/action-types.d.ts'],
+        ['error', 'src/server/error.ts'],
+        ['database', 'src/server/database-helper.ts'],
+        ['validate', 'src/server/validate.ts'],
+        ['notification', 'src/client/notification.ts'],
+        ['client-startup', 'src/client/startup.tsx'],
+    ].map(async ([name, filepath]) => {
+        await fs.writeFile(filepath, await getADKSource(name));
+        logInfo('akari', `write adk ${name} to ${filepath}`);
+    }));
+}
 
 async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
     if (!options.client && !options.server) { return; }
@@ -1823,11 +1947,11 @@ async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
             logInfo('akari', chalk`build {cyan ${targetName}} completed with no change`); return;
         } else {
             const reloadRequests: BuildScriptMessageAdminInterfaceCommand['command'][] = [];
-            if (uploadResults.some(r => r.filename.startsWith('static/yama') && r.status == 'ok')) {
+            if (uploadResults.some(r => r.path.startsWith('static/yama') && r.status == 'ok')) {
                 reloadRequests.push({ kind: 'static-content:reload', key: 'yama' });
             }
-            if (uploadResults.some(r => r.filename.startsWith('servers/yama') && r.status == 'ok')) {
-                reloadRequests.push({ kind: 'app:reload-server', name: 'yama' });
+            if (uploadResults.some(r => r.path.startsWith('servers/yama') && r.status == 'ok')) {
+                reloadRequests.push({ kind: 'actions-server:reload', name: 'yama' });
             }
             await Promise.all(reloadRequests.map(r => sendRemoteMessage(ecx, { kind: 'admin', command: r })));
             // TODO now you really need admin command ok to skip reload browser
@@ -1844,6 +1968,8 @@ async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
 async function dispatch(command: string[]) {
     if (typeof command[0] == 'undefined') {
         await build(null, { client: true, server: true, emit: true, ignoreHashMismatch: false });
+    } else if (command[0] == 'adk') {
+        await deployADK();
     } else if (command[0] != 'with' || command[1] != 'remote') {
         await build(null, {
             client: !command.includes('noclient'),
