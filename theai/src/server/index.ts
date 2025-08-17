@@ -3,37 +3,39 @@ import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
 import utc from 'dayjs/plugin/utc.js';
 import mysql from 'mysql2/promise';
-import * as I from '../shared/api.js';
-import * as D from './database.js';
-import type { MyErrorKind, ActionContext, DispatchContext, DispatchResult } from './dispatch.js';
+import type * as I from '../shared/api-types.js';
+import type * as D from './database-types.js';
+import type { ActionServerRequest, ActionServerResponse } from './action-types.js';
+import type { QueryResult, ManipulateResult } from './database-helper.js';
+import { MyError } from './error.js';
+import { ParameterValidator } from './validate.js';
+import { databaseTypeCast, toISOString } from './database-helper.js';
 
 dayjs.extend(utc);
 
-// this is the same config file as core module
+// use same database connection config as core module
 const config = JSON.parse(await fs.readFile('config', 'utf-8')) as {
-    aikey: string,
     // so this is the connection options to connect to core module database
     database: mysql.PoolOptions,
 };
-
-type QueryResult<T> = T & mysql.RowDataPacket;
-type ManipulateResult = mysql.ResultSetHeader;
+// this server specific config file
+const thisconfig = JSON.parse(await fs.readFile('servers/yala.json', 'utf-8')) as {
+    apikey: string,
+};
 // so need to change database name to connect to this app's database
-const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: (field, next) =>
-    field.type == 'BIT' && field.length == 1 ? field.buffer()[0] == 1
-    : field.type == 'DATETIME' ? dayjs.utc(field.string(), 'YYYY-MM-DD hh:mm:ss')
-    : next(),
-});
-
-function formatDateTime(value: dayjs.Dayjs) {
-    return value.format('YYYY-MM-DDTHH:mm:ss[Z]');
-}
+const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: databaseTypeCast });
 
 // TODO multiple models, I need small models to answer small questions
 // add a model selection ui,
 // add model parameter to complete api
 // add model and api key configuration to servers/yala.json
 // add a model column to message
+
+interface ActionContext {
+    now: dayjs.Dayjs,
+    userId: number,
+    userName: string,
+}
 
 // GET /sessions return root SessionDirectory
 async function getSessions(ax: ActionContext): Promise<I.Session[]> {
@@ -48,8 +50,8 @@ async function getSessions(ax: ActionContext): Promise<I.Session[]> {
         comment: s.Comment ?? '',
         tags: s.Tags?.split(',')?.filter(x => x) ?? [],
         shareId: s.Shared ? s.ShareId : null,
-        createTime: formatDateTime(s.CreateTime),
-        updateTime: formatDateTime(s.UpdateTime),
+        createTime: toISOString(s.CreateTime),
+        updateTime: toISOString(s.UpdateTime),
         messages: [], // get list api does not include messages
     }));
 }
@@ -76,8 +78,8 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
         comment: session.Comment ?? '',
         tags: session.Tags?.split(',')?.filter(x => x) ?? [],
         shareId: session.Shared ? session.ShareId : null,
-        createTime: formatDateTime(session.CreateTime),
-        updateTime: formatDateTime(session.UpdateTime),
+        createTime: toISOString(session.CreateTime),
+        updateTime: toISOString(session.UpdateTime),
         messages: messages.map<I.Message>(m => ({
             id: m.MessageId,
             parentId: m.ParentMessageId,
@@ -86,8 +88,8 @@ async function getSession(ax: ActionContext, sessionId: number): Promise<I.Sessi
             thinkingContent: m.ThinkingContent,
             promptTokenCount: m.PromptTokenCount,
             completionTokenCount: m.CompletionTokenCount,
-            createTime: formatDateTime(m.CreateTime),
-            updateTime: formatDateTime(m.UpdateTime),
+            createTime: toISOString(m.CreateTime),
+            updateTime: toISOString(m.UpdateTime),
         })),
     };
 }
@@ -162,15 +164,15 @@ async function addSession(ax: ActionContext, session: I.Session): Promise<I.Sess
     return {
         id: insertResult.insertId,
         name: newName,
-        createTime: formatDateTime(ax.now),
-        updateTime: formatDateTime(ax.now),
+        createTime: toISOString(ax.now),
+        updateTime: toISOString(ax.now),
         tags: [],
         messages: [{
             id: 1,
             role: session.messages[0].role,
             content: session.messages[0].content,
-            createTime: formatDateTime(ax.now),
-            updateTime: formatDateTime(ax.now),
+            createTime: toISOString(ax.now),
+            updateTime: toISOString(ax.now),
         }],
     };
 }
@@ -203,7 +205,7 @@ async function updateSession(ax: ActionContext, session: I.Session): Promise<I.S
         'UPDATE `Session` SET `Name` = ?, `Comment` = ?, `Tags` = ?, `UpdateTime` = ? WHERE `SessionId` = ?',
         [session.name, session.comment ?? null, session.tags.join(','), ax.now.format('YYYY-MM-DD HH:mm:ss'), session.id],
     );
-    session.updateTime = formatDateTime(ax.now);
+    session.updateTime = toISOString(ax.now);
     return session;
 }
 async function removeSession(ax: ActionContext, sessionId: number) {
@@ -249,8 +251,8 @@ async function addMessage(ax: ActionContext, sessionId: number, message: I.Messa
         parentId: message.parentId,
         role: message.role,
         content: message.content,
-        createTime: formatDateTime(ax.now),
-        updateTime: formatDateTime(ax.now),
+        createTime: toISOString(ax.now),
+        updateTime: toISOString(ax.now),
     };
 }
 
@@ -261,7 +263,7 @@ async function updateMessage(ax: ActionContext, sessionId: number, message: I.Me
         'UPDATE `Message` SET `Content` = ?, `PromptTokenCount` = NULL, `CompletionTokenCount` = NULL, `UpdateTime` = ? WHERE `MessageId` = ? AND `SessionId` = ?',
         [message.content, ax.now.format('YYYY-MM-DD HH:mm:ss'), message.id, sessionId],
     );
-    message.updateTime = formatDateTime(ax.now);
+    message.updateTime = toISOString(ax.now);
     return message;
 }
 
@@ -373,7 +375,7 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${config.aikey}`,
+                'Authorization': `Bearer ${thisconfig.apikey}`,
             },
             body: JSON.stringify({ model: 'deepseek-chat', messages: messages.map(m => ({ role: m.Role, content: m.Content })) }),
         });
@@ -434,8 +436,8 @@ async function completeMessage(ax: ActionContext, sessionId: number, messageId: 
         content: responseContent,
         promptTokenCount,
         completionTokenCount,
-        createTime: formatDateTime(ax.now),
-        updateTime: formatDateTime(ax.now),
+        createTime: toISOString(ax.now),
+        updateTime: toISOString(ax.now),
     };
 }
 
@@ -475,7 +477,7 @@ async function getAccountBalance(_ax: ActionContext): Promise<I.AccountBalance> 
     let response: Response;
     try {
         response = await fetch('https://api.deepseek.com/user/balance', {
-            headers: { 'Authorization': `Bearer ${config.aikey}` },
+            headers: { 'Authorization': `Bearer ${thisconfig.apikey}` },
         });
     } catch (error) {
         console.log('request error', error);
@@ -496,8 +498,8 @@ async function getDSessions(_ax: ActionContext): Promise<I.dsession[]> {
     );
     return sessions.map(s => ({
         ...s,
-        inserted_at: formatDateTime(s.inserted_at as unknown as dayjs.Dayjs),
-        updated_at: formatDateTime(s.updated_at as unknown as dayjs.Dayjs),
+        inserted_at: toISOString(s.inserted_at as unknown as dayjs.Dayjs),
+        updated_at: toISOString(s.updated_at as unknown as dayjs.Dayjs),
     }));
 }
 async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dmessage[]> {
@@ -507,34 +509,16 @@ async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dm
     );
     return messages.map(m => ({
         ...m,
-        inserted_at: formatDateTime(m.inserted_at as unknown as dayjs.Dayjs),
+        inserted_at: toISOString(m.inserted_at as unknown as dayjs.Dayjs),
     }));
 }
 
-// AUTOGEN 08e799478b5e1d6ab0beda980cf8aca6e11839cc8627b5bedd81f80eacd578d3
+// AUTOGEN d3e9854b83c9f525c1e45214f578807e7c2fdb68047bef37949224a8b97fb259
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
-/* eslint-disable @stylistic/lines-between-class-members */
 
-class MyError extends Error {
-    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); this.name = 'MyError'; }
-}
-class ParameterValidator {
-    public constructor(private readonly parameters: URLSearchParams) {}
-    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
-        if (!this.parameters.has(name)) {
-            if (optional) { return null; } else { throw new MyError('common', `missing required parameter ${name}`); }
-        }
-        const raw = this.parameters.get(name);
-        const result = convert(raw);
-        if (validate(result)) { return result; } else { throw new MyError('common', `invalid parameter ${name} value ${raw}`); }
-    }
-    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
-    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
-}
-export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
+export async function dispatch(ctx: ActionServerRequest): Promise<ActionServerResponse> {
     const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');
     const v = new ParameterValidator(searchParams);
     const ax: ActionContext = { now: ctx.state.now, userId: ctx.state.user?.id, userName: ctx.state.user?.name };
@@ -555,5 +539,5 @@ export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {
         'GET /v1/dsessions': () => getDSessions(ax),
         'GET /v1/dmessages': () => getDMessages(ax, v.string('id')),
     } as Record<string, () => Promise<any>>)[`${ctx.method} ${pathname}`];
-    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };
+    return action ? { body: await action() } : { error: new MyError('not-found', 'action not found') };
 }

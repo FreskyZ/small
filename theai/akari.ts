@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 // END IMPORT
-// components: codegen, minify, mypack, sftp, typescript, eslint, messenger, common
+// components: codegen, mypack, sftp, typescript, eslint, messenger, common
+// adk: access-types, action-types, error, database, validate, notification, request
 // BEGIN LIBRARY
 import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -129,39 +130,30 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
         attributeNamePrefix: '',
         parseAttributeValue: true,
     });
-    // the result of preserveOrder: boolean is too complex and not that worthy to type
-    const rawDatabaseModel = parser.parse(await fs.readFile('src/server/database.xml'));
-    // console.log(JSON.stringify(rawDatabaseModel, undefined, 2));
+    // the result of preserveOrder is too complex and not that worthy to type
+    const rawShapes = parser.parse(await fs.readFile('shapes.xml'));
+    // console.log(JSON.stringify(rawShapes, undefined, 2));
 
-    const databaseName = rawDatabaseModel[1][':@'].name;
-    const databaseTables = (rawDatabaseModel[1].database as any[]).map<DatabaseModelTable>(c => {
-        if (!c.table) {
-            hasError = true;
-            logError('codegen', 'database.xml: unknown element tag, expect table');
-            return null;
-        }
-        return {
-            name: c[':@'].name,
-            primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
-            foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
-            fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
-                name: f[':@'].name,
-                type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
-                nullable: f[':@'].type.endsWith('?'),
-                size: f[':@'].size ? parseInt(f[':@'].size) : null,
-            })),
-        };
-    });
-    // console.log(JSON.stringify(databaseModel, undefined, 2));
+    const appname = rawShapes[1][':@'].app;
+    const dbname = rawShapes[1][':@'].database;
 
-    const rawWebInterfaces = parser.parse(await fs.readFile('src/shared/api.xml'));
-    // console.log(JSON.stringify(rawWebInterfaces, undefined, 2));
-
+    const tables: DatabaseModelTable[] = [];
     const actions: WebInterfaceAction[] = [];
     const actionTypes: WebInterfaceActionType[] = [];
-    const applicationName = rawWebInterfaces[1][':@'].name;
-    rawWebInterfaces[1].api.forEach((c: any) => {
-        if ('type' in c) {
+    rawShapes[1].shapes.forEach((c: any) => {
+        if ('table' in c) {
+            tables.push({
+                name: c[':@'].name,
+                primaryKey: c.table.find((f: any) => 'primary-key' in f)[':@'].field.split(','),
+                foreignKeys: c.table.filter((f: any) => 'foreign-key' in f).map((f: any) => f[':@']),
+                fields: c.table.filter((f: any) => 'field' in f).map((f: any) => ({
+                    name: f[':@'].name,
+                    type: f[':@'].type.endsWith('?') ? f[':@'].type.substring(0, f[':@'].type.length - 1) : f[':@'].type,
+                    nullable: f[':@'].type.endsWith('?'),
+                    size: f[':@'].size ? parseInt(f[':@'].size) : null,
+                })),
+            });
+        } else if ('type' in c) {
             actionTypes.push({
                 name: c[':@'].name,
                 fields: c.type.map((f: any) => ({
@@ -170,7 +162,7 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
                     nullable: f[':@'].type.endsWith('?'),
                 })),
             });
-        } else {
+        } else if ('action' in c) {
             const key = c[':@'].key;
             const name = c[':@'].name;
             const $public = !!c[':@'].public;
@@ -193,11 +185,15 @@ async function readCodeGenerationConfig(options: CodeGenerationOptions): Promise
                 }
             });
             actions.push({ key, name, public: $public, method, path, body, return: $return, parameters });
+        // ? you cannot get tag name in preserveOrder?
+        } else if (!('----------------------------------------------' in c)) {
+            hasError = true;
+            logError('codegen', 'database.xml: unknown element tag, expect table/type/action');
         }
     });
-    // console.log(JSON.stringify(actionTypes, undefined, 2), actions);
+    // console.log(tables, JSON.stringify(actionTypes, undefined, 2), actions);
 
-    return hasError ? null : { options, dbname: databaseName, tables: databaseTables, appname: applicationName, actions, actionTypes };
+    return hasError ? null : { options, dbname, tables, appname, actions, actionTypes };
 }
 
 // database.d.ts, return null for not ok
@@ -334,27 +330,8 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
-    sb += '/* eslint-disable @stylistic/lines-between-class-members */\n';
     sb += '\n';
-    sb += `class MyError extends Error {
-    public constructor(public readonly kind: MyErrorKind, message?: string) { super(message); this.name = 'MyError'; }
-}\n`;
-    sb += `class ParameterValidator {
-    public constructor(private readonly parameters: URLSearchParams) {}
-    private validate<T>(name: string, optional: boolean, convert: (raw: string) => T, validate: (value: T) => boolean): T {
-        if (!this.parameters.has(name)) {
-            if (optional) { return null; } else { throw new MyError('common', \`missing required parameter \${name}\`); }
-        }
-        const raw = this.parameters.get(name);
-        const result = convert(raw);
-        if (validate(result)) { return result; } else { throw new MyError('common', \`invalid parameter \${name} value \${raw}\`); }
-    }
-    public id(name: string) { return this.validate(name, false, parseInt, v => !isNaN(v) && v > 0); }
-    public idopt(name: string) { return this.validate(name, true, parseInt, v => !isNaN(v) && v > 0); }
-    public string(name: string) { return this.validate(name, false, v => v, v => !!v); }
-}\n`;
-
-    sb += 'export async function dispatch(ctx: DispatchContext): Promise<DispatchResult> {\n';
+    sb += 'export async function dispatch(ctx: ActionServerRequest): Promise<ActionServerResponse> {\n';
     // NOTE no need to wrap try in this function because it correctly throws into overall request error handler
     sb += `    const { pathname, searchParams } = new URL(ctx.path, 'https://example.com');\n`;
     sb += `    const v = new ParameterValidator(searchParams);\n`;
@@ -375,7 +352,7 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
     sb += `    } as Record<string, () => Promise<any>>)[\`\${ctx.method} \${pathname}\`];\n`;
-    sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'invalid-invocation') };\n`;
+    sb += `    return action ? { body: await action() } : { error: new MyError('not-found', 'action not found') };\n`;
     sb += `}\n`;
 
     const hash = crypto.hash('sha256', sb);
@@ -393,26 +370,6 @@ function generateWebInterfaceClient(config: CodeGenerationConfig, originalConten
 
     // NOTE this is hardcode replaced in make-akari.ts
     sb += `
-let notificationTimer: any;
-let notificationElement: HTMLSpanElement;
-function notification(message: string) {
-    if (!notificationElement) {
-        const container = document.createElement('div');
-        container.style = 'position:fixed;inset:0;text-align:center;cursor:default;pointer-events:none';
-        notificationElement = document.createElement('span');
-        notificationElement.style = 'padding:8px;background-color:white;margin-top:4em;'
-            + 'display:none;border-radius:4px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);max-width:320px';
-        container.appendChild(notificationElement);
-        document.body.appendChild(container);
-    }
-    if (notificationTimer) {
-        clearTimeout(notificationTimer);
-    }
-    notificationElement.style.display = 'inline-block';
-    notificationElement.innerText = message;
-    notificationTimer = setTimeout(() => { notificationElement.style.display = 'none'; }, 10_000);
-}
-
 function EmptyPage({ handleContinue }: {
     handleContinue: () => void,
 }) {
@@ -612,9 +569,9 @@ async function generateCode(config: CodeGenerationConfig): Promise<boolean> {
     };
 
     const tasks = [
-        { kind: 'server', name: 'database.d.ts', run: createTask('src/server/database.d.ts', generateDatabaseTypes) },
-        { kind: 'server', name: 'database.sql', run: createTask('src/server/database.sql', generateDatabaseSchema) },
-        { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api.d.ts', generateWebInterfaceTypes) },
+        { kind: 'server', name: 'database-types.d.ts', run: createTask('src/server/database-types.d.ts', generateDatabaseTypes) },
+        { kind: 'server', name: 'database.sql', run: createTask('src/database.sql', generateDatabaseSchema) },
+        { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api-types.d.ts', generateWebInterfaceTypes) },
         { kind: 'server', name: 'index.ts', run: createPartialTask('src/server/index.ts', generateWebInterfaceServer) },
         { kind: 'client', name: 'index.tsx', run: createPartialTask('src/client/index.tsx', generateWebInterfaceClient) },
     ].filter(t => (config.options.client && t.kind.includes('client')) || (config.options.server && t.kind.includes('server')));
@@ -916,26 +873,6 @@ async function eslint(options: ESLintOptions): Promise<boolean> {
     return !hasIssue;
 }
 
-// -----------------------------------------
-// ------ script/components/minify.ts ------ 
-// -------- ATTENTION AUTO GENERATED -------
-// -----------------------------------------
-
-// the try catch structure of minify is hard to use, return null for not ok
-async function tryminify(input: string) {
-    try {
-        const minifyResult = await minify(input, {
-            module: true,
-            compress: { ecma: 2022 as any },
-            format: { max_line_len: 160 },
-        });
-        return minifyResult.code;
-    } catch (err) {
-        logError('terser', `minify error`, { err, input });
-        return null;
-    }
-}
-
 // ---------------------------------------
 // ------ script/components/sftp.ts ------ 
 // ------- ATTENTION AUTO GENERATED ------
@@ -1234,6 +1171,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
     mcx.externalRequests = [];
     for (const module of mcx.modules) {
         for (const moduleImport of module.requests.filter(d => !d.moduleName.startsWith('.'))) {
+            // if (mcx.logheader == 'mypack-mainclient' && moduleImport.moduleName == '@emotion/react/jsx-runtime') { console.log(moduleImport); }
             const mergedImport = mcx.externalRequests.find(m => m.moduleName == moduleImport.moduleName);
             if (!mergedImport) {
                 // deep clone, currently modify original object does not cause error, but don't do that
@@ -1252,7 +1190,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared in other import declarations from other modules`);
                 } else if (mergedImport.namedNames.some(n => n.alias == moduleImport.defaultName)) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared previous named imports from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: default import ${moduleImport.defaultName} from '${moduleImport.moduleName}' has appeared in previous named imports from this module, when will this happen?`);
                 } else if (!moduleImport.defaultName) {
                     mergedImport.defaultName = moduleImport.defaultName;
                 }
@@ -1268,7 +1206,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared in other import declarations from other modules`);
                 } else if (mergedImport.namedNames.some(n => n.alias == moduleImport.namespaceName)) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared previous named imports from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: namespace import ${moduleImport.namespaceName} from '${moduleImport.moduleName}' has appeared in previous named imports from this module, when will this happen?`);
                 } else if (!moduleImport.namespaceName) {
                     mergedImport.namespaceName = moduleImport.namespaceName;
                 }
@@ -1281,7 +1219,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                     logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared in other import declarations`);
                 } else if (mergedImport.namespaceName == namedName.alias || mergedImport.defaultName == namedName.alias) {
                     hasError = true;
-                    logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared previous namespace import or default import from this module, when will this happen?`);
+                    logError(mcx.logheader, `${module.path}: import ${namedName.alias} from '${moduleImport.moduleName}' has appeared in previous namespace import or default import from this module, when will this happen?`);
                 } else if (mergedImport.namedNames.some(e => e.name != namedName.name && e.alias == namedName.alias)) {
                     hasError = true;
                     const previous = mergedImport.namedNames.find(e => e.name != namedName.name && e.alias == namedName.alias);
@@ -1292,7 +1230,7 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
                 // name == name and alias != alias: same name can be imported as different alias
                 // name == name and alias == alias: normal same name import
                 // so add record by finding alias is enough
-                if (!mergedImport.namedNames.some(e => e.alias != namedName.alias)) {
+                if (!mergedImport.namedNames.some(e => e.alias == namedName.alias)) {
                     mergedImport.namedNames.push(namedName);
                 }
             }
@@ -1312,10 +1250,12 @@ function validateModuleDependencies(mcx: MyPackContext): boolean {
         return lhs.moduleName.localeCompare(rhs.moduleName);
     });
 
-    // console.log('final external references: ');
-    // for (const declaration of externalRequests) {
-    //     console.log(`   from: ${declaration.moduleName}, default: ${declaration.defaultName
-    //         || ''}, namespace: ${declaration.namespaceName || ''}, names: ${declaration.names.join(',')}`);
+    // if (mcx.logheader == 'mypack-mainclient') {
+    //     console.log(`final external references:`);
+    //     for (const declaration of mcx.externalRequests) {
+    //         console.log(`   from: ${declaration.moduleName}, default: ${declaration.defaultName
+    //             || ''}, namespace: ${declaration.namespaceName || ''}, names: ${declaration.namedNames.join(',')}`);
+    //     }
     // }
 
     // https://nodejs.org/api/esm.html#resolution-algorithm
@@ -1433,6 +1373,21 @@ function combineModules(mcx: MyPackContext): boolean {
     }
     mcx.resultJs = resultJs;
     return true;
+}
+
+// the try catch structure of minify is hard to use, return null for not ok
+async function tryminify(input: string) {
+    try {
+        const minifyResult = await minify(input, {
+            module: true,
+            compress: { ecma: 2022 as any },
+            format: { max_line_len: 160 },
+        });
+        return minifyResult.code;
+    } catch (err) {
+        logError('terser', `minify error`, { err, input });
+        return null;
+    }
 }
 
 function filesize(size: number) {
@@ -1956,7 +1911,86 @@ async function downloadWithRemoteConnection(ecx: MessengerContext, filepaths: st
         ));
     }));
 }
-// END LIBRARY 07ecf62f8806d44ff5a18eb602480098cbe82242cb39b86dd33c8688dc4d4a57
+const adksource = {
+    'access-types': `
+KLUv/QBYrQcAsk4pHmBn2wYD0fF7eWnfN9pJIgtIITbdQF3wswVPggcCHEaCQMCVHUr7RK2DXEFliiN2ij0BElSfCB2uEsFh1ZQru+RSrrpgQLQ8SomV6MWmvaO0667s
+/IQhvOusX8gHovm6KKLZmCNvoJZzwYCSbRsIvpVUP5DXAv/YQX4veXOh4obxxNB5XYzOrIuY5zrmpPqS0XXxocfFGj0NoVZW7q1j1Z9jNsYIHQB4I2XHBTWKjiZDiRvJ
+PABIAptQGQi0U4IGoCKCACRDACnufDt+U+9XsfkBxIEK2qaTAydVvEAJbzvvALBjrMpwmkUSpgSa10gc1B4=
+    `,
+    'action-types': `
+KLUv/QBYFQoAphI6IkCptgF4ir8lEiLLLh4/rXWLszbOx2Xca9k+tvb41VHAAXIxAC8AMgBtokolDg5hXPl9gLs+Ty7mEGV7p5A2QasnqITBIS8hA0rbDaygQ14WIAWV
+3+P3stQCynDb/hmoqIW1+uRSo10H2dMiZ2KHa/2OjDkXtrAOEVFRUD+f8a5TRA9Qn2y0vgveHo+4FgIB0OgUpUSgkbKTFQ7XHq/S+mokq2HOJe3DaMRSTpRpnIiwMMC1
+oH28Sq2SDqqilt7uBTJFb7cqHrSOu2V/LpE9aB2mn++PT16/TgHZa50iqNAUPa7h8p2MASEgMAIjKKTsBgjAv6wZROiRI8cZBqZ/lJUkFSsAAbz0LgT10IZCAjgJ4AEG
+FRcwRYDhO7j3MOziteEk9HFLgEvtJe6x/mJGpcycV4RvHmHeEZpQPPJ7Ag==
+    `,
+    'database': `
+KLUv/QBY9RQANql2JgBxnQMWWOSVbZ7LYMNvkS382AlzeDs948bG8nxD4PZT3P//3f9eZwBoAG4Aj9J3Oacucl/42xtNphRnWk+991Rn0yinc+UtY9zpjGV9uPFVb8qz
+1W+NOeWMvU6f1e9a+aM5Y1qI7Y0sUuKOOT7K11Os1LPJVeOtMYykYfouObFGADVodkma5pec1ClGtu49JXY9JtAjTVeBsUxiuhVGMtktMzRPQOdztbWKC7cXVuzFnXx7
+3em7NT3L8gc3Q3aNex1WW0+m8Z2Sn2+NkUAALh26gVTQsFKWyCbXiAszdB/c6U2OXH0yBtmS9K0xjyfryZic2B3PVzV4vooBfzxOFd9sCpm6HryJRK7YyeldpdXPcgzb
+V/FhEvIGu/PcV5mdelxNSb2bKN0jvgiSwZ54Pvd4VSinL0wapAUJIfqC9ODw1i4ELB5nMkXVysEHDkG3uooMAQDeSA0JzSEI8v+MAfSnLxz/cJAf5TxMByN5mosKCylb
+S1Y5T7awS0rwzC1PuO9a6Vpx3At5ynj6Tt9bYyYeJhpkQx7fey52F+XE9EH4rrsnN7aDkTAw/HpSByN5GgfyOGvz5PgT4Qp3w+HeKOq9pqQepy8cn4bSyHVFLOtRFDCZ
+BFAoFEoTS6gRHYLGGGYkqIAUFximMSBCgpRj2gESiCVJkklENGHL/63bBBoDJ9AQRhhpkcRcpIkiKWKiSMwH8oN8BADcL8/pd2i5S4ywfipwrSC19cpd6Iz7LBld9F5A
+SzOaF+kRyVmqiirjm3BULY6jkU499Ony1L92m3q8UjCaLA2Il+kJh95LxLADx2TNEvDjOEyruqx3T7R6rIU7hAAgOBgnuiL2IzJALc35+Gj4PorMEbLXCyEvEaAG4xNY
+wYM7kWOuFA==
+    `,
+    'error': `
+KLUv/QBY9Q0Ahp1PIFBt0gYj+ButfS1lR9Lbn4homtEJ3bSNbtNdmDJmhm7WRwBDAEUA5lCQMezye+kRVMqUxVMQPvbMJiYp5Wt5xbDHsecthbmHR1H9OY9dhm5hQ1k8
+xSHD4FFYwraTAqNLComZCBALfgOx3sTm4UmpYdbSmquf5uuyc8Zh2mNGZ9Y8JK/e+x4eL64WQsZPPIqXJdEInoOVMic2EjNvm5clSQgUu/BMWkUlg/wkSF4hLPINe1au
+Hh43MPIEeZrhgKHByxJhRfd9uM/YCaB64XD+OMZ1A3/OVi/5urx4Z+drJ6lmocO06VLjyKqmjv9Y28uSLHTTLVMByUQyoVC4wJoeSxAAkG+W2nYANi5BGULmuJSrHjBY
+DKBLDoZQh8iePkkxVmPbAA5UdpjqGed1+f7InuGHpuW4tJpQfs9YWuPEMyAggqqSesJDFDHJE41sGnPKCMDsUnfRoh0kAs0+1BlcFzdw8aCabEeICcBMCEAIeKfjsHBj
+8aaJiBsZt8IMKAygIqTZLqJcz3FwD/zzwnMaKwUoGneAW3rNLbycGGyUZYyNZ4D+EGIMQ/GW20ztZRR0F08vH9ykKidChDI=
+    `,
+    'notification': `
+KLUv/QBYRQ4AFtxSIzBr7INBHeQOSZAn+iqk1qhisDgrsUa0Sx1OkP7mucwoLoQBRgBFAEoATh+N28y+venL9qaqCrCog1VVEwhloub4UtVGTMqVlnb+1pNDPzqcmywG
+GRQWGgmqvlfah7AizVTFlbjRzs8aO/i99fclAawZlMq2t5Lf+7BN3G92uP5NzLFORZdxaivu9zbVET/W/NxfjvqVzcvtZIdq52fpUNFH90VeJhajPLBTln22sSW+V5qa
+B1AUdUKGTugodMKFTrhQEHfsIZvp0JqQoeTEjsUmrosOrQh7ULJTNEBVVVnSMhT0b5qjyKS1zw+Iiv68Na4nj5FDY9CasEBFzc4FSUSyGMdxGhyFCkQohBo8yiy/Uh/V
+R39uI243OzR/ULPNr1nRRxM/+UrciGxfRMQ5tLjHjwPXCyFLTOgMLNTjHUOayaTFECgSAs7CAi8gEBIBgc7ydwzw0AJafkwJKgMXQHvAriy3FHjf7Yy5yysOImUQ5OAp
+h9YA/h3uIheruqAihxiWi8gRWYCtQ8sX6GcAX6Qf/RIcNGOWg3A1JRo00DYiOAGqHKUMgZgEFus22zBuBo7Ge+l+9EDcBTE5t+pnoUssfr5O
+    `,
+    'request': `
+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
+    `,
+    'validate': `
+KLUv/QBYzQ0ANppMJCCNOAfl2EiTkmsSxhdIpW1L4sWVw5S86FNlhyO5dMAfEMIFiEEAQgBCANv8oHOnuQcp+n+FekPCmdM5EqooCzuf5jJ+tRXKzej6NP5qXOU3GorS
+LBiCsXBXG4zFIbiRV1+4SzBxcOq9MIJaLuM6owvkD8fZlLvO9Gp80PnyUh2ED2dcPtg6gl8kr23zGYXyrQdkQJWKOuOJs6kLBgoMZ3jCPfik7rUzto3Wwnak1RvmUCmU
+jwL4o9ukCN1LXmNukMOXxYMQBJ3FmvR9gjvpU1d2+uqNc9L7W6l1T50xxjlhMLhNWrEeaf8POcMgZ1QKSqVUb1hURGm7Iyjwx+MDAs7iQkgEboo/HI9f+hUob0ZflF1G
+viiU72lTLgXwv8aWdj4t0qbc5Xg7ibVpldzxKfcBNCAgQkIYxB3TJMsuVMkg9g1cCgNZP0csZtJqYFipVGVwNxI2AP8efCIjDEiA+FaMrqvGg6PF3lqixMDd3LcpKb4Y
+1ZAbCJMcXcOoBQ3OXugb0Fs+KttukpOfkECMgLZhxEvI3ApJpoAmcFt6/sy0HxR2kekAI5bKliQOFtIT5WeNI2Az
+    `,
+};
+async function getADKSource(name: string): Promise<Buffer> {
+    if (!(name in adksource)) { return null; }
+    return new Promise<Buffer>(resolve => {
+        zstdDecompress(Buffer.from(adksource[name].trim(), 'base64'), (error, decompressedContent) => {
+            if (error) { resolve(null); } else { resolve(decompressedContent); }
+        })
+    });
+}
+// END LIBRARY 495608b450b3a2b1e61a9656ffa8c8da8fe1a0f2d2416e4054a5a43ef7442371
 
 async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
     if (!options.client && !options.server) { return; }
@@ -2035,6 +2069,19 @@ async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
 async function dispatch(command: string[]) {
     if (typeof command[0] == 'undefined') {
         await build(null, { client: true, server: true, emit: true, ignoreHashMismatch: false });
+    } else if (command[0] == 'adk') {
+        await Promise.all([
+            ['access-types', 'src/server/access-types.d.ts'],
+            ['action-types', 'src/server/action-types.d.ts'],
+            ['error', 'src/server/error.ts'],
+            ['database', 'src/server/database-helper.ts'],
+            ['validate', 'src/server/validate.ts'],
+            ['notification', 'src/client/notification.ts'],
+            ['request', 'src/client/request.tsx'],
+        ].map(async ([name, filepath]) => {
+            await fs.writeFile(filepath, await getADKSource(name));
+            logInfo('akari', `write adk ${name} to ${filepath}`);
+        }));
     } else if (command[0] != 'with' || command[1] != 'remote') {
         await build(null, {
             client: !command.includes('noclient'),

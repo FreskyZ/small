@@ -3,11 +3,8 @@ import { useState, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import { css } from '@emotion/react';
 import Markdown from 'react-markdown';
-import * as I from '../shared/api.js';
-
-function CaretRightOutlined() {
-    return <svg viewBox="0 0 1024 1024" focusable="false" data-icon="caret-right" width="1em" height="1em" fill="currentColor" aria-hidden="true"><path d="M715.8 493.5L335 165.1c-14.2-12.2-35-1.2-35 18.5v656.8c0 19.7 20.8 30.7 35 18.5l380.8-328.4c10.9-9.4 10.9-27.6 0-37z"></path></svg>;
-}
+import * as I from '../shared/api-types.js';
+import { CaretRightOutlined } from './icons.js';
 
 let notificationTimer: any;
 let notificationElement: HTMLSpanElement;
