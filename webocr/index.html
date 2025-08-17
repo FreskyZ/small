@@ -93,6 +93,9 @@
             ocrclient = new tesseract.OCRClient();
             // ATTENTION tesseract-core.wasm and these trainneddata both need compression, consider nas/oss/s3 them
             // UPDATE also tesseract-core.wasm does not respect must-revalidate (for now add to static-content only enables compression), so have to nas/oss/s3
+            // the original c++ api supports multiple languages, this wrapper does not, may be I should change the source code to support that
+            // this https://github.com/naptha/tesseract.js support, but this may not support single html applications
+            // UPDATE consider use public api to provide oss download url?
             // await ocrclient.loadModel('https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/eng.traineddata');
             await ocrclient.loadModel('https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/main/chi_sim.traineddata');
           }
