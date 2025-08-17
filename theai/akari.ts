@@ -1,7 +1,7 @@
 import readline from 'node:readline/promises';
 // END IMPORT
 // components: codegen, mypack, sftp, typescript, eslint, messenger, common
-// adk: access-types, action-types, error, database, validate, notification, request
+// adk: access-types, action-types, error, database, validate, notification, client-startup
 // BEGIN LIBRARY
 import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -358,138 +358,18 @@ function generateWebInterfaceServer(config: CodeGenerationConfig, originalConten
     const hash = crypto.hash('sha256', sb);
     return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
 }
-// index.tsx, return null for not ok
-function generateWebInterfaceClient(config: CodeGenerationConfig, originalContent: string): string {
+// api.ts, return null for not ok
+function generateWebInterfaceClient(config: CodeGenerationConfig): string {
 
-    const manualContent = checkPartialGeneratedContentHash(config, 'actions-client', originalContent);
-    if (!manualContent) { return null; }
     let sb = '';
     sb += '// --------------------------------------\n';
     sb += '// ------ ATTENTION AUTO GENERATED ------\n';
     sb += '// --------------------------------------\n';
-
-    // NOTE this is hardcode replaced in make-akari.ts
-    sb += `
-function EmptyPage({ handleContinue }: {
-    handleContinue: () => void,
-}) {
-    const styles = {
-        app: css({ maxWidth: '360px', margin: '32vh auto' }),
-        fakeText: css({ fontSize: '14px' }),
-        mainText: css({ fontSize: '10px', color: '#666', marginTop: '8px' }),
-        button: css({ border: 'none', outline: 'none', background: 'transparent', cursor: 'pointer', fontSize: '14px', borderRadius: '4px', '&:hover': { background: '#ccc' } }),
-    };
-    return <div css={styles.app}>
-        <div css={styles.fakeText}>{emptytext}</div>
-        <div css={styles.mainText}>
-            I mean, access token not found, if you are me, click <button css={styles.button} onClick={handleContinue}>CONTINUE</button>, or else you seems to be here by accident or curious, you may leave here because there is no content for you, or you may continue your curiosity by finding my contact information.
-        </div>
-    </div>;
-}
-
-let accessToken: string;
-(window as any)['setaccesstoken'] = (v: string) => accessToken = v; // test access token expiration
-
-function gotoIdentityProvider() {
-    if (window.location.pathname.length > 1) {
-        localStorage['return-pathname'] = window.location.pathname;
-        localStorage['return-searchparams'] = window.location.search;
-    }
-    window.location.assign(\`https://id.example.com?return=https://\${window.location.host}\`);
-}
-
-async function startup(render: () => void) {
-    const localStorageAccessToken = localStorage['access-token'];
-    const authorizationCode = new URLSearchParams(window.location.search).get('code');
-
-    if (localStorageAccessToken) {
-        const response = await fetch('https://api.example.com/user-credential', { headers: { authorization: 'Bearer ' + localStorageAccessToken } });
-        if (response.ok) { accessToken = localStorageAccessToken; render(); return; } // else goto signin
-    } else if (!authorizationCode && window.location.pathname.length == 1) { // only display emptyapp when no code and no path
-        await new Promise<void>(resolve => root.render(<EmptyPage handleContinue={resolve} />));
-    }
-    if (!authorizationCode) {
-        gotoIdentityProvider();
-    } else {
-        const url = new URL(window.location.toString());
-        url.searchParams.delete('code');
-        if (localStorage['return-pathname']) { url.pathname = localStorage['return-pathname']; localStorage.removeItem('return-pathname'); }
-        if (localStorage['return-searchparams']) { url.search = localStorage['return-searchparams']; localStorage.removeItem('return-searchparams'); }
-        window.history.replaceState(null, '', url.toString());
-        const response = await fetch('https://api.example.com/signin', { method: 'POST', headers: { authorization: 'Bearer ' + authorizationCode } });
-        if (response.status != 200) { notification('Failed to sign in, how does that happen?'); }
-        else { accessToken = localStorage['access-token'] = (await response.json()).accessToken; render(); }
-    }
-}
-
-let gotoIdModalMaskElement: HTMLDivElement;
-let gotoIdModalContainerElement: HTMLDivElement;
-let gotoIdModalOKButton: HTMLButtonElement;
-let gotoIdModalCancelButton: HTMLButtonElement;
-function confirmGotoIdentityProvider() {
-    if (!gotoIdModalMaskElement) {
-        gotoIdModalMaskElement = document.createElement('div');
-        gotoIdModalMaskElement.style = 'position:fixed;inset:0;background-color:#7777;display:none';
-        gotoIdModalContainerElement = document.createElement('div');
-        gotoIdModalContainerElement.style = 'z-index:100;position:relative;margin:60px auto;padding:12px;'
-            + 'border-radius:8px;background-color:white;max-width:320px;box-shadow:3px 3px 10px 4px rgba(0,0,0,0.15);';
-        const titleElement = document.createElement('div');
-        titleElement.style = 'font-weight:bold;margin-bottom:8px';
-        titleElement.innerText = 'CONFIRM';
-        const contentElement = document.createElement('div');
-        contentElement.innerText = 'Authentication failed, click OK to authenticate again, it is likely to lose unsaved changes, click CANCEL to try again later.';
-        const buttonContainerElement = document.createElement('div');
-        buttonContainerElement.style = 'display:flex;flex-flow:row-reverse;gap:12px;margin-top:12px';
-        gotoIdModalOKButton = document.createElement('button');
-        gotoIdModalOKButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
-        gotoIdModalOKButton.innerText = 'OK';
-        gotoIdModalCancelButton = document.createElement('button');
-        gotoIdModalCancelButton.style = 'font-size:14px;border:none;outline:none;cursor:pointer;background:transparent;float:right';
-        gotoIdModalCancelButton.innerText = 'CANCEL';
-        buttonContainerElement.appendChild(gotoIdModalOKButton);
-        buttonContainerElement.appendChild(gotoIdModalCancelButton);
-        gotoIdModalContainerElement.appendChild(titleElement);
-        gotoIdModalContainerElement.appendChild(contentElement);
-        gotoIdModalContainerElement.appendChild(buttonContainerElement);
-        document.body.appendChild(gotoIdModalMaskElement);
-        document.body.appendChild(gotoIdModalContainerElement);
-    }
-    const handleCancel = () => {
-        gotoIdModalCancelButton.removeEventListener('click', handleCancel);
-        gotoIdModalMaskElement.style.display = 'none';
-        gotoIdModalContainerElement.style.display = 'none';
-    };
-    gotoIdModalCancelButton.addEventListener('click', handleCancel);
-    const handleOk = () => {
-        gotoIdModalOKButton.removeEventListener('click', handleOk);
-        localStorage.removeItem('access-token');
-        gotoIdentityProvider();
-    };
-    gotoIdModalOKButton.addEventListener('click', handleOk);
-    gotoIdModalMaskElement.style.display = 'block';
-    gotoIdModalContainerElement.style.display = 'block';
-}
-
-async function sendRequest(method: string, path: string, parameters?: any, data?: any): Promise<any> {
-    const url = new URL(\`https://api.example.com/example\${path}\`);
-    Object.entries(parameters || {}).forEach(p => url.searchParams.append(p[0], p[1].toString()));
-    const response = await fetch(url.toString(), data ? {
-        method,
-        body: JSON.stringify(data),
-        headers: { 'authorization': 'Bearer ' + accessToken, 'content-type': 'application/json' },
-    } : { method, headers: { 'authorization': 'Bearer ' + accessToken } });
-    if (response.status == 401) { confirmGotoIdentityProvider(); return Promise.reject('Authentication failed.'); }
-    // normal/error both return json body, but void do not
-    const hasJsonBody = response.headers.has('content-Type') && response.headers.get('content-Type').includes('application/json');
-    const responseData = hasJsonBody ? await response.json() : {};
-    return response.ok ? Promise.resolve(responseData)
-        : response.status >= 400 && response.status < 500 ? Promise.reject(responseData)
-        : response.status >= 500 ? Promise.reject({ message: 'internal error' })
-        : Promise.reject({ message: 'unknown error' });
-}
-`.replaceAll('api.example.com/example', `api.example.com/${config.appname}`);
-
-    sb += 'const api = {\n';
+    sb += '\n';
+    sb += `import type { startup } from './startup.js';\n`;
+    sb += `import type * as I from '../shared/api-types.js';\n`;
+    sb += '\n';
+    sb += 'export const makeapi = (sendRequest: Parameters<Parameters<typeof startup>[5]>[0]) => ({\n';
     // for now now action.key only used here
     for (const action of config.actions.filter(a => a.key == 'main')) {
         const functionName = action.name.charAt(0).toLowerCase() + action.name.substring(1);
@@ -527,10 +407,8 @@ async function sendRequest(method: string, path: string, parameters?: any, data?
         }
         sb = sb.substring(0, sb.length - 2) + '),\n';
     }
-    sb += '};\n';
-
-    const hash = crypto.hash('sha256', sb);
-    return `${manualContent}// AUTOGEN ${hash}\n${sb}`;
+    sb += `});\n`;
+    return sb;
 }
 
 interface CodeGenerationOptions {
@@ -572,8 +450,8 @@ async function generateCode(config: CodeGenerationConfig): Promise<boolean> {
         { kind: 'server', name: 'database-types.d.ts', run: createTask('src/server/database-types.d.ts', generateDatabaseTypes) },
         { kind: 'server', name: 'database.sql', run: createTask('src/database.sql', generateDatabaseSchema) },
         { kind: 'client,server', name: 'api.d.ts', run: createTask('src/shared/api-types.d.ts', generateWebInterfaceTypes) },
+        { kind: 'client', name: 'index.tsx', run: createTask('src/client/api.ts', generateWebInterfaceClient) },
         { kind: 'server', name: 'index.ts', run: createPartialTask('src/server/index.ts', generateWebInterfaceServer) },
-        { kind: 'client', name: 'index.tsx', run: createPartialTask('src/client/index.tsx', generateWebInterfaceClient) },
     ].filter(t => (config.options.client && t.kind.includes('client')) || (config.options.server && t.kind.includes('server')));
     // console.log('scheduled tasks', tasks);
     await Promise.all(tasks.map(t => t.run()));
@@ -1923,6 +1801,39 @@ KLUv/QBYFQoAphI6IkCptgF4ir8lEiLLLh4/rXWLszbOx2Xca9k+tvb41VHAAXIxAC8AMgBtokolDg5h
 oH28Sq2SDqqilt7uBTJFb7cqHrSOu2V/LpE9aB2mn++PT16/TgHZa50iqNAUPa7h8p2MASEgMAIjKKTsBgjAv6wZROiRI8cZBqZ/lJUkFSsAAbz0LgT10IZCAjgJ4AEG
 FRcwRYDhO7j3MOziteEk9HFLgEvtJe6x/mJGpcycV4RvHmHeEZpQPPJ7Ag==
     `,
+    'client-startup': `
+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
+    `,
     'database': `
 KLUv/QBY9RQANql2JgBxnQMWWOSVbZ7LYMNvkS382AlzeDs948bG8nxD4PZT3P//3f9eZwBoAG4Aj9J3Oacucl/42xtNphRnWk+991Rn0yinc+UtY9zpjGV9uPFVb8qz
 1W+NOeWMvU6f1e9a+aM5Y1qI7Y0sUuKOOT7K11Os1LPJVeOtMYykYfouObFGADVodkma5pec1ClGtu49JXY9JtAjTVeBsUxiuhVGMtktMzRPQOdztbWKC7cXVuzFnXx7
@@ -1947,33 +1858,6 @@ B1AUdUKGTugodMKFTrhQEHfsIZvp0JqQoeTEjsUmrosOrQh7ULJTNEBVVVnSMhT0b5qjyKS1zw+Iiv68
 R39uI243OzR/ULPNr1nRRxM/+UrciGxfRMQ5tLjHjwPXCyFLTOgMLNTjHUOayaTFECgSAs7CAi8gEBIBgc7ydwzw0AJafkwJKgMXQHvAriy3FHjf7Yy5yysOImUQ5OAp
 h9YA/h3uIheruqAihxiWi8gRWYCtQ8sX6GcAX6Qf/RIcNGOWg3A1JRo00DYiOAGqHKUMgZgEFus22zBuBo7Ge+l+9EDcBTE5t+pnoUssfr5O
     `,
-    'request': `
-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
-    `,
     'validate': `
 KLUv/QBYzQ0ANppMJCCNOAfl2EiTkmsSxhdIpW1L4sWVw5S86FNlhyO5dMAfEMIFiEEAQgBCANv8oHOnuQcp+n+FekPCmdM5EqooCzuf5jJ+tRXKzej6NP5qXOU3GorS
 LBiCsXBXG4zFIbiRV1+4SzBxcOq9MIJaLuM6owvkD8fZlLvO9Gp80PnyUh2ED2dcPtg6gl8kr23zGYXyrQdkQJWKOuOJs6kLBgoMZ3jCPfik7rUzto3Wwnak1RvmUCmU
@@ -1990,8 +1874,22 @@ async function getADKSource(name: string): Promise<Buffer> {
         })
     });
 }
-// END LIBRARY 495608b450b3a2b1e61a9656ffa8c8da8fe1a0f2d2416e4054a5a43ef7442371
+// END LIBRARY ce0bdad18586a3a17477294db72f5d3ce13917801fda937686000ba60b985fb6
 
+async function deployADK() {
+    await Promise.all([
+        ['access-types', 'src/server/access-types.d.ts'],
+        ['action-types', 'src/server/action-types.d.ts'],
+        ['error', 'src/server/error.ts'],
+        ['database', 'src/server/database-helper.ts'],
+        ['validate', 'src/server/validate.ts'],
+        ['notification', 'src/client/notification.ts'],
+        ['client-startup', 'src/client/startup.tsx'],
+    ].map(async ([name, filepath]) => {
+        await fs.writeFile(filepath, await getADKSource(name));
+        logInfo('akari', `write adk ${name} to ${filepath}`);
+    }));
+}
 async function build(ecx: MessengerContext, options: CodeGenerationOptions) {
     if (!options.client && !options.server) { return; }
     const targetName = [options.client ? 'client' : '', options.server ? 'server' : ''].filter(x => x).join(' + ');
@@ -2070,18 +1968,7 @@ async function dispatch(command: string[]) {
     if (typeof command[0] == 'undefined') {
         await build(null, { client: true, server: true, emit: true, ignoreHashMismatch: false });
     } else if (command[0] == 'adk') {
-        await Promise.all([
-            ['access-types', 'src/server/access-types.d.ts'],
-            ['action-types', 'src/server/action-types.d.ts'],
-            ['error', 'src/server/error.ts'],
-            ['database', 'src/server/database-helper.ts'],
-            ['validate', 'src/server/validate.ts'],
-            ['notification', 'src/client/notification.ts'],
-            ['request', 'src/client/request.tsx'],
-        ].map(async ([name, filepath]) => {
-            await fs.writeFile(filepath, await getADKSource(name));
-            logInfo('akari', `write adk ${name} to ${filepath}`);
-        }));
+        await deployADK();
     } else if (command[0] != 'with' || command[1] != 'remote') {
         await build(null, {
             client: !command.includes('noclient'),
@@ -2109,6 +1996,8 @@ async function dispatch(command: string[]) {
                 process.exit(0);
             } else if (line.startsWith('connect')) {
                 await connectRemote(ecx);
+            } else if (line == 'adk') {
+                await deployADK();
             } else if (line == 'app') {
                 await build(ecx, { client: true, server: true, emit: true, ignoreHashMismatch: false });
             } else if (line.startsWith('app')) {
