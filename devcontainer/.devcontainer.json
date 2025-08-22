@@ -1,0 +1,44 @@
+{
+    "name": "fine",
+    "image": "my-devcontainers/node:1",
+    // # setup volumes
+    // docker volume create repo-fine
+    // docker volume create repo-small
+    // docker run -it --rm -v repo-fine:/x my-devcontainers/base:1 -c "git clone git@github.com:FreskyZ/fine /x"
+    // docker run -it --rm -v repo-small:/x my-devcontainers/base:1 -c "git clone git@github.com:FreskyZ/small /x"
+    // docker volume create node_modules
+    // docker run -it --rm -v node_modules:/x my-devcontainers/base:1 -c "cd /x && mkdir fine yala yama"
+    // # backup volumes
+    // # this does not exclude vcs, but I do need the .git to backup local branches, etc. # by the way, --exclude-vcs is not in busybox tar
+    // docker run -it --rm -v repo-fine:/x/fine -v repo-small:/x/small -v .:/backup my-devcontainers/base:1 -c "cd /x && tar zcvf /backup/repo-$(date +%Y%m%d).tar.gz -C /x ."
+    "workspaceMount": "source=repo-fine,target=/x/fine,type=volume",
+    "workspaceFolder": "/x",
+    "mounts": [
+        { "source": "repo-small", "target": "/x/small", "type": "volume" },
+        { "source": "${localEnv:AKARIN_SECRET_DIR}/akari.json", "target": "/etc/akari.json", "type": "bind" },
+        // split node modules into another volume so can directly backup source code volume
+        // use string form because the object form seems not support volumne-subpath
+        "type=volume,src=node_modules,volume-subpath=fine,dst=/x/fine/node_modules",
+        "type=volume,src=node_modules,volume-subpath=yala,dst=/x/small/theai/node_modules",
+        "type=volume,src=node_modules,volume-subpath=yama,dst=/x/small/yama/node_modules"
+    ],
+    // add reasonable host name, add reasonable container name
+    "runArgs": ["-h=devcontainer1", "--name=devcontainer1"],
+    // add container env if need
+    // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
+    // add project specific alias here?
+    "onCreateCommand": "echo \"alias akari=\\\"node akari.ts\\\"\" >> ~/.zshrc && echo \"alias make-akari=\\\"node script/make-akari.ts\\\"\" >> ~/.zshrc",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "GitHub.copilot",
+                "GitHub.copilot-chat"
+            ],
+            "settings": {
+                "js/ts.implicitProjectConfig.strictNullChecks": false,
+                "js/ts.implicitProjectConfig.target": "ESNext",
+                "emmet.showExpandedAbbreviation": "never"
+            }
+        }
+    }
+}
