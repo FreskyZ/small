@@ -7,7 +7,6 @@ import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Interface } from 'node:readline/promises';
-import tls from 'node:tls';
 import { zstdCompress, zstdCompressSync, zstdDecompress } from 'node:zlib';
 import js from '@eslint/js';
 import stylistic from '@stylistic/eslint-plugin';
@@ -22,7 +21,7 @@ import ts from 'typescript';
 import tseslint from 'typescript-eslint';
 
 // -----------------------------------------
-// ------ script/components/common.ts ------ 
+// ------ script/components/common.ts ------
 // -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
 
@@ -53,10 +52,10 @@ interface ScriptConfig {
     certificate: string,
     ssh: { user: string, identity: string, passphrase: string },
 }
-const scriptconfig: ScriptConfig = JSON.parse(await fs.readFile('akari.json', 'utf-8'));
+const scriptconfig: ScriptConfig = JSON.parse(await fs.readFile('/etc/akari.json', 'utf-8'));
 
 // ------------------------------------------
-// ------ script/components/codegen.ts ------ 
+// ------ script/components/codegen.ts ------
 // -------- ATTENTION AUTO GENERATED --------
 // ------------------------------------------
 
@@ -387,7 +386,11 @@ function generateWebInterfaceClient(config: CodeGenerationConfig): string {
         if (sb.endsWith(', ')) {
             sb = sb.substring(0, sb.length - 2);
         }
-        sb += `): Promise<${action.return ? `I.${action.return}` : 'void'}> => `;
+        const returnType = !action.return ? 'void'
+            : action.return == 'string' ? 'string'
+            : action.return == 'string[]' ? 'string[]'
+            : `I.${action.return}`;
+        sb += `): Promise<${returnType}> => `;
 
         sb += `sendRequest('${action.method}', '${action.public ? '/public' : ''}/v1/${action.path}', `;
         if (action.parameters.length) {
@@ -461,7 +464,7 @@ async function generateCode(config: CodeGenerationConfig): Promise<boolean> {
 }
 
 // ---------------------------------------------
-// ------ script/components/typescript.ts ------ 
+// ------ script/components/typescript.ts ------
 // ---------- ATTENTION AUTO GENERATED ---------
 // ---------------------------------------------
 
@@ -643,7 +646,7 @@ function transpile(tcx: TypeScriptContext): TypeScriptContext {
 }
 
 // -----------------------------------------
-// ------ script/components/eslint.ts ------ 
+// ------ script/components/eslint.ts ------
 // -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
 
@@ -657,6 +660,7 @@ interface ESLintOptions {
 async function eslint(options: ESLintOptions): Promise<boolean> {
     const eslint = new ESLint({
         ignorePatterns: options.ignore,
+        // concurrency: 'auto', // no, this is not compatible with this inline config
         overrideConfigFile: true,
         plugins: {
             tseslint: tseslint.plugin as any,
@@ -752,7 +756,7 @@ async function eslint(options: ESLintOptions): Promise<boolean> {
 }
 
 // ---------------------------------------
-// ------ script/components/sftp.ts ------ 
+// ------ script/components/sftp.ts ------
 // ------- ATTENTION AUTO GENERATED ------
 // ---------------------------------------
 
@@ -793,7 +797,7 @@ async function deploy(assets: UploadAsset[]): Promise<boolean> {
 }
 
 // -----------------------------------------
-// ------ script/components/mypack.ts ------ 
+// ------ script/components/mypack.ts ------
 // -------- ATTENTION AUTO GENERATED -------
 // -----------------------------------------
 
@@ -1334,7 +1338,7 @@ async function mypack(mcx: MyPackContext, tcx?: TypeScriptContext, lastmcx?: MyP
 }
 
 // --------------------------------------------
-// ------ script/components/messenger.ts ------ 
+// ------ script/components/messenger.ts ------
 // --------- ATTENTION AUTO GENERATED ---------
 // --------------------------------------------
 
@@ -1561,15 +1565,15 @@ const buildScriptMessageResponseParser = new BuildScriptMessageResponseParser();
 async function connectRemote(ecx: MessengerContext) {
     if (!ecx['?']) {
         // ???
-        const myCertificate = await fs.readFile(scriptconfig.certificate, 'utf-8');
-        const originalCreateSecureContext = tls.createSecureContext;
-        tls.createSecureContext = options => {
-            const originalResult = originalCreateSecureContext(options);
-            if (!options.ca) {
-                originalResult.context.addCACert(myCertificate);
-            }
-            return originalResult;
-        };
+        // const myCertificate = await fs.readFile(scriptconfig.certificate, 'utf-8');
+        // const originalCreateSecureContext = tls.createSecureContext;
+        // tls.createSecureContext = options => {
+        //     const originalResult = originalCreateSecureContext(options);
+        //     if (!options.ca) {
+        //         originalResult.context.addCACert(myCertificate);
+        //     }
+        //     return originalResult;
+        // };
         ecx['?'] = true;
         // this place exactly can use to initialize member fields
         ecx.reconnectCount = 0;
@@ -1627,8 +1631,10 @@ async function connectRemote(ecx: MessengerContext) {
                 for (const buffer of buffers) {
                     logInfo(`tunnel`, `receive raw data ${buffer.length} bytes`);
                     buildScriptMessageResponseParser.push(buffer);
-                    const response = buildScriptMessageResponseParser.pull();
-                    if (response) {
+                    // one push may result in multiple packets
+                    while (true) {
+                        const response = buildScriptMessageResponseParser.pull();
+                        if (!response) { break; }
                         if (!response.id) {
                             logError('tunnel', `received response without id, when will this happen?`);
                         } else if (!(response.id in ecx.wakers)) {
@@ -1874,7 +1880,7 @@ async function getADKSource(name: string): Promise<Buffer> {
         })
     });
 }
-// END LIBRARY c276d196ff958c3d0b7ee8065b80232e9d2a3002b9a3f596a2f7d765ee7afde6
+// END LIBRARY 8bc8495fe6ab701995158cc256f59b16ee67c28256ed57c3b608aee036fc0de0
 
 async function deployADK() {
     await Promise.all([

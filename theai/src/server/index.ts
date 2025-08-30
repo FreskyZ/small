@@ -18,10 +18,9 @@ const config = JSON.parse(await fs.readFile('config', 'utf-8')) as {
     // so this is the connection options to connect to core module database
     database: mysql.PoolOptions,
 };
-// this server specific config file
-const thisconfig = JSON.parse(await fs.readFile('servers/yala.json', 'utf-8')) as {
-    apikey: string,
-};
+// this server specific config file, but nothing for now
+// const thisconfig = JSON.parse(await fs.readFile('servers/yala.json', 'utf-8')) as {
+// };
 // so need to change database name to connect to this app's database
 const pool = mysql.createPool({ ...config.database, database: 'YALA', typeCast: databaseTypeCast });
 
@@ -513,7 +512,7 @@ async function getDMessages(_ax: ActionContext, sessionId: string): Promise<I.dm
     }));
 }
 
-// AUTOGEN d3e9854b83c9f525c1e45214f578807e7c2fdb68047bef37949224a8b97fb259
+// AUTOGEN e4ac787c44b3c05cb0f2aa6a8ef4174d1b87d6f3b84b54f5cedf13c36f7a6c6c
 // --------------------------------------
 // ------ ATTENTION AUTO GENERATED ------
 // --------------------------------------
@@ -535,6 +534,7 @@ export async function dispatch(ctx: ActionServerRequest): Promise<ActionServerRe
         'POST /v1/complete-message': () => completeMessage(ax, v.id('sessionId'), v.id('messageId')),
         'POST /v1/share-session': () => shareSession(ax, v.id('sessionId')),
         'POST /v1/unshare-session': () => unshareSession(ax, v.id('sessionId')),
+        'GET /v1/models': () => getModels(ax),
         'GET /v1/account-balance': () => getAccountBalance(ax),
         'GET /v1/dsessions': () => getDSessions(ax),
         'GET /v1/dmessages': () => getDMessages(ax, v.string('id')),

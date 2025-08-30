@@ -17,5 +17,6 @@ export const makeapi = (sendRequest: Parameters<Parameters<typeof startup>[5]>[0
     completeMessage: (sessionId: number, messageId: number): Promise<I.Message> => sendRequest('POST', '/v1/complete-message', { sessionId, messageId }),
     shareSession: (sessionId: number): Promise<I.ShareSessionResult> => sendRequest('POST', '/v1/share-session', { sessionId }),
     unshareSession: (sessionId: number): Promise<void> => sendRequest('POST', '/v1/unshare-session', { sessionId }),
+    getModels: (): Promise<string[]> => sendRequest('GET', '/v1/models'),
     getAccountBalance: (): Promise<I.AccountBalance> => sendRequest('GET', '/v1/account-balance'),
 });

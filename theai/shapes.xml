@@ -31,6 +31,10 @@
   <table name="UserModel">
     <primary-key field="UserId" />
     <field name="UserId" type="id" />
+    <!-- model name -->
+    <!-- in theory you can put a base url here because
+      for now supported models are all openai completion api compatible,
+      but there will be differences so the api difference handling is in source code -->
     <field name="Name" type="string" size="100" />
     <field name="APIKey" type="string" size="100" />
   </table>
@@ -92,6 +96,7 @@
   <!-- return shareid the guid -->
   <action key="main" name="ShareSession" a1="sessionId" return="ShareSessionResult" />
   <action key="main" name="UnshareSession" a1="sessionId" />
+  <action key="main" name="GetModels" return="string[]" />
   <!-- don't use up money -->
   <action key="main" name="GetAccountBalance" return="AccountBalance" />
   <!-- following are currently investigating -->
