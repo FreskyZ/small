@@ -49,7 +49,6 @@ WORKDIR /root
 ENTRYPOINT ["/bin/zsh"]
 
 # docker build --target node --tag mydevc/node:2 .
-# FROM base AS node
 FROM mydevc/base:2 AS node
 
 # this is learned from node official image source code,
@@ -92,7 +91,6 @@ RUNEOF
 ENTRYPOINT ["/bin/zsh"]
 
 # docker build --target rust --tag mydevc/rust:2 .
-# FROM base AS rust
 FROM mydevc/base:2 AS rust
 
 # rust download is slow,
@@ -133,3 +131,96 @@ RUNEOF
 # $ cargo run
 
 ENTRYPOINT ["/bin/zsh"]
+
+# an ubuntu image with apt source configured
+# docker build --target ubuntu --tag mydevc/ubuntu:24 .
+FROM ubuntu:24.04 AS ubuntu
+
+RUN <<RUNEOF
+set -ex
+# you need update-ca-certificates to use https mirror, you need apt update to update-ca-certificates?
+apt-get update
+apt-get install -y ca-certificates --no-install-recommends
+update-ca-certificates
+sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+apt-get update
+RUNEOF
+
+# extract zip, 7z and rar
+# docker build --target unzip --tag mydevc/unzip:1 .
+# usage:
+# mkdir ~/unzip-work
+# docker run --rm --name unzipper1 -it -v ~/unzip-work:/work mydevc/unzip:1
+# `7z x filename.7z` or `unrar x filename.rar`
+FROM mydevc/ubuntu:24 AS unzip
+RUN apt-get install -y --no-install-recommends unrar p7zip-full
+WORKDIR /work
+
+# docker build --target cpp-stage1 --tag mydevc/cpp:stage1 .
+FROM mydevc/base:2 AS cpp-stage1
+
+# in the same directory that calls git clone (outside of repository)
+# tar cJf llvm-project.tar.xz -C ./llvm-project .
+# for reference
+#   github webpage downloaded zip file is about 300m
+#   uncompress size is 2GB WITHOUT the .git folder
+#   git cloned repository archived tar.xz file is about 426m
+#   uncompress size is estimated 2.6GB with .git folder
+ADD --chown=0 llvm-project.tar.xz /llvm-src
+
+# build-base: include gcc, g++, ar, ld, gnu make
+# python3: this is python3.12 for now
+# linux-headers: docs does not mention this, I think this naturally exists in normal distro
+# zlib: missing zlib will make you completely compile llvm again if you need zlib later
+RUN apk add --no-cache build-base cmake ninja python3 linux-headers git zlib-dev
+
+# build llvm and clang first
+# LLVM_ENABLE_PROJECTS: include clang and linker
+# LLVM_ENABLE_RUNTIMES: include compiler-rt and libc++
+# CMAKE_INSTALL_PREFIX: install in other location to make later COPY simpler
+# LLVM_DEFAULT_TARGET_TRIPLE: seems need explicitly specify musl
+# COMPILE_RT_BUILD_GWP_ASAN: this include a glibc dependency and cannot opt out that alone, so disable this for now
+# LIBCXX_HAS_MUSL_LIBC: or else this depend on glibc
+# CMAKE_BUILD_TYPE: Release
+# LLVM_PARALLEL_COMPILE_JOBS, LLVM_PARALLEL_LINK_JOBS: j8
+RUN <<RUNEOF
+set -ex
+cmake -G Ninja -S /llvm-src/llvm -B /llvm-build -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" -DCMAKE_INSTALL_PREFIX=/llvm-install -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-alpine-linux-musl -DCOMPILER_RT_BUILD_GWP_ASAN=OFF -DLIBCXX_HAS_MUSL_LIBC=ON -DCMAKE_BUILD_TYPE=Release -DLLVM_PARALLEL_COMPILE_JOBS=8 -DLLVM_PARALLEL_LINK_JOBS=8
+cd /llvm-build
+ninja install
+RUNEOF
+
+# basic check
+RUN <<RUNEOF
+set -ex
+mkdir /work
+cd /work
+cat <<'CATEOF' > main.c
+#include <stdio.h>
+int main(void) {
+    printf("hello world c!\n");
+}
+CATEOF
+cat <<'CATEOF' > main.cpp
+#include <print>
+auto main() -> int {
+    std::println("hello {}!", "world cpp");
+}
+CATEOF
+/llvm-install/bin/clang -c main.c -o main.c.o
+/llvm-install/bin/clang main.c.o -o main.1 -fuse-ld=/llvm-install/bin/ld.lld
+./main.1
+/llvm-install/bin/clang++ -c main.cpp -o main.cpp.o -I/llvm-install/include/c++/v1 -stdlib=libc++ -std=c++23
+/llvm-install/bin/clang++ main.cpp.o -o main.2 -fuse-ld=/llvm-install/bin/ld.lld -L/llvm-install/lib/x86_64-alpine-linux-musl -lc++ -Wl,-rpath=/llvm-install/lib/x86_64-alpine-linux-musl
+./main.2
+RUNEOF
+
+WORKDIR /
+
+# docker build --target cpp-stage2 --tag mydevc/cpp:stage2
+FROM mydevc/base:2 AS cpp-stage2
+
+COPY --from=cpp-stage1 /llvm-src /llvm-src
+COPY --from=cpp-stage1 /llvm-install /llvm-install
+
+
