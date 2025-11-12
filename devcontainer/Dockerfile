@@ -157,7 +157,7 @@ RUN apt-get install -y --no-install-recommends unrar p7zip-full
 WORKDIR /work
 
 # docker build --target cpp-stage1 --tag mydevc/cpp:stage1 .
-FROM mydevc/base:2 AS cpp-stage1
+FROM alpine:3.22.2 AS cpp-stage1
 
 # in the same directory that calls git clone (outside of repository)
 # tar cJf llvm-project.tar.xz -C ./llvm-project .
@@ -168,29 +168,62 @@ FROM mydevc/base:2 AS cpp-stage1
 #   uncompress size is estimated 2.6GB with .git folder
 ADD --chown=0 llvm-project.tar.xz /llvm-src
 
-# build-base: include gcc, g++, ar, ld, gnu make
+# build-base: include gcc, g++, ar, ld, make
 # python3: this is python3.12 for now
-# linux-headers: docs does not mention this, I think this naturally exists in normal distro
+# linux-headers: some source file is using gnu linux specific headers,
+#    docs does not mention this, I think this naturally exists in normal distro
+# git: this is used in --version display, good to have
 # zlib: missing zlib will make you completely compile llvm again if you need zlib later
 RUN apk add --no-cache build-base cmake ninja python3 linux-headers git zlib-dev
 
-# build llvm and clang first
+# https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html
+# CMAKE_INSTALL_PREFIX: install in other location to make later COPY simpler
 # LLVM_ENABLE_PROJECTS: include clang and linker
 # LLVM_ENABLE_RUNTIMES: include compiler-rt and libc++
-# CMAKE_INSTALL_PREFIX: install in other location to make later COPY simpler
+# LLVM_INCLUDE_TESTS, LLVM_INCLUDE_EXAMPLES: these seems only reduce a few targets
 # LLVM_DEFAULT_TARGET_TRIPLE: seems need explicitly specify musl
-# COMPILE_RT_BUILD_GWP_ASAN: this include a glibc dependency and cannot opt out that alone, so disable this for now
+# CLANG_DEFAULT_CXX_STDLIB, CLANG_DEFAULT_RT_LIB: clang does not have this kind of config?
+# COMPILE_RT_BUILD_GWP_ASAN: this include a glibc dependency and cannot opt out that alone, so disable this component for now
 # LIBCXX_HAS_MUSL_LIBC: or else this depend on glibc
-# CMAKE_BUILD_TYPE: Release
-# LLVM_PARALLEL_COMPILE_JOBS, LLVM_PARALLEL_LINK_JOBS: j8
+# LLVM_PARALLEL_COMPILE_JOBS, LLVM_PARALLEL_LINK_JOBS: j8, note that preset json does not support int, this need to be string
+# # ? separate ninja install into another RUN cause constant cache miss?
 RUN <<RUNEOF
 set -ex
-cmake -G Ninja -S /llvm-src/llvm -B /llvm-build -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_ENABLE_RUNTIMES="compiler-rt;libcxx;libcxxabi;libunwind" -DCMAKE_INSTALL_PREFIX=/llvm-install -DLLVM_TARGETS_TO_BUILD=X86 -DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-alpine-linux-musl -DCOMPILER_RT_BUILD_GWP_ASAN=OFF -DLIBCXX_HAS_MUSL_LIBC=ON -DCMAKE_BUILD_TYPE=Release -DLLVM_PARALLEL_COMPILE_JOBS=8 -DLLVM_PARALLEL_LINK_JOBS=8
-cd /llvm-build
-ninja install
+cat <<'CATEOF' > /llvm-src/llvm/CMakePresets.json
+{
+  "version": 10,
+  "configurePresets": [
+    {
+      "name": "release",
+      "generator": "Ninja",
+      "binaryDir": "/llvm-build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "/llvm-install",
+        "LLVM_ENABLE_PROJECTS": "clang;lld",
+        "LLVM_ENABLE_RUNTIMES": "compiler-rt;libcxx;libcxxabi;libunwind",
+        "LLVM_TARGETS_TO_BUILD": "X86",
+        "LLVM_DEFAULT_TARGET_TRIPLE": "x86_64-alpine-linux-musl",
+        "LLVM_INCLUDE_TESTS": false,
+        "LLVM_INCLUDE_EXAMPLES": false,
+        "CLANG_DEFAULT_CXX_STDLIB": "libc++",
+        "CLANG_DEFAULT_RTLIB": "compiler-rt",
+        "COMPILER_RT_BUILD_GWP_ASAN": false,
+        "LIBCXX_HAS_MUSL_LIBC": true,
+        "LIBCXX_USE_COMPILER_RT": true,
+        "LIBCXXABI_USE_COMPILER_RT": true,
+        "LLVM_PARALLEL_COMPILE_JOBS": "10",
+        "LLVM_PARALLEL_LINK_JOBS": "10"
+      }
+    }
+  ]
+}
+CATEOF
+cd /llvm-src/llvm && cmake --preset release
+cd /llvm-build && ninja install
 RUNEOF
 
-# basic check
+# # basic check
 RUN <<RUNEOF
 set -ex
 mkdir /work
@@ -215,12 +248,121 @@ CATEOF
 ./main.2
 RUNEOF
 
-WORKDIR /
-
 # docker build --target cpp-stage2 --tag mydevc/cpp:stage2
-FROM mydevc/base:2 AS cpp-stage2
+FROM alpine:3.22.2 AS cpp-stage2
 
-COPY --from=cpp-stage1 /llvm-src /llvm-src
-COPY --from=cpp-stage1 /llvm-install /llvm-install
+# # why is previous stage unexpectedly cache miss?
+# ADD --chown=0 llvm-project.tar.xz /llvm-src
+# apk add xz && tar -cJf llvm-stage1.tar.xz -C /llvm-install .
+# docker cp container:/llvm-stage1.tar.xz llvm-stage1.tar.xz
+# ADD --chown=0 llvm-stage1.tar.xz /usr/local
 
+# use same add tar command can reuse layer
+# COPY --from=cpp-stage1 /llvm-src /llvm-src
+ADD --chown=0 llvm-project.tar.xz /llvm-src
+COPY --from=cpp-stage1 /llvm-install /usr/local
 
+# libstdc++, libgcc: gcc built clang itself still need libgcc and libstdc++ to run
+# musl-dev: this is the libc/posix headers, you need them in hello world and all c/c++ programs
+# libatomic: c++ helloworld with include <print> need this lib to run
+# cmake, ninja, git, zlib-dev, python3, linux-headers: same as before
+RUN apk add --no-cache libstdc++ libgcc musl-dev libatomic cmake ninja git zlib-dev python3 linux-headers
+
+# cmake variable differences
+# - no need CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, there is no gcc but only clang in PATH
+# - LLVM_ENABLE_LIBCXX was investigated, seems not needed
+# - add more j because clang and llvm use less memory
+RUN <<RUNEOF
+set -ex
+ln -sf /usr/local/bin/ld.lld /usr/local/bin/ld
+echo "/usr/lib:/usr/local/lib/x86_64-alpine-linux-musl" > /etc/ld-musl-x86_64.path
+cat <<'CATEOF' > /llvm-src/llvm/CMakePresets.json
+{
+  "version": 10,
+  "configurePresets": [
+    {
+      "name": "release",
+      "generator": "Ninja",
+      "binaryDir": "/llvm-build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_INSTALL_PREFIX": "/llvm-install",
+        "LLVM_ENABLE_PROJECTS": "clang;lld",
+        "LLVM_ENABLE_RUNTIMES": "compiler-rt;libcxx;libcxxabi;libunwind",
+        "LLVM_TARGETS_TO_BUILD": "X86",
+        "LLVM_DEFAULT_TARGET_TRIPLE": "x86_64-alpine-linux-musl",
+        "LLVM_INCLUDE_TESTS": false,
+        "LLVM_INCLUDE_EXAMPLES": false,
+        "CLANG_DEFAULT_CXX_STDLIB": "libc++",
+        "CLANG_DEFAULT_RTLIB": "compiler-rt",
+        "COMPILER_RT_BUILD_GWP_ASAN": false,
+        "LIBCXX_HAS_MUSL_LIBC": true,
+        "LIBCXX_USE_COMPILER_RT": true,
+        "LIBCXXABI_USE_COMPILER_RT": true,
+        "LLVM_PARALLEL_COMPILE_JOBS": "16",
+        "LLVM_PARALLEL_LINK_JOBS": "16"
+      }
+    }
+  ]
+}
+CATEOF
+cd /llvm-src/llvm && cmake --preset release
+cd /llvm-build && ninja install
+RUNEOF
+
+# # basic check
+RUN <<RUNEOF
+set -ex
+mkdir /work
+cd /work
+cat <<'CATEOF' > main.c
+#include <stdio.h>
+int main(void) {
+    printf("hello world c!\n");
+}
+CATEOF
+cat <<'CATEOF' > main.cpp
+#include <print>
+auto main() -> int {
+    std::println("hello {}!", "world cpp");
+}
+CATEOF
+/llvm-install/bin/clang -c main.c -o main.c.o
+/llvm-install/bin/clang main.c.o -o main.1
+./main.1
+/llvm-install/bin/clang++ -c main.cpp -o main.cpp.o -I/llvm-install/include/c++/v1 -std=c++23
+/llvm-install/bin/clang++ main.cpp.o -o main.2 -lc++ -Wl,-rpath=/llvm-install/lib/x86_64-alpine-linux-musl
+./main.2
+RUNEOF
+
+# docker build --target cpp --tag mydevc/cpp:22
+FROM mydevc/base:2 AS cpp
+
+COPY --from=cpp-stage2 /llvm-install /usr/local
+
+RUN <<RUNEOF
+set -ex
+apk add --no-cache musl-dev
+ln -sf /usr/local/bin/ld.lld /usr/local/bin/ld
+echo "/usr/lib:/usr/local/lib/x86_64-alpine-linux-musl" > /etc/ld-musl-x86_64.path
+clang -v
+ld -v
+mkdir /work
+cd /work
+cat <<'CATEOF' > main.c
+#include <stdio.h>
+int main(void) {
+    printf("hello world c!\n");
+}
+CATEOF
+cat <<'CATEOF' > main.cpp
+#include <print>
+auto main() -> int {
+    std::println("hello {}!", "world cpp");
+}
+CATEOF
+clang -c main.c -o main.c.o && clang main.c.o -o main.1 && ./main.1
+clang++ -c main.cpp -o main.cpp.o -std=c++23 && clang++ main.cpp.o -o main.2 && ./main.2
+cd /
+rm -rf /work
+RUNEOF

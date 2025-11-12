@@ -81,5 +81,55 @@ First, build LLVM and clang by gcc.
    - running the program shows cannot find libc++ library error, ldd this file shows cannot find libc++ library error,
      set LD_RUNTIME_LIBRARY to same library path successfully prints helloworld
    - add Wl,-rpath to library path successfully generates an executable file that directly runs and prints helloworld!
+9. UPDATE later improve
+   - change to cmake preset file
+   - basic check c++ program is not using compiler rt, the build result is relying on gcc_s
+   - add CLANG_DEFAULT_RTLIB and CLANG_DEFAULT_CXX_STDLIB, fixed the gcc_s issue in stage1 post check and stage2 pre check
+   - install into /usr/local in stage2 instead of /llvm-install or /llvm-stage1
 
 Then, build LLVM and clang by LLVM and clang.
+
+1. the COPYed /llvm-install still need apk add build-base to work
+2. try basic check again
+   - actually apk add libgcc libstdc++ can make lang++ --version work
+   - clang++ -c main.cpp still raise some error in libc++ header source code,
+     one of them is bits/alltypes.h, which is a musl specific helper header, apk add musl-dev can fix
+   - clang++ main.cpp.o still raise crtbeginS.o, lstdc++, lgcc not found error
+     the lstdc++ not found error should be fixed by -stdlib=libc++, the lgcc_s error should be fixed by --rtlib=compiler-rt
+   - result program missing libatomic, apk add libatomic, now c++ prints hellworld
+   - c helloworld also need --rtlib=compiler-rt
+   - UPDATE after stage 1 improve:
+   - clang -v need apk add libgcc libstdc++, clang -c main.c need apk add musl-dev, clang main.c.o need --ld-path=ld.lld
+     clang -c main.c -o main.c.o && clang main.c.o -o main.1 --ld-path=ld.lld && ./main.1 && ldd main.1
+   - clang -c main.cpp now only need -std=c++23, clang main.cpp.o only need --ld-path=ld.lld, run main.2 need apk add libatomic
+     clang++ -c main.cpp -o main.cpp.o -std=c++23 && clang++ main.cpp.o -o main.2 --ld-path=ld.lld -Wl,-rpath=/usr/local/lib/x86_64-alpine-linux-musl && ./main.2 && ldd main.2
+3. try add CMAKE_C_COMPILER and CMAKE_CXX_COMPILER to the main cmake command
+   - also add LIBCXX_USE_COMPILER_RT=ON
+   - do not pass compiler check, add CMAKE_C_FLAGS="-fuse-ld=/llvm-install/bin/ld.lld --rtlib=compiler-rt"
+     and CMAKE_CXX_FLAGS="-fuse-ld=/llvm-install/bin/ld.lld --rtlib=compiler-rt -stdlib=libc++"
+   - this time require python3? after install python3 cmake command completes successfully
+   - change to CMAKE_EXE_LINKER_FLAGS and CMAKE_SHARED_LINKER_FLAGS,
+     because normal cflags and cxxflags will add to compile step and raise a lot of not used parameter warning
+   - raise LLVM_LIBSTDCXX_MIN warning, should enable LLVM_ENABLE_LIBCXX
+   - CMAKE_LINKER_FLAGS does not work, still need to use CMAKE_C_FLAGS, but with -Qunused-arguments
+   - 4082 targets?
+   - /llvm-build/bin/clang-tblgen report not found libc++ error, add LD_LIBRARY_PATH=/llvm-stage1/lib/triple
+   - clang++ warning -fuse-ld deprecated, change to --ld-path
+   - asm/prctl again, apk add linux-headers
+   - same fno-exception issue as before, https://github.com/llvm/llvm-project/issues/49139 says -DLLVM_HOST_TRIPLE=x86_64-alpine-linux-musl, same error
+   - by the way, the failed command shows I can use CMAKE_LINKER?
+   - learned that LLVM_INCLUDE_TESTS LLVM_INCLUDE_EXAMPLES can be disabled
+   - LLVM document says LLVM_USE_LINKER will make -fuse-ld, try this
+   - /usr/bin is normal binary, system package manager managed, /usr/local/bin is normal binary, not system package manager managed
+     so this custom build llvm and clang should be in /usr/local, while alpine /usr/local is empty, this is very convenient
+4. try same cmake command
+   - after install stage 1 into /usr/lib, no need to CMAKE_C_COMPILER and CMAKE_CXX_COMPILER, cmake can default find clang and clang++ because there is no gcc installed
+   - same compiler check error that cannot spawn ld as in basic pre check when missing --ld-path, so link system ld to ld.lld by ln -sf /usr/local/bin/ld.lld /usr/local/bin/ld
+   - now cmake command directly completed successfully
+   - 4368 targets
+   - need ld library path for libc++, this is not same as glibc's /etc/ld.so.conf.d and ldconfig, musl should use echo "/usr/lib:/usr/local/lib/x86_64-alpine-linux-musl" > /etc/ld-musl-x86_64.path,
+     note that if you forget /usr/lib the world corrupts
+   - then ninja completed successfully
+
+Then install build result into another stage, do a little setup and check, which should complete a basic command line compile environment for c++
+
