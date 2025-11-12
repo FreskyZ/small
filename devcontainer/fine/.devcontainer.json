@@ -1,6 +1,6 @@
 {
     "name": "fine",
-    "image": "my-devcontainers/node:1",
+    "image": "mydevc/node:2",
     // # setup volumes
     // docker volume create repo-fine
     // docker volume create repo-small
@@ -23,7 +23,7 @@
         "type=volume,src=node_modules,volume-subpath=yama,dst=/x/small/yama/node_modules"
     ],
     // add reasonable host name, add reasonable container name
-    "runArgs": ["-h=devcontainer1", "--name=devcontainer1"],
+    "runArgs": ["-h=DEV1", "--name=devcontainer1"],
     // add container env if need
     // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
     // add project specific alias here?

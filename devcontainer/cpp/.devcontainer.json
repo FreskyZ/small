@@ -1,0 +1,24 @@
+{
+    "name": "genericpp",
+    "image": "mydevc/cpp:1",
+    "workspaceMount": "source=${localWorkspaceFolder}/../..,target=/work,type=bind",
+    "workspaceFolder": "/work",
+    "mounts": [],
+    // add reasonable host name, add reasonable container name
+    "runArgs": ["-h=DEV2", "--name=devcontainer2"],
+    // add container env if need
+    // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
+    // add project specific alias here?
+    "onCreateCommand": "echo \"alias akari=\\\"node akari.ts\\\"\" >> ~/.zshrc && echo \"alias make-akari=\\\"node script/make-akari.ts\\\"\" >> ~/.zshrc",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "GitHub.copilot",
+                "GitHub.copilot-chat",
+                "llvm-vs-code-extensions.vscode-clangd"
+            ],
+            "settings": {
+            }
+        }
+    }
+}

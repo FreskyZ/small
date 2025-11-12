@@ -269,6 +269,7 @@ COPY --from=cpp-stage1 /llvm-install /usr/local
 RUN apk add --no-cache libstdc++ libgcc musl-dev libatomic cmake ninja git zlib-dev python3 linux-headers
 
 # cmake variable differences
+# - clang-tools-extra: build clangd and clang-tidy by the way
 # - no need CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, there is no gcc but only clang in PATH
 # - LLVM_ENABLE_LIBCXX was investigated, seems not needed
 # - add more j because clang and llvm use less memory
@@ -287,7 +288,7 @@ cat <<'CATEOF' > /llvm-src/llvm/CMakePresets.json
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_INSTALL_PREFIX": "/llvm-install",
-        "LLVM_ENABLE_PROJECTS": "clang;lld",
+        "LLVM_ENABLE_PROJECTS": "clang;lld;clang-tools-extra",
         "LLVM_ENABLE_RUNTIMES": "compiler-rt;libcxx;libcxxabi;libunwind",
         "LLVM_TARGETS_TO_BUILD": "X86",
         "LLVM_DEFAULT_TARGET_TRIPLE": "x86_64-alpine-linux-musl",
@@ -335,14 +336,15 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target cpp --tag mydevc/cpp:22
+# docker build --target cpp --tag mydevc/cpp:1
 FROM mydevc/base:2 AS cpp
 
 COPY --from=cpp-stage2 /llvm-install /usr/local
 
+# add cmake: although I don't use cmake before, it seems clangd works better with cmake
 RUN <<RUNEOF
 set -ex
-apk add --no-cache musl-dev
+apk add --no-cache musl-dev cmake ninja
 ln -sf /usr/local/bin/ld.lld /usr/local/bin/ld
 echo "/usr/lib:/usr/local/lib/x86_64-alpine-linux-musl" > /etc/ld-musl-x86_64.path
 clang -v

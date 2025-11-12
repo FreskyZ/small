@@ -6,6 +6,12 @@ C++ development environment is a very complex topic that need a separate documen
 - I'd like to avoid GNU and GPL items and that adds a lot of complexity.
 - I'd like to keep using alpine and musl and that add a lot of complexity.
 
+Reading material
+
+- [Getting Started with the LLVM System](https://llvm.org/docs/GettingStarted.html)
+- [Building LLVM with CMake](https://llvm.org/docs/CMake.html)
+- [cmake-variables(7)](https://cmake.org/cmake/help/latest/manual/cmake-variables.7.html)
+
 First, build LLVM and clang by gcc.
 
 > I've been away from large native projects for many years
@@ -133,3 +139,4 @@ Then, build LLVM and clang by LLVM and clang.
 
 Then install build result into another stage, do a little setup and check, which should complete a basic command line compile environment for c++
 
+There seems no clangd in alpine package manager, include clangd and clang-tidy in stage 2 build by the way.
