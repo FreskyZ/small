@@ -113,12 +113,12 @@ import numpy as np
 #         friend 50  => mean 3065, 95pct 3697
 #         friend 100 => mean 3153, 95pct 3805
 
-PRODUCT_COUNT = 12
-FRIEND_COUNT = 50
-MEAN = 2000
-DEVIATION = 600
+# PRODUCT_COUNT = 12
+# FRIEND_COUNT = 50
+# MEAN = 2000
+# DEVIATION = 600
+# RANDOM_SEED = 42
 
-RANDOM_SEED = 42
 # trials = 100000
 # rng = np.random.default_rng(RANDOM_SEED)
 # # draw shape (trials, product_count) for A and B
@@ -147,105 +147,179 @@ RANDOM_SEED = 42
 
 # ==========================
 # STAGE 3: policy simulation
-# real quota is 320 and 50, just multiply result with 3.2 and 0.5 should be ok
-BASE_QUOTA = 100
-MAX_QUOTA = 300
 
-rng = np.random.default_rng() # (seed=RANDOM_SEED)
-# one day for one policy
-# state[0]: balance
-# state[1]: quota at beginning of the day, before increase quota
-# state[2]: product_count size array for each item in warehouse
-# state[3]: transaction log, an array of
-#   [0]: day index, start from 1
-#   [1]: description
-def step(policy, state):
-    day = 1 if len(state[3]) == 0 else state[3][-1][0] + 1
-    state[1] += BASE_QUOTA
+from collections import namedtuple
+
+Context = namedtuple('Context', 'product_count friend_count base_quota max_quota mean deviation')
+
+# see usage
+Policy = namedtuple('Policy', 'buy_base_price buy_amount_multiplier sell_threshold')
+
+# day start from 1
+# kind： state/buy/sell
+# product: product index start from 0
+# description for state
+Transaction = namedtuple('Transaction', 'day kind product amount price description', defaults=[0, 0, 0, ''])
+# record total to calculate average
+Statistics = namedtuple('Statistics', 'total_remain_quota total_warehouse_size total_transaction_count', defaults=[0, 0, 0])
+
+class State(object):
+    def __init__(self, context):
+        self.balance = 0
+        # for each step, quota is quota at beginning of the day, before increase quota
+        self.quota = 0
+        # for each product, index start from 0
+        self.warehouse = [0] * context.product_count
+        self.transactions = []
+        self.total_remain_quota = 0
+        self.total_warehouse_size = 0
+        self.total_transaction_count = 0
+        self.transactions = []
+
+def generate_prices(context):
+    # standard normal guess
+    # my_prices = np.array(rng.normal(loc=context.mean, scale=context.deviation, size=context.product_count)).astype(int)
+    # their_prices = rng.normal(loc=context.mean, scale=context.deviation, size=(context.friend_count, context.product_count)).astype(int)
+    
+    # multiple normal guess
+    total_samples = context.product_count * (context.friend_count + 1)
+    tail_samples = int(total_samples * 0.05)
+    main_samples = total_samples - 2 * tail_samples
+
+    main_prices = np.array(rng.normal(loc=context.mean, scale=context.deviation, size=main_samples)).astype(int)
+    low_prices = np.array(rng.normal(loc=500, scale=100, size=tail_samples)).astype(int)
+    high_prices = np.array(rng.normal(loc=4500, scale=100, size=tail_samples)).astype(int)
+    all_prices = np.concatenate([main_prices, low_prices, high_prices])
+    rng.shuffle(all_prices)
+    my_prices, their_prices = all_prices[:context.product_count], all_prices[context.product_count:].reshape((context.friend_count, context.product_count))
+
+    return my_prices, their_prices
+
+rng = np.random.default_rng()
+def step(context, policy, state):
+    day = 1 if len(state.transactions) == 0 else state.transactions[-1].day + 1
+    state.quota = min(context.max_quota, state.quota + context.base_quota)
+    state.transactions.append(Transaction(day=day, kind='state', description=f'balance {state.balance} quota {state.quota}, warehouse {state.warehouse}'))
 
     # generate prices
-    my_prices = np.array(rng.normal(loc=MEAN, scale=DEVIATION, size=PRODUCT_COUNT)).astype(int)
-    their_prices = rng.normal(loc=MEAN, scale=DEVIATION, size=(FRIEND_COUNT, PRODUCT_COUNT)).astype(int)
-    state[3].append([day, f'balance {state[0]} quota {state[1]}, warehouse {state[2]}'])
-    #state[3].append([day, f'my prices {my_prices}'])
+    my_prices, their_prices = generate_prices(context)
+    # state.transactions.append(Transaction(day=day, kind='state', description=f'my prices {my_prices}'))
 
+    transaction_count = 0
     # buy stage
     min_product_index = np.argmin(my_prices)
     min_price = my_prices[min_product_index]
     # if current quota is reaching max quota, always buy lowest product regardless of absolute price,
-    if state[1] > MAX_QUOTA - BASE_QUOTA:
-        amount = state[1] - (MAX_QUOTA - BASE_QUOTA)
+    if state.quota > context.max_quota - context.base_quota:
+        amount = state.quota - (context.max_quota - context.base_quota)
     else:
-        # policy[0]: buy base price
-        base_price = policy[0]
+        base_price = policy.buy_base_price
         # amount is multiple of price difference
-        amount_multiplier = policy[2]
         # if lowest price is lower than this value, buy amount base_price - lowest_price, restrict by current quota
         # also don't buy if lowest price is higher than base price
-        amount = amount_multiplier * min(state[1], max(0, base_price - min_price))
-    # restrict warehouse size here to avoid policies too restrict on selling, warehouse size is 2x max quota per product
-    if amount > 0 and state[2][min_product_index] <= MAX_QUOTA * 2:
-        state[0] -= amount * min_price
-        state[1] -= amount
-        state[2][min_product_index] += amount
-        state[3].append([day, f'buy product#{min_product_index + 1} amount {amount} price {min_price}'])
+        amount = min(state.quota, max(0, base_price - min_price)) * policy.buy_amount_multiplier
+    # restrict warehouse size here to avoid policies too restrict on selling, choose waste quota in this case,
+    # for now warehouse size is 2x max quota per product
+    if amount > 0 and state.warehouse[min_product_index] <= context.max_quota * 2:
+        transaction_count += 1
+        state.balance -= amount * min_price
+        state.quota -= amount
+        state.warehouse[min_product_index] += amount
+        state.transactions.append(Transaction(day=day, kind='buy', product=min_product_index, amount=amount, price=min_price))
 
     # sell stage
-    # policy[1]: sell all products with price difference larger than this value
-    threshold = policy[1]
-    for product_index in range(PRODUCT_COUNT):
-        amount = state[2][product_index]
+    # sell all products with price difference larger than this value
+    threshold = policy.sell_threshold
+    for product_index in range(context.product_count):
+        amount = state.warehouse[product_index]
         if amount == 0:
             continue
         max_price_difference = 0
-        for friend_index in range(FRIEND_COUNT):
+        for friend_index in range(context.friend_count):
             # attention although previously investigated abs diff, there is no abs in real game
             max_price_difference = max(max_price_difference, their_prices[friend_index][product_index] - my_prices[product_index])
         if max_price_difference > threshold:
+            transaction_count += 1
             sell_price = my_prices[product_index] + max_price_difference
-            state[0] += amount * sell_price
-            state[2][product_index] = 0
-            state[3].append([day, f'sell product#{product_index + 1} amount {amount} sell price {sell_price}'])
+            state.balance += amount * sell_price
+            state.warehouse[product_index] = 0
+            state.transactions.append(Transaction(day=day, kind='sell', product=product_index, amount=amount, price=sell_price))
+    
+    state.total_remain_quota += state.quota
+    state.total_warehouse_size += sum(state.warehouse)
+    state.total_transaction_count += transaction_count
 
-def steps(policy, days):
-    # start with zero balance, zero quota, empty warehouse and empty log
-    state = [0, 0, [0] * PRODUCT_COUNT, []]
+Report = namedtuple('Report', 'days profit_per_day_per_quota avg_remain_quota avg_warehouse_size avg_transaction_count transactions')
+
+# return report, transactions
+def simulate(context, policy, days):
+    state = State(context)
     for day in range(days):
-        step(policy, state)
-    # return profit per day per quota, transactions
-    return state[0] / days / BASE_QUOTA, state[3]
+        step(context, policy, state)
+    return Report(
+        days=days,
+        profit_per_day_per_quota=int(state.balance / days / context.base_quota),
+        avg_remain_quota=state.total_remain_quota / days,
+        avg_warehouse_size=state.total_warehouse_size / days,
+        avg_transaction_count=state.total_transaction_count / days,
+        transactions=state.transactions)
 
-def simulate(policy, days, trials):
-    return np.average([steps(policy, days)[0] for _ in range(trials)])
+def print_report(report, include_transactions=False):
+    print(f'{report.days} days, profit {report.profit_per_day_per_quota} remain quota {report.avg_remain_quota} warehouse {report.avg_warehouse_size} transaction count {report.avg_transaction_count}')
+    if include_transactions:
+        for transaction in report.transactions:
+            if transaction.kind == 'state':
+                print(f'day#{transaction.day} {transaction.description}')
+            else:
+                print(f'day#{transaction.day} {transaction.kind} product#{transaction.product} amount {transaction.amount} price {transaction.price}')
+
+def expect_profit(context, policy, days, trials):
+    return int(np.average([simulate(context, policy, days).profit_per_day_per_quota for _ in range(trials)]))
+
+context = Context(product_count=12, friend_count=50, base_quota=320, max_quota=960, mean=2000, deviation=600)
 
 # naive policy:
 # always use all quota per day, that is buy base price is high
 # always sell all products, that is difference threshold is low
-# RESULT: 2325 per day per quota
-# print(simulation([10000, 0], 1000, 100))
+# naive_policy = Policy(buy_base_price=10000, buy_amount_multiplier=1, sell_threshold=0)
+# # RESULT: profit 2325, remain quota 0, remain warehouse 0, transaction count 2
+# # UPDATE: try new price distribution: profit 2700
+# print_report(simulate(context, naive_policy, 1000))
+# print(expect_profit(context, naive_policy, 1000, 100))
 
 # prior art https://www.bilibili.com/video/av116007234443787/
-# NEGATIVE! -200
-# print(simulation([1000, 4200], 1000, 100))
-# this is too restrict on selling
-# profit, transactions = steps([1000, 4200], 1000)
-# print(profit)
-# for day, transaction in transactions:
-#     print(f'day#{day} {transaction}')
-# UPDATE: this should be interpreted as something like 3200 not 4200
-# 3200 is like mu + 2x sigma
-# 1620
-print(simulate([1000, 3200, 1], 1000, 100))
+# av116007234443787_policy = Policy(buy_base_price=1000, buy_amount_multiplier=1, sell_threshold=3200)
+# # RESULT: profit 538, remain quota 865?, remain warehouse 22000, transaction count 0.3
+# # this is literally full warehouse
+# print_report(simulate(context, av116007234443787_policy, 1000))
+# print(expect_profit(context, av116007234443787_policy, 1000, 100))
 
-# 2521
-# print(simulation([1000, 2400], 1000, 100))
-# mu + 1x sigma: 2541, not significant
-# print(simulation([1000, 2600], 1000, 100))
+# sell threshold = mean + 1 x deviation
+# policy = Policy(buy_base_price=1000, buy_amount_multiplier=1, sell_threshold=2600)
+# # RESULT: profit 2392, remain quota 654, remain warehouse 6000-7000, transaction count 1.28
+# # remain quota means this policy nearly always keep at max_quota - base_quota
+# # UPDATE: try new price distribution: profit 2800, quota 635, remaining warehouse 1200, transaction count 1.75
+# print_report(simulate(context, policy, 1000))
+# # print_report(simulate(context, policy, 365), include_transactions=True)
+# print(expect_profit(context, policy, 1000, 100))
 
-# UPDATE: add buy amount multiplier
-# ATTENTION amount multiplier is related with base quota multiplier, this simulation use 100, real game is 320
-# 0.5/2/0.2/5: 2535, not significant
-# print(simulate([1000, 2600, 5], 1000, 100))
+# also +1.5 dev and +2 dev
+# policy = Policy(buy_base_price=1000, buy_amount_multiplier=1, sell_threshold=2900)
+# # RESULT: profit 2885, remain quota ~640, remain warehouse ~4200, transaction count 1.44
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print(expect_profit(context, policy, 1000, 100))
+# policy = Policy(buy_base_price=1000, buy_amount_multiplier=1, sell_threshold=3200)
+# # RESULT: profit 2085, remain quota 720, remain warehouse 14000, transaction count 0.85
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print_report(simulate(context, policy, 1000))
+# print(expect_profit(context, policy, 1000, 100))
 
-# TODO change to namedtuple, move base quota and mean and deviation to context
-# TODO add stat, average remain quota and average warehouse size, average transaction count per day
+# TODO price distribution significantly affects profit, add price distribution to context
+# TODO try fit data into mixture of multiple normal distributions, https://scikit-learn.org/stable/modules/generated/sklearn.mixture.GaussianMixture.html
