@@ -90,6 +90,17 @@ RUNEOF
 # workdir will inherit
 ENTRYPOINT ["/bin/zsh"]
 
+# docker build --target python --tag mydevc/python:2 .
+FROM mydevc/base:2 AS python
+
+RUN <<RUNEOF
+set -ex
+apk update
+apk add python3
+RUNEOF
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
 # docker build --target rust --tag mydevc/rust:2 .
 FROM mydevc/base:2 AS rust
 
