@@ -10,19 +10,71 @@
 # Problem statement
 # - There are N distinct products produced at location A and demanded at location A and B.
 # - Each day, every product has a price at A and a price at B. Prices are random, independent across days and products.
-# - You may buy any quantity of products at A as long as you have quota. Buying consumes quota proportional to quantity.
-# - Each day you receive Q units of quota; unused quota carries over but cannot exceed Qmax.
+# - You may purchase any quantity of products at A as long as you have quota. Purchases consumes quota proportional to quantity.
+# - Each day you receive q units of quota. Unused quota carries over but cannot exceed q_max.
 # - Bought products can be stored indefinitely in an infinite-capacity warehouse and sold later at A or B's daily price.
-# - Selling is unrestricted by quota; only purchases consume quota.
-# - Naive policy: every day spend all available quota to buy the product with the largest immediate price difference and sell immediately.
-# - However, better long-term profit may arise by saving quota for future opportunities or by holding inventory until future prices are higher.
-# - Task: design a trading policy that, given N, Q, Qmax, price distribution, and an optional time horizon, maximizes long-run expected profit
+# - Selling does not consume quota; only purchases do. 
+# - A naive policy: every day, spend all available quota to purchase the product with the largest immediate price difference and sell immediately.
+# - However, greater long-term profit may by achieved by saving quota for future opportunities or by holding inventory until prices rise.
+# - Task: design a trading policy that, given N, q, q_max, price distribution, and an optional time horizon, maximizes long-run expected profit
 
-# import math
+# Simplification
+# Because products can be stored indefinitely, they can always be held until an optimal selling price occurs.
+# Thus, the problem reduces to deciding when and what to purchase using limited quota. When focusing only on purchasing,
+# the optimal choice is to purchase the product with the lowest price, since higher selling prices can be waited for.
+# For now price distributions are unknown, they must be estimated from data — either by fitting a model or using empirical frequencies.
+# This allows the problem to be simplified to one product type with an unknown price distribution.
+
+# Then the problem can be modeled by the Markov decision process https://en.wikipedia.org/wiki/Markov_decision_process, where
+# - state is current quota c, state space is available value for c [0, q_max]
+# - action is purchase amount x, action space is available value for x [0, c]
+# - state transition P(s, a, s') is deterministic here, c' = min(c + q - x, q_max)
+# - expected immediate reward R(s, a, s'),
+#   optimal sell price regarded as fixed value, purchase price is the actual random variable,
+#   merge them into random variable profit per product p, so R = p * x
+# - discount factor, although I'd like it to be high, but in real game, it also discount
+#   because you earn in game currency and buy some items and then you need less in game currency,
+#   keep it y, to see what happens when this select different values, like 0.5 and 0.9
+# - the policy function maps current state to action x(c)
+# - the value function, V(c) = E(max(p * x + y * V(min(c + q - x))))
+#   E is the expectation operator, the expression inside E is a random variable based on p,
+#   the target is to maximize value function
+
+# split the min function into 2 situations
+# - when c + q - x will reach q_max, V(c) = E(max(p * x + y * V(q_max)))
+#   V(q_max) is irrelated with x, so to maximize V, choose largest x that satisfies branch condition, which is x = c + q - q_max
+# - else, V(c) = E(max(p * x + y * V(c + q - x))),
+#   AI tells me the reward function R = p * x is linear and the state transition function c' = c + q - x is linear, so
+#   the value function must be linear, I'm not sure but it looks very reasonable, assuming V(c) = mc + n, take into the expression inside max
+#       p * x + y * (m * (c + q - x) + n)
+#     = p * x + y * m * c + y * m * q - y * m * x + y * n
+#     = ymc + ymq + yn + (p - ym)x
+#   after solving m and n, when making the decision, y, q is known, so the optimal policy x(c) is
+#   - if p > ym, use largest x, x = c
+#   - if p < ym, do not use x, x = 0, if p == ym, whatever
+#   then the expression become if p >= ym, ymcqn + (p - ym)c, if p < ym, ymcqn, so can be written as ymcqn + max(p - ym, 0)c
+#   add max, max(ymcqn + max(p - ym, 0)c) = ymcqn + max(max(p - ym, 0)c) = ymcqn + max(p - ym, 0)c
+#   add E, E(ymcqn + max(p - ym, 0)c) = ymcqn + E(max(p - ym, 0))c
+#   include left part mc + n = (ym + E(max(p - ym, 0)))c + ymq + yn
+#   so m = ym + E(max(p - ym, 0)), or (1 - y)m = E(max(p - ym, 0)), and n = ymq/(1 - y)
+# - you can call n the zero quota value, proportional with everyday quota q * value per quota m,
+#   the more value you think future profit is, the more zero quota value is
+# - you can call ym the threshold price, or p_t, it is multiplication of y and m,
+#   y is the discount factor, the more value you think future profit is, the larger threshold price, why?, see later
+#   m is the value per quota, the more you think value per quota, the larger threshold price, one unit of quota can buy more expensive item
+#   E(max(p - ym, 0)), on p's probability graph, is the distance between p_t and the expectation of the right part of vertical line p_t
+#   for simple distribution that is continuous and middle part is high and both sides are monotonically increasing and decreasing, this equation must have a solution
+# - p_t = E(max(p - p_t, 0)) * y/(1 - y)
+#   when y is close to 1, y/(1 - y) is large, the right part expectation is far from p_t,
+#   the more you think future profit is, the less threshold price, that means keep the quote for future use,
+#   the previous intuition is incorrect, because close-to-1 y significantly make small p_t, not larger y make larger threshold price
+# - after collecting p distribution, you can calculate p_t given y
+
+import math
 from random import choices
 # import pandas as pd
 import numpy as np
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 # ===========================
 # STAGE 1: price distribution
@@ -103,6 +155,50 @@ import numpy as np
 #     plt.close()
 # except Exception as e:
 #     print(f'failed to save histogram: {e}')
+
+# ==========================
+# STAGE 2: lowest price distribution
+
+# because storage is infinite, so you can always wait for an optimal price to sell,
+# then the most important part is using limited quota to buy most low price products
+
+# first try look at the graph in human eye
+prices = np.clip(np.random.normal(loc=2000, scale=600, size=(16384, 12)).astype(int), 300, 5000)
+min_prices = np.min(prices, axis=1)
+# RESULT: min: 1025, std: 325
+#print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
+
+bin_width = 50
+min_p = float(np.min(min_prices))
+max_p = float(np.max(min_prices))
+# create bins that cover the range [min_p, max_p]
+bins = np.arange(math.floor(min_p / bin_width) * bin_width,
+                    math.ceil(max_p / bin_width) * bin_width + bin_width,
+                    bin_width)
+plt.figure(figsize=(8, 4))
+plt.hist(min_prices, bins=bins, edgecolor='black')
+plt.xlabel('price')
+plt.ylabel('prob')
+plt.title('min price distribution')
+plt.tight_layout()
+# RESULT: looks normal but not that symmetric, if not clipped by 300, the left part is a lot longer(on x axis) than right part
+plt.savefig('min_price_histogram.png', dpi=150)
+plt.close()
+
+def find_threshold_price(prices, y):
+    # p_t = E(max(p - p_t, 0)) * y/(1 - y)
+    # start from minimal value
+    result = prices.min()
+    iteration = 0
+    while True:
+        # result and result+10 result in different sign
+        if ((prices[prices > result].mean() - result) * y / (1 - y) - result) * ((prices[prices > result + 10].mean() - result) * y / (1 - y) - result - 10) < 0:
+            return result
+        iteration += 1
+        if iteration > 500:
+            print('not convergence')
+            break
+print(find_threshold_price(min_prices, 0.9))
 
 # ==========================
 # STAGE 3: policy simulation
