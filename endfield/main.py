@@ -8,21 +8,72 @@
 # uv run main.py
 
 # Problem statement
-# - There are N distinct products produced at location A and demanded at location A and B.
+# - There are several distinct products produced at location A and demanded at location A and B.
 # - Each day, every product has a price at A and a price at B. Prices are random, independent across days and products.
-# - You may buy any quantity of products at A as long as you have quota. Buying consumes quota proportional to quantity.
-# - Each day you receive Q units of quota; unused quota carries over but cannot exceed Qmax.
+# - You may purchase any quantity of products at A as long as you have quota. Purchases consumes quota proportional to quantity.
+# - Each day you receive $Q$ units of quota. Unused quota carries over but cannot exceed $Q_max$.
+# - Selling does not consume quota; only purchases do. 
 # - Bought products can be stored indefinitely in an infinite-capacity warehouse and sold later at A or B's daily price.
-# - Selling is unrestricted by quota; only purchases consume quota.
-# - Naive policy: every day spend all available quota to buy the product with the largest immediate price difference and sell immediately.
-# - However, better long-term profit may arise by saving quota for future opportunities or by holding inventory until future prices are higher.
-# - Task: design a trading policy that, given N, Q, Qmax, price distribution, and an optional time horizon, maximizes long-run expected profit
+# - A naive policy: every day spend all available quota to purchase the product with the largest price difference and sell immediately.
+# - However, greater long-term profit may by achieved by saving quota for future opportunities or by holding inventory until prices rise.
+# - Task: design a trading policy that maximizes long-run expected profit
 
-# import math
+# Because products can be stored indefinitely, the problem can be devided into 2 parts that purchase operation focus on using 
+# limited quota to buy as much products and sell operation hold the products until optimal sell price rises.
+# It is obvious that purchase stage should buy the product with lowest price, this is not same with the naive policy
+# described in the problem statement, some products may have higher buy price with higher price difference at the same day, but according
+# to the long-term profit target, lower buy price products will eventually see same sell price in the future and thus make more profit.
+# And then comparing to investigate distribution of all prices and analyze the lowest or max difference between random variables,
+# it is should be easier to directly investigate the distribution of lowest price, making distinct product type not related
+# to the problem, the decision become the buy amount of the imaginary product type with the specific distribution.
+
+# Then the problem can be modeled by the Markov decision process https://en.wikipedia.org/wiki/Markov_decision_process
+# - State is current available quota $c$.
+# - Action is the purchase amount $x$
+# - State transition is the quota amount \(c' = \min(c + Q - x, Q_max)\)
+# - Reward function is the profit of purchase and assume it immediately meets the optimal sell price,
+#   this sell price can be regarded as a constant value, to make the equation simpler,
+#   use profit per item (sell price - buy price) as the base random variable $p$ in the decision process
+# - Discount factor $\gamma$ should be high because future profit is important
+# - Value function \(V(c) = E_p(\max(px + \gammaV(\min(c + Q - x, Q_max))))\)
+#   $E$ is the expectation operation, the expression inside $E$ is a random variable based on $p$
+# - Objective is finding a policy $x = \pi(c)$ that maximize value function
+
+# split the $\min$ function into 2 situations
+# - when $c + Q - x$ will reach $Q_max$, \(V(c) = E_p(\max(px + \gammaV(Q_max)))\),
+#   while $V(Q_max)$ is not related with $x$, so to maximize $V$, choose largest x that satisfies the condition,
+#   which is $x = c + Q - Q_max$
+# - else, \(V(c) = E_p(\max(px + \gammaV(c + Q - x)))\),
+#   because the reward function and the state transition function both are linear function, so the value function must also be linear,
+#   assume \(V(c) = \alpha c + \beta\), take this into the equation
+#     \[V(c) = E_p(\max(px + \gamma(\alpha(c + Q - x) + \beta)))\]
+#     \[\alpha c + \beta = E_p(\max(\gamma\alpha c + \gamma\alpha q + \gamma\beta + (p - \gamma\alpha)x))\]
+#   $\alpha$, $\beta$, $\gamma$, $c$ and $p$'s sample result is known when making the decision,
+#   so to maximize the value function, if $p >= \gamma\alpha$, $x = c$ else $x = 0$, take this policy into the equation
+#     \[\alpha c + \beta = E_p(\max(\gamma\alpha c + \gamma\alpha q + \gamma\beta + \max(p - \gamma\alpha, 0)c))\]
+#     \[\alpha c + \beta = \gamma\alpha c + \gamma\alpha q + \gamma\beta + E_p(\max(p - \gamma\alpha, 0))c\]
+#     \[\alpha c + \beta = (\gamma\alpha + E_p(\max(p - \gamma\alpha, 0)))c + \gamma\alpha q + \gamma\beta\]
+#   so,
+#     \[\alpha = \frac_{E_p(max(p - \gamma\alpha, 0))}{1 - \gamma}\]
+#     \[\beta = \frac_{\gamma\alpha q}{1 - \gamma}\]
+
+# - The $\alpha$ in value function, as the multiplier of $c$, can be regarded as "value per quota", or quota value
+# - The threshold price in the policy $\gamma\alpha$, while $\gamma$ is near 1, is very near quota value,
+#   which means when price is below value per quota, use all quota, when price is above value per quota, don't use any quota
+# - The $\beta$ in value function is "base value when zero quota", it comes from division of
+#   - threshold price multiplies quota per day, which means "everyday increased value of available quota"
+#   - higher $\gamma$ (close to 1) increases $\beta$, because higher discount factor regards future value higher
+# - quota value is related to price distribution, it may not be mathematically solved from price distribution's equation,
+#   but is very like to be calculated from simulation from price distribution frequency from collected data,
+#   when $\gamma$ is close to 1, the divisor is small, makes quota value look like $\alpha$ = E * a large number,
+#   the expectation expression, is $p$'s distribution graph, cut off left of threshold price, move right part beside y axis,
+#   and the expectation of the new distribution graph, the new expectation should be very small comparing to threshold price
+
+import math
 from random import choices
 # import pandas as pd
 import numpy as np
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 
 # ===========================
 # STAGE 1: price distribution
@@ -103,6 +154,66 @@ import numpy as np
 #     plt.close()
 # except Exception as e:
 #     print(f'failed to save histogram: {e}')
+
+# ================================================
+# STAGE 2: threshold price from price distribution
+
+# first try look at the graph in human eye
+# prices = np.clip(np.random.normal(loc=2000, scale=600, size=(16384, 12)).astype(int), 300, 5000)
+# min_prices = np.min(prices, axis=1)
+# RESULT: min: 1025, std: 325
+# graph looks normal but not that symmetric, if not clipped by 300, the left part is a lot longer(on x axis) than right part
+# print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
+
+# and mixture model
+weights = (0.9, 0.05, 0.05)
+distributions = ((2000, 500), (500, 100), (4500, 100))
+prices = []
+for _ in range(16384 * 12):
+    mean, deviation = choices(distributions, weights=weights)[0]
+    prices.append(np.clip([np.random.normal(loc=mean, scale=deviation)], 300, 5000)[0])
+prices = np.array(prices).reshape(16384, 12)
+min_prices = np.min(prices, axis=1)
+# RESULT: mean 870, std: 420
+# the graph have additional left peak because of clip 300
+print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
+
+bin_width = 50
+min_p = float(np.min(min_prices))
+max_p = float(np.max(min_prices))
+# create bins that cover the range [min_p, max_p]
+bins = np.arange(math.floor(min_p / bin_width) * bin_width,
+                    math.ceil(max_p / bin_width) * bin_width + bin_width,
+                    bin_width)
+plt.figure(figsize=(8, 4))
+plt.hist(min_prices, bins=bins, edgecolor='black')
+plt.xlabel('price')
+plt.ylabel('prob')
+plt.title('min price distribution')
+plt.tight_layout()
+plt.savefig('min_price_histogram.png', dpi=150)
+plt.close()
+
+# \[\gamma\alpha = E_p(max(p - \gamma\alpha, 0))\frac_{\gamma}{1 - \gamma}\]
+# RESULT: context3 + 0.9 is 1390?, 0.95 is 1710?, 0.99 is no convergence
+gamma = 0.99
+prices = min_prices
+result = prices.min()
+iteration = 0
+while True:
+    right_mean = prices[prices > result].mean()
+    next_right_mean = prices[prices > result + 10].mean()
+    print(f'guessed threshold {result} right mean {right_mean} diff {right_mean - result} next right mean {next_right_mean}')
+
+    # result and result+10 result in different sign
+    if ((right_mean - result) * gamma / (1 - gamma) - result) * ((next_right_mean - result) * gamma / (1 - gamma) - result - 10) < 0:
+        print(f'threshold price {result}')
+        break
+    result += 10
+    iteration += 1
+    if iteration > 500:
+        print('not convergence')
+        break
 
 # ==========================
 # STAGE 3: policy simulation
