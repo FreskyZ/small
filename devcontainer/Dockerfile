@@ -90,6 +90,43 @@ RUNEOF
 # workdir will inherit
 ENTRYPOINT ["/bin/zsh"]
 
+# docker build --target nodecurrent --tag mydevc/node:current .
+FROM mydevc/base:2 AS nodecurrent
+
+# https://unofficial-builds.nodejs.org/download/release/v25.6.1/node-v25.6.1-linux-x64-musl.tar.xz
+ADD node-v25.6.1-linux-x64-musl.tar.xz /build
+
+RUN <<RUNEOF
+set -ex
+# libstdc++: nodejs runtime dependency
+apk add --no-cache libstdc++
+# currently in alpine /usr/local is empty so can directly overwrite
+rm -rf /usr/local
+mv /build/node-v25.6.1-linux-x64-musl /usr/local
+# according to the official implementation,
+# delete folders in /usr/local/include/node/openssl/archs other than linux-x86_64
+# # by the way, the /usr/local/bin/node is 125m ???, the archs folder is 68m, the total uncompress size is 212m
+mv /usr/local/include/node/openssl/archs/linux-x86_64 /tmp/linux-x86_64
+rm -rf /usr/local/include/node/openssl/archs
+mkdir /usr/local/include/node/openssl/archs
+mv /tmp/linux-x86_64 /usr/local/include/node/openssl/archs/linux-x86_64
+# remove the outside text files by the way
+rm /usr/local/README.md /usr/local/LICENSE /usr/local/CHANGELOG.md
+rm -rf /build
+# update npm self version if need
+npm install -g npm@latest
+# smoke test
+node --version
+npm --version
+RUNEOF
+
+# basic check
+# $ node --version
+# $ npm --version
+
+# workdir will inherit
+ENTRYPOINT ["/bin/zsh"]
+
 # docker build --target python --tag mydevc/python:2 .
 FROM mydevc/base:2 AS python
 
