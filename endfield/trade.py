@@ -5,7 +5,7 @@
 # UV_CACHE_DIR=/endfield/.cache uv init
 # chown 1000:1000 main.py pyproject.toml uv.lock .python-version
 # uv add numpy pandas matplotlib
-# uv run main.py
+# uv run trade.py
 
 # Problem statement
 # - There are several distinct products produced at location A and demanded at location A and B.
@@ -166,54 +166,55 @@ import matplotlib.pyplot as plt
 # print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
 
 # and mixture model
-weights = (0.9, 0.05, 0.05)
-distributions = ((2000, 500), (500, 100), (4500, 100))
-prices = []
-for _ in range(16384 * 12):
-    mean, deviation = choices(distributions, weights=weights)[0]
-    prices.append(np.clip([np.random.normal(loc=mean, scale=deviation)], 300, 5000)[0])
-prices = np.array(prices).reshape(16384, 12)
-min_prices = np.min(prices, axis=1)
-# RESULT: mean 870, std: 420
-# the graph have additional left peak because of clip 300
-print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
+# weights = (0.9, 0.05, 0.05)
+# distributions = ((2000, 500), (500, 100), (4500, 100))
+# prices = []
+# for _ in range(16384 * 12):
+#     mean, deviation = choices(distributions, weights=weights)[0]
+#     prices.append(np.clip([np.random.normal(loc=mean, scale=deviation)], 300, 5000)[0])
+# prices = np.array(prices).reshape(16384, 12)
+# min_prices = np.min(prices, axis=1)
+# # RESULT: mean 870, std: 420
+# # the graph have additional left peak because of clip 300
+# print(f'mean: {min_prices.mean()}, std: {min_prices.std()}')
 
-bin_width = 50
-min_p = float(np.min(min_prices))
-max_p = float(np.max(min_prices))
-# create bins that cover the range [min_p, max_p]
-bins = np.arange(math.floor(min_p / bin_width) * bin_width,
-                    math.ceil(max_p / bin_width) * bin_width + bin_width,
-                    bin_width)
-plt.figure(figsize=(8, 4))
-plt.hist(min_prices, bins=bins, edgecolor='black')
-plt.xlabel('price')
-plt.ylabel('prob')
-plt.title('min price distribution')
-plt.tight_layout()
-plt.savefig('min_price_histogram.png', dpi=150)
-plt.close()
+# bin_width = 50
+# min_p = float(np.min(min_prices))
+# max_p = float(np.max(min_prices))
+# # create bins that cover the range [min_p, max_p]
+# bins = np.arange(math.floor(min_p / bin_width) * bin_width,
+#                     math.ceil(max_p / bin_width) * bin_width + bin_width,
+#                     bin_width)
+# plt.figure(figsize=(8, 4))
+# plt.hist(min_prices, bins=bins, edgecolor='black')
+# plt.xlabel('price')
+# plt.ylabel('prob')
+# plt.title('min price distribution')
+# plt.tight_layout()
+# plt.savefig('min_price_histogram.png', dpi=150)
+# plt.close()
 
 # \[\gamma\alpha = E_p(max(p - \gamma\alpha, 0))\frac_{\gamma}{1 - \gamma}\]
+# RESULT: context1 + 0.9 is 1340?, 0.95 is 1700?
 # RESULT: context3 + 0.9 is 1390?, 0.95 is 1710?, 0.99 is no convergence
-gamma = 0.99
-prices = min_prices
-result = prices.min()
-iteration = 0
-while True:
-    right_mean = prices[prices > result].mean()
-    next_right_mean = prices[prices > result + 10].mean()
-    print(f'guessed threshold {result} right mean {right_mean} diff {right_mean - result} next right mean {next_right_mean}')
+# gamma = 0.95
+# prices = min_prices
+# result = prices.min()
+# iteration = 0
+# while True:
+#     right_mean = prices[prices > result].mean()
+#     next_right_mean = prices[prices > result + 10].mean()
+#     print(f'guessed threshold {result} right mean {right_mean} diff {right_mean - result} next right mean {next_right_mean}')
 
-    # result and result+10 result in different sign
-    if ((right_mean - result) * gamma / (1 - gamma) - result) * ((next_right_mean - result) * gamma / (1 - gamma) - result - 10) < 0:
-        print(f'threshold price {result}')
-        break
-    result += 10
-    iteration += 1
-    if iteration > 500:
-        print('not convergence')
-        break
+#     # result and result+10 result in different sign
+#     if ((right_mean - result) * gamma / (1 - gamma) - result) * ((next_right_mean - result) * gamma / (1 - gamma) - result - 10) < 0:
+#         print(f'threshold price {result}')
+#         break
+#     result += 10
+#     iteration += 1
+#     if iteration > 500:
+#         print('not convergence')
+#         break
 
 # ==========================
 # STAGE 3: policy simulation
@@ -419,5 +420,24 @@ contextu = context1._replace(distribution=[(2000, 10000, 1)])
 # simulate(contextu, policy15)
 
 # the core issue seems always result in average remain quota 640
-# TODO change from determine buy amount by price to determine buy threshold by remain quota
-#      this should make remain quota more effective by discovering the distribution near threshold
+
+# after new stage 2, try to use all quota when price is below threshold price
+reference_policy_bp1 = reference_policy._replace(buy_base_price=1200, buy_amount_multiplier=1000)
+reference_policy_bp2 = reference_policy._replace(buy_base_price=1400, buy_amount_multiplier=1000)
+reference_policy_bp3 = reference_policy._replace(buy_base_price=1600, buy_amount_multiplier=1000)
+reference_policy_bp4 = reference_policy._replace(buy_base_price=1700, buy_amount_multiplier=1000)
+reference_policy_bp5 = reference_policy._replace(buy_base_price=1800, buy_amount_multiplier=1000)
+# simulate(context3, reference_policy_bp1) # 3690
+# simulate(context3, reference_policy_bp2) # 3695, avg quota ~600
+# simulate(context3, reference_policy_bp3) # 3695, avg quota ~400
+simulate(context3, reference_policy_bp4) # 3706, avg quota 0, storage 500, transaction 1.9
+# simulate(context3, reference_policy_bp5) # 3700, avg quota 0
+
+# CONCLUTION after new stage 2
+# use about 1700 and use all quota policy shows that max potential profit is 3700,
+# and average storage 500 shows that sell threshold is ok for this frequently buy policy
+# actually, as the max potential profit is not significant from naive policy,
+#
+# ===========================================
+# OTHER STRATEGY IS NOT MEANINGFUL TO PERFORM
+# ===========================================
