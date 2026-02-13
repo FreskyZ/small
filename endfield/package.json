@@ -1,0 +1,9 @@
+{
+  "name": "endfield",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {},
+  "dependencies": {
+    "json-bigint": "^1.0.0"
+  }
+}
