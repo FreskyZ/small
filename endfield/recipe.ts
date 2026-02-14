@@ -1,24 +1,10 @@
 import fs from 'node:fs/promises';
 import JSONBig from 'json-bigint';
 
-// download item and recipe data and format
+// this file migrate data structure for recipe.html
+// this is not the runtime front end script for recipe.html
 
-// open https://wiki.skland.com/endfield/catalog?typeMainId=1&typeSubId=6
-// open devtools, find this request
-// const response = await fetch('https://zonai.skland.com/web/v1/wiki/item/catalog?typeMainId=1&typeSubId=6');
-// and then find this request have strict server side validation
-// why do you have strict server side validation for a wiki site?
-// manually copy response content in devtool and paste it here
-
-const rawWikiItems = JSON.parse(await fs.readFile('data/raw-wiki-items.json', 'utf-8'));
-// for now only name and cover is needed
-const itemAndCovers: { name: string, cover: string }[] = rawWikiItems.data.catalog[0].typeSub[0].items.map(i => ({
-    name: i.name,
-    // TODO consider reduce dimension and store as data url
-    cover: i.brief.cover,
-}));
-
-// this wiki site use very strange backend data structure and is not able to be understand by human or ai
+// the wiki site use very strange backend data structure and is not able to be understand by human or ai
 // there is a look like game data but look like not up to date repo https://github.com/XiaBei-cy/EndfieldData
 // it is ok for now because no recipe update since game release
 
@@ -27,6 +13,7 @@ const fileContents: string[] = await Promise.all([
     fs.readFile('data/ItemTable.json', 'utf-8'),
     fs.readFile('data/FactoryBuildingTable.json', 'utf-8'),
     fs.readFile('data/FactoryMachineCraftTable.json', 'utf-8'),
+    fs.readFile('data/IconData2.json', 'utf-8'),
 ]);
 
 // NOTE this simple solution does not handle all types of contents in these complex files, you have to parse
@@ -51,7 +38,6 @@ interface Item {
     id: string,
     name: string, // name for human
     desc: string[], // main desc and additional desc for human
-    cover: string, // from wiki
 }
 const items: Item[] = [];
 for (const rawItem of Object.values(rawItems)) {
@@ -61,13 +47,6 @@ for (const rawItem of Object.values(rawItems)) {
         // NOTE if game data updated, check again
         // // where do you put these names?
         // console.log('missing item name', rawItem.id);
-        continue;
-    }
-    const cover = itemAndCovers.find(c => c.name == name)?.cover;
-    if (typeof cover == 'undefined') {
-        // missing item cover should mean that is not important
-        // TODO this list is too long, I think no missing item in final result should be enough
-        // console.log('missing item cover', rawItem.id);
         continue;
     }
     const desc = rawText[rawItem.desc.id.toString()];
@@ -81,18 +60,64 @@ for (const rawItem of Object.values(rawItems)) {
         // console.log('missing item desc', rawItem.id);
         continue;
     }
-    // TODO handle bottle with liquid
-    items.push({ id: rawItem.id, name, desc: [desc, decoDesc], cover });
+    items.push({ id: rawItem.id, name, desc: [desc, decoDesc] });
 }
-// negative direction check
-for (const itemAndCover of itemAndCovers) {
-    if (!items.find(i => i.name == itemAndCover.name)) {
-        // for now this list include local exp and a few upgrade material, which are not important
-        // NOTE if game data updated, check again
-        // console.log(`wiki item ${itemAndCover.name} not found`);
+
+// fix filled bottle name and description
+// no direct relationship with original bottle item name, e.g. original bottle name is glass_enr not glassenr
+const filledBottleItemIdPrefixes = [
+    'item_fbottle_glass_',
+    'item_fbottle_glassenr_',
+    'item_fbottle_iron_',
+    'item_fbottle_ironenr_',
+];
+const filledBottleLiquidPostfixes = {
+    'water': 'item_liquid_water',
+    'grass_1': 'item_liquid_plant_grass_1',
+    'grass_2': 'item_liquid_plant_grass_2',
+    'xiranite': 'item_liquid_xiranite',
+};
+for (const item of items) {
+    const prefix = filledBottleItemIdPrefixes.find(prefix => item.id.startsWith(prefix));
+    if (prefix) {
+        const postfix = item.id.substring(prefix.length);
+        if (!(postfix in filledBottleLiquidPostfixes)) {
+            console.log('item looks like filled bottle but liquid unknown', item);
+            continue;
+        }
+        const liquidItemId = filledBottleLiquidPostfixes[postfix];
+        const liquidName = items.find(i => i.id == liquidItemId)?.name;
+        item.desc[0] = `装有${liquidName}的${item.name}。`;
+        item.name = `${item.name} (${liquidName})`;
+        item.desc[1] = '我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？';
     }
 }
 // console.log(items);
+
+// icondata.json handled filled bottle items, put after item name and description handling
+const nameToIcons = JSON.parse(fileContents[4]) as {
+    name: string,
+    icon: string, // icon data uri
+}[];
+const icons: { id: string, icon: string }[] = [];
+for (const item of items) {
+    const icon = nameToIcons.find(c => c.name == item.name)?.icon;
+    if (typeof icon == 'undefined') {
+        // missing item icon should mean that is not important
+        // TODO this list is too long, I think no missing item in final result should be enough
+        // console.log('missing item icon', rawItem.id);
+        continue;
+    }
+    icons.push({ id: item.id, icon });
+}
+// negative direction check
+for (const { name } of nameToIcons) {
+    if (!items.find(i => i.name == name)) {
+        // for now this list include local exp and a few upgrade material, which are not important
+        // NOTE if game data updated, check again
+        // console.log(`wiki item ${name} not found`);
+    }
+}
 
 const rawMachines = JSONBig.parse(fileContents[2]) as {
     [id: string]: {
@@ -215,5 +240,34 @@ for (const recipe of recipes) {
 // filter out item and machine not used in recipe
 const filteredItems = items.filter(i => recipes.some(r => r.ingredients.some(r => r.id == i.id) || r.products.some(r => r.id == i.id)));
 const filteredMachines = machines.filter(m => recipes.some(r => r.machineId == m.id));
+const filteredIcons = icons.filter(c => filteredItems.some(r => r.id == c.id));
 
-await fs.writeFile('data/recipes.json', JSON.stringify({ items: filteredItems, machines: filteredMachines, recipes }));
+// JSON.stringify does not have line break option
+// it seems easier to manually format one line per entity (item, icon, machine, recipe)
+let sb = '';
+// now you can directly generate js instead of json
+// if this project is going to have a nginx, this file can be put separately
+sb += 'window["EndfieldRecipeData"] = {"items":[\n';
+for (const item of filteredItems) {
+    sb += JSON.stringify(item);
+    sb += ",\n";
+}
+// no indention by design
+sb += '],"machines":[\n';
+for (const machine of filteredMachines) {
+    sb += JSON.stringify(machine);
+    sb += ",\n";
+}
+sb += '],"recipes":[\n';
+for (const recipe of recipes) {
+    sb += JSON.stringify(recipe);
+    sb += ",\n";
+}
+// icons are very long, put them at bottom
+sb += '],"icons":{\n';
+for (const item of filteredIcons) {
+    sb += `"${item.id}": "${item.icon}",\n`;
+}
+sb += '}};\n';
+
+await fs.writeFile('data/recipes.js', sb);
