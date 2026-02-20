@@ -108,7 +108,6 @@
         const allRecipesExceptPour = data.recipes.filter(r => !(r.machineId == 'dismantler_1'
             && r.products.length == 2 && r.products.some(p => p.id.includes('bottle')) && r.products.some(p => p.id.includes('liquid'))));
 
-        // for loop recipe, allow same item appear in different line, disallow same item in same line
         // interface RecipeLink {
         //     id: string,
         //     name: string,
@@ -124,11 +123,29 @@
         //     // is duplicate node on the path, only displays node itself no children
         //     duplicate: boolean,
         // }
-        // same item always result in same tree structure, so can cache
-        // item id => RecipeNode
-        const recipeTreeCache = {};
+        // TODO change to this
+        // interface ItemNode {
+        //     // id, name, desc[0], desc[1], data.icons[id]
+        //     data: Item,
+        //     recipes: RecipeNode[],
+        //     // is duplicate node on the path, display an ellipsis for children
+        //     duplicate: boolean,
+        //     // TODO, this may be required
+        //     // parent: RecipeNode,
+        // }
+        // interface RecipeNode {
+        //     // id, name, machineId, time, ingredients, products
+        //     data: Recipe,
+        //     // use node[] here should make tree operations easier
+        //     // when need to display count, find them in node.data.ingredients
+        //     items: ItemNode[],
+        //     // TODO, this may be required
+        //     // parent: ItemNode,
+        // }
+        
+        // for loop recipe, allow same item appear in different line, disallow same item in same line
         // path: node id[] from root to current item, include root, not include current item, empty for the main item
-        // return RecipeNode
+        // return [ItemNode, Items[]], root node, possible products for root node
         function collectRecipeTree(item, path) {
             if (path.includes(item.id)) {
                 return { item, links: [], possibleProducts: [], duplicate: true };
