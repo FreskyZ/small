@@ -3,11 +3,14 @@
 
 // Tree Drawing Algorithms
 // [1] C. Wetherell and A. Shannon, Tidy drawimgs of trees. IEEE Transactions on Software Engineering, vol. SE-5, pp. 514-520, 1979.
+//     https://ieeexplore.ieee.org/document/1702661, the official site is not free, but this paper is too old so easy to download elsewhere
 // [2] E.Reingold and J.Tilford. Tidier drawings of trees. IEEE Transactions on Software Engineering, 7(2):223–228, 1981.
+//     https://ieeexplore.ieee.org/document/1702828, the official site is not free, but this paper is too old so easy to download elsewhere
 // [3] J.Walker II. A node-positioning algorithm for general trees. Software–Practice and Experience, 20(7):685–705, 1990.
-// // why is this citation so long
+//     https://onlinelibrary.wiley.com/doi/10.1002/spe.4380200705, this site is not free, but this paper is too old so easy to download elsewhere
 // [4] C. Buchheim, M. J¨unger, and S. Leipert. Improving Walker’s Algorithm to Run in Linear Time. In M. T. Goodrich and S. G.
 //     Kobourov, editors, Graph Drawing, volume 2528 of Lecture Notes in Computer Science, pages 344–353. Springer Berlin Heidelberg, 2002.
+//     https://link.springer.com/chapter/10.1007/3-540-36151-0_32, this site is free, that's modern free world
 
 // Aesthetic rules
 // // (aesthetic means pretty if you don't know the word)
@@ -50,6 +53,20 @@ function generateBinaryTree(): BinaryNode {
         return current;
     }
     return generate(null);
+}
+
+function generateBinaryTree2(size: number = 0): BinaryNode {
+    let nodeNameIndex = 1;
+    function generate(size: number, parent: BinaryNode): BinaryNode {
+        const node: BinaryNode = { name: nodeNameIndex++, parent, depth: (parent?.depth ?? -1) + 1, position: 0 };
+        const leftSize = randomInt(0, size - 1);
+        const rightSize = size - 1 - leftSize;
+        if (leftSize) { node.left = generate(leftSize, node); }
+        if (rightSize) { node.right = generate(rightSize, node); }
+        return node;
+    }
+    // start from 10 nodes, too small tree is not useful
+    return generate(size || randomInt(10, 30), null);
 }
 
 // item is [parent, left, right], left and right is 0 for null,
@@ -126,6 +143,41 @@ function veryPrettyPrintBinaryTree(root: BinaryNode) {
                 sb += `#${node.name}`.padStart(5);
             } else {
                 sb += ''.padStart(5);
+            }
+        }
+        console.log(sb);
+    }
+    console.log(); // margin bottom 1 line
+}
+function maybeClearerPrettyPrintBinaryTree(root: BinaryNode) {
+    
+    function visit(node: BinaryNode, f: (node: BinaryNode) => void) {
+        f(node);
+        if (node.left) { visit(node.left, f); }
+        if (node.right) { visit(node.right, f); }
+    }
+
+    let maxDepth = 0;
+    const allNodes: BinaryNode[] = [];
+    visit(root, node => {
+        allNodes.push(node);
+        maxDepth = Math.max(maxDepth, node.depth);
+    });
+
+    for (const depth of new Array(maxDepth + 1).fill(0).keys()) {
+        let sb = '';
+        const thisDepthNodes = allNodes.filter(n => n.depth == depth);
+        const maxPosition = thisDepthNodes.reduce((m, n) => Math.max(m, n.position), 0);
+        for (const position of new Array(maxPosition + 1).fill(0).keys()) {
+            const node = thisDepthNodes.find(n => n.position == position);
+            if (node) {
+                if (node.left || node.right) {
+                    sb += `${node.left?.name?.toString()?.padStart(2) ?? '__'}:${node.name.toString().padStart(2)}:${node.right?.name?.toString()?.padStart(2) ?? '__'}`.padStart(10);
+                } else {
+                    sb += `:${node.name.toString().padStart(2)}:`.padStart(8).padEnd(10);
+                }
+            } else {
+                sb += ''.padEnd(10);
             }
         }
         console.log(sb);
@@ -411,22 +463,23 @@ const case5 = createBinaryTree([
 
 // put original source code here, it's difficult to copy it from scanned pdf ocr result, language is pascal
 /*
-NODE = RECORD
-    INFO: INTEGER;
-    LLINK,
-    RLINK: LINK; (* POINTERS TO SUBTREES *)
-    XCOORD,
-    YCOORD: INTEGER; (* COORDINATES OF THIS NODE *)
-    OFFSET: INTEGER; (* DISTANCE TO EACH SON *)
-    THREAD: BOOLEAN
-END;
-TYPE LINK = ^NODE;
-
-EXTREME = RECORD
-    ADDR: LINK;
-    OFF: INTEGER;
-    LEV: INTEGER
-END;
+PROGRAM DRAW;
+TYPE
+    NODE = RECORD
+        INFO: INTEGER;
+        LLINK,
+        RLINK: ^NODE; (* POINTERS TO SUBTREES *)
+        XCOORD,
+        YCOORD: INTEGER; (* COORDINATES OF THIS NODE *)
+        OFFSET: INTEGER; (* DISTANCE TO EACH SON *)
+        THREAD: BOOLEAN
+    END;
+    EXTREME = RECORD
+        ADDR: ^NODE;
+        OFF: INTEGER;
+        LEV: INTEGER
+    END;
+    LINK = ^NODE;
 
 PROCEDURE SETUP (
     T: LINK;                     (* ROOT OF SUBTREE *)
@@ -568,17 +621,21 @@ interface BinaryNode2 extends BinaryNode {
     left?: BinaryNode2,
     right?: BinaryNode2,
     parent?: BinaryNode2,
+    // distance between this node and left child if have left child,
+    // distance between this node and right child if have right child,
+    // they use same distance
     offset?: number,
     thread?: boolean,
 }
 
 interface OutmostNode {
     node: BinaryNode2,
-    offset: number,
+    offset: number, // relative offset from current node, this value may be negative
     depth: number,
 }
 
 const MinSeparation = 1;
+
 // the source code in paper is too long to understand,
 // first translate them into javascript and rename the types and variables
 // T: node
@@ -604,15 +661,15 @@ function layout2_1(root: BinaryNode2) {
             return;
         }
 
-        const leftSubtreeLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const leftSubtreeRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const rightSubtreeLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const rightSubtreeRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
+        const leftSubtreeBottomLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
+        const leftSubtreeBottomRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
+        const rightSubtreeBottomLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
+        const rightSubtreeBottomRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
         if (node.left) {
-            setup(node.left, leftSubtreeLeftmost, leftSubtreeRightmost);
+            setup(node.left, leftSubtreeBottomLeftmost, leftSubtreeBottomRightmost);
         }
         if (node.right) {
-            setup(node.right, rightSubtreeLeftmost, rightSubtreeRightmost);
+            setup(node.right, rightSubtreeBottomLeftmost, rightSubtreeBottomRightmost);
         }
 
         let thisSeparation = MinSeparation; // separation of parameter node
@@ -620,6 +677,7 @@ function layout2_1(root: BinaryNode2) {
         let leftTotalOffset = 0; // offset from leftmost to node
         let rightTotalOffset = 0; // offset from rightmost to node
 
+        // Now consider each level in turn until one subtree is exhausted, pushing the subtrees apart when necessary.
         let left = node.left;
         let right = node.right;
         while (left && right) {
@@ -647,44 +705,47 @@ function layout2_1(root: BinaryNode2) {
             }
         }
 
+        // Set the offset in node, and include it in accumulated offsets for left and right
         node.offset = Math.floor((thisSeparation + 1) / 2);
         leftTotalOffset -= node.offset;
         rightTotalOffset += node.offset;
 
-        if (!node.left || rightSubtreeLeftmost.depth > leftSubtreeLeftmost.depth) {
-            leftmost.node = rightSubtreeLeftmost.node;
-            leftmost.depth = rightSubtreeLeftmost.depth;
-            leftmost.offset = rightSubtreeLeftmost.offset + node.offset;
+        // Update outmost descendants information
+        if (!node.left || rightSubtreeBottomLeftmost.depth > leftSubtreeBottomLeftmost.depth) {
+            leftmost.node = rightSubtreeBottomLeftmost.node;
+            leftmost.depth = rightSubtreeBottomLeftmost.depth;
+            leftmost.offset = rightSubtreeBottomLeftmost.offset + node.offset;
         } else {
-            leftmost.node = leftSubtreeLeftmost.node;
-            leftmost.depth = leftSubtreeLeftmost.depth;
-            leftmost.offset = leftSubtreeLeftmost.offset + node.offset;
+            leftmost.node = leftSubtreeBottomLeftmost.node;
+            leftmost.depth = leftSubtreeBottomLeftmost.depth;
+            leftmost.offset = leftSubtreeBottomLeftmost.offset + node.offset;
         }
-        if (!node.right || leftSubtreeRightmost.depth > rightSubtreeRightmost.depth) {
-            rightmost.node = leftSubtreeRightmost.node;
-            rightmost.depth = leftSubtreeRightmost.depth;
-            rightmost.offset = leftSubtreeRightmost.offset - node.offset;
+        if (!node.right || leftSubtreeBottomRightmost.depth > rightSubtreeBottomRightmost.depth) {
+            rightmost.node = leftSubtreeBottomRightmost.node;
+            rightmost.depth = leftSubtreeBottomRightmost.depth;
+            rightmost.offset = leftSubtreeBottomRightmost.offset - node.offset;
         } else {
-            rightmost.node = rightSubtreeRightmost.node;
-            rightmost.depth = rightSubtreeRightmost.depth;
-            rightmost.offset = rightSubtreeRightmost.offset + node.offset;
+            rightmost.node = rightSubtreeBottomRightmost.node;
+            rightmost.depth = rightSubtreeBottomRightmost.depth;
+            rightmost.offset = rightSubtreeBottomRightmost.offset + node.offset;
         }
 
+        // If subtrees of node were of uneven heights, check to see if threading is necessary. At most one thread needs to be inserted.
         if (left && left.name != node.left.name) {
-            rightSubtreeRightmost.node.thread = true;
-            rightSubtreeRightmost.node.offset = Math.abs(rightSubtreeRightmost.offset + node.offset - leftTotalOffset);
-            if (leftTotalOffset - node.offset <= rightSubtreeRightmost.offset) {
-                rightSubtreeRightmost.node.left = left;
+            rightSubtreeBottomRightmost.node.thread = true;
+            rightSubtreeBottomRightmost.node.offset = Math.abs(rightSubtreeBottomRightmost.offset + node.offset - leftTotalOffset);
+            if (leftTotalOffset - node.offset <= rightSubtreeBottomRightmost.offset) {
+                rightSubtreeBottomRightmost.node.left = left;
             } else {
-                rightSubtreeRightmost.node.right = left;
+                rightSubtreeBottomRightmost.node.right = left;
             }
         } else if (right && right.name != node.right.name) {
-            leftSubtreeLeftmost.node.thread = true;
-            leftSubtreeLeftmost.node.offset = Math.abs(leftSubtreeLeftmost.offset - node.offset - rightTotalOffset);
-            if (rightTotalOffset + node.offset >= leftSubtreeLeftmost.offset) {
-                leftSubtreeLeftmost.node.right = right;
+            leftSubtreeBottomLeftmost.node.thread = true;
+            leftSubtreeBottomLeftmost.node.offset = Math.abs(leftSubtreeBottomLeftmost.offset - node.offset - rightTotalOffset);
+            if (rightTotalOffset + node.offset >= leftSubtreeBottomLeftmost.offset) {
+                leftSubtreeBottomLeftmost.node.right = right;
             } else {
-                leftSubtreeLeftmost.node.left = right;
+                leftSubtreeBottomLeftmost.node.left = right;
             }
         }
     }
@@ -708,164 +769,457 @@ function layout2_1(root: BinaryNode2) {
     setup(root, rootLeftmost, rootRightmost);
     // console.log(rootLeftmost, rootRightmost);
     // TODO the paper skips the function to find the leftmost position to determine root node's absolute position
-    petrify(root, 1);
+    petrify(root, 10);
+    
+    let minPosition = 100;
+    function checkPosition(node: BinaryNode2) {
+        minPosition = Math.min(minPosition, node.position);
+        if (node.left) {
+            checkPosition(node.left);
+        }
+        if (node.right) {
+            checkPosition(node.right);
+        }
+    }
+    checkPosition(root);
+    // make minposition=0
+    function normalizePosition(node: BinaryNode2) {
+        node.position -= minPosition;
+        if (node.left) {
+            normalizePosition(node.left);
+        }
+        if (node.right) {
+            normalizePosition(node.right);
+        }
+    }
+    normalizePosition(root);
 }
 
-// AI converted version
-function layout2_2(root: BinaryNode2) {
-    /**
-     * This procedure implements algorithm TR, assigning relative positionings
-     * to all nodes in the tree pointed to by parameter node.
-     */
-    function setup(node: BinaryNode2 | null, depth: number, rightmost: OutmostNode, leftmost: OutmostNode): void {
+// OutmostNode.depth seems always .node.depth, but to make sure it's ok to remove, do not change 2_1, so add a new type here
+// RESULT of remove depth: ok
+interface OutmostNode2 {
+    node: BinaryNode2,
+    offset: number, // relative offset from current node, this value may be negative
+}
 
-        if (!node.right && !node.left) {
-            // Leaf node is both leftmost and rightmost
-            rightmost.node = node;
-            leftmost.node = node;
-            rightmost.depth = depth;
-            leftmost.depth = depth;
-            rightmost.offset = 0;
-            leftmost.offset = 0;
+function layout2_2(root: BinaryNode2, log: boolean = false) {
+
+    function setup(node: BinaryNode2, leftmost: OutmostNode2, rightmost: OutmostNode2) {
+
+        // a leaf node is both the leftmost and rightmost node of the subtree
+        if (!node.left && !node.right) {
             node.offset = 0;
+            leftmost.node = node;
+            leftmost.offset = 0;
+            rightmost.node = node;
+            rightmost.offset = 0;
             return;
         }
 
-        const leftSubtreeRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const leftSubtreeLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const rightSubtreeRightmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        const rightSubtreeLeftmost: OutmostNode = { node: null, offset: 0, depth: -1 };
-        // Position subtrees recursively
+        // leftmost node on *lowest* level of left subtree, etc.
+        const leftSubtreeBottomLevelLeftmost: OutmostNode2 = { node: null, offset: 0 };
+        const leftSubtreeBottomLevelRightmost: OutmostNode2 = { node: null, offset: 0 };
+        const rightSubtreeBottomLevelLeftmost: OutmostNode2 = { node: null, offset: 0 };
+        const rightSubtreeBottomLevelRightmost: OutmostNode2 = { node: null, offset: 0 };
         if (node.left) {
-            setup(node.left, depth + 1, leftSubtreeRightmost, leftSubtreeLeftmost);
+            setup(node.left, leftSubtreeBottomLevelLeftmost, leftSubtreeBottomLevelRightmost);
+            // early return if no right
+            if (!node.right) {
+                node.offset = Math.floor((MinSeparation + 1) / 2);
+                leftmost.node = leftSubtreeBottomLevelLeftmost.node;
+                leftmost.offset = leftSubtreeBottomLevelLeftmost.offset + node.offset;
+                rightmost.node = leftSubtreeBottomLevelRightmost.node;
+                rightmost.offset = leftSubtreeBottomLevelRightmost.offset - node.offset;
+                return;
+            }
         }
         if (node.right) {
-            setup(node.right, depth + 1, rightSubtreeRightmost, rightSubtreeLeftmost);
+            setup(node.right, rightSubtreeBottomLevelLeftmost, rightSubtreeBottomLevelRightmost);
+            // early return if no left
+            if (!node.left) {
+                node.offset = Math.floor((MinSeparation + 1) / 2);
+                leftmost.node = rightSubtreeBottomLevelLeftmost.node;
+                leftmost.offset = rightSubtreeBottomLevelLeftmost.offset + node.offset;
+                rightmost.node = rightSubtreeBottomLevelRightmost.node;
+                rightmost.offset = rightSubtreeBottomLevelRightmost.offset + node.offset;
+                return;
+            }
         }
-        
-        // Node is not a leaf
 
-        // Set up for subtree pushing. Place roots of
-        // subtrees minimum distance apart.
-        let currentSeparation = MinSeparation;
+        // required separation of this node's left child and right child
         let thisSeparation = MinSeparation;
-        let leftTotalOffset = 0;
-        let rightTotalOffset = 0;
-    
-        let left = node.left;      // Follows contour of left subtree
-        let right = node.right;    // Follows contour of right subtree
+        // when comparing in each iteration, is the separation of
+        // left subtree rightmost node and right subtree leftmost node *at this depth*,
+        // NOTE not the leftSubtreeRightmost variable, that's at bottom level
+        let currentSeparation = MinSeparation;
+        // at the beginning of each iteration,
+        // is the offset from this node.left to left subtree rightmost node *at this depth*,
+        // NOTE not this node.left to leftSubtreeRightmost variable, that's at bottom level
+        // this is offset, not distance, this is positive when right boundary is at right of thisnode.left, negative when is at left of thisnode.left
+        let leftSubtreeRightmostOffset = 0;
+        let rightSubtreeLeftmostOffset = 0;
 
-        // Now consider each level in turn until one
-        // subtree is exhausted, pushing the subtrees
-        // apart when necessary.
+        // Now consider each level in turn until one subtree is exhausted, pushing the subtrees apart when necessary.
+        let left = node.left;
+        let right = node.right;
         while (left && right) {
+            if (log) { console.log(`#${node.name} try push apart #${left.name} and #${right.name}`); }
             if (currentSeparation < MinSeparation) {
+                if (log) { console.log(`#${node.name} push apart current separation ${currentSeparation}`); }
                 thisSeparation += MinSeparation - currentSeparation;
                 currentSeparation = MinSeparation;
             }
-
-            // Advance left & right pointers
             if (left.right) {
-                leftTotalOffset += left.offset;
+                leftSubtreeRightmostOffset += left.offset;
+                // left move from left to left.right, current separation decreases left.offset
                 currentSeparation -= left.offset;
+                if (log && left.thread && left.right) { console.log(`#${node.name} going down from threaded #${left.name} to #${left.right?.name ?? '(not going down)'}`); }
                 left = left.right;
             } else {
-                leftTotalOffset -= left.offset;
+                leftSubtreeRightmostOffset -= left.offset;
                 currentSeparation += left.offset;
+                if (log && left.thread && left.left) { console.log(`#${node.name} going down from threaded #${left.name} to #${left.left?.name ?? '(not going down)'}`); }
                 left = left.left;
             }
-
             if (right.left) {
-                rightTotalOffset -= right.offset;
+                rightSubtreeLeftmostOffset -= right.offset;
                 currentSeparation -= right.offset;
+                if (log && right.thread && right.left) { console.log(`#${node.name} going down from threaded #${right.name} to #${right.left?.name ?? '(not going down)'}`); }
                 right = right.left;
             } else {
-                rightTotalOffset += right.offset;
+                rightSubtreeLeftmostOffset += right.offset;
                 currentSeparation += right.offset;
+                if (log && right.thread && right.right) { console.log(`#${node.name} going down from threaded #${right.name} to #${right.right?.name ?? '(not going down)'}`); }
                 right = right.right;
             }
         }
+        // the final left and right, if not null, left should be the at the right boundary of left subtree, right should be at the left boundary of right subtree
+        // the thread mechanism will correctly link the branch until bottom of the subtree, so the result left and right, if not null, must be at bottom of left subtree and right subtree
 
-        // Set the offset in node, and include it in
-        // accumulated offsets for left and right
+        // this is the only assignment to node.offset
         node.offset = Math.floor((thisSeparation + 1) / 2);
-        leftTotalOffset -= node.offset;
-        rightTotalOffset += node.offset;
 
-        // Update extreme descendants information
-        if (!node.left || rightSubtreeLeftmost.depth > leftSubtreeLeftmost.depth) {
-            leftmost.node = rightSubtreeLeftmost.node;
-            leftmost.offset = rightSubtreeLeftmost.offset + node.offset;
+        // lefttotaloffset is offset from node.left to left subtree rightmost node at final level (or bottom level because of the thread mechanism) after the loop
+        // then subtract thisnode.offset here, becomes the offset from thisnode to left subtree right node at bottom level
+        leftSubtreeRightmostOffset -= node.offset;
+        rightSubtreeLeftmostOffset += node.offset;
+        if (log) { console.log(`#${node.name} offset ${node.offset} left offset ${leftSubtreeRightmostOffset} right offset ${rightSubtreeLeftmostOffset}`); }
+
+        // for a leaf node, leftmost and rightmost is at the deepest level of the subtree (only contains the node itself)
+        // for any non leaf node, if left subtree leftmost and rightmost is at the deepest level of left subtree, and right subtree leftmost and rightmost is at the deepest level of right subtree
+        //    then this node's leftmost is the deeper in left subtree leftmost and right subtree rightmost, which must be at the deepest level of the subtree from this node
+        // so for any node, leftmost and rightmost must be at the deepest level of the subtree rooted at this node
+        if (!node.left || (rightSubtreeBottomLevelLeftmost.node && leftSubtreeBottomLevelLeftmost.node && rightSubtreeBottomLevelLeftmost.node.depth > leftSubtreeBottomLevelLeftmost.node.depth)) {
+            // bottom most of thisnode is the deeper in left subtree bottom and right subtree bottom
+            leftmost.node = rightSubtreeBottomLevelLeftmost.node;
+            // the result thisnode bottom most offset is offset from thisnode.right to right subtree bottom most add thisnode's offset
+            leftmost.offset = rightSubtreeBottomLevelLeftmost.offset + node.offset;
+            if (log) { console.log(`#${node.name} left outmost is right subtree bottom leftmost #${leftmost.node.name} offset ${leftmost.offset}`); }
         } else {
-            leftmost.node = leftSubtreeLeftmost.node;
-            leftmost.offset = leftSubtreeLeftmost.offset - node.offset;
+            leftmost.node = leftSubtreeBottomLevelLeftmost.node;
+            leftmost.offset = leftSubtreeBottomLevelLeftmost.offset + node.offset;
+            if (log) { console.log(`#${node.name} left outmost is left subtree bottom leftmost #${leftmost.node.name} offset ${leftmost.offset}`); }
+        }
+        if (!node.right || (leftSubtreeBottomLevelRightmost.node && rightSubtreeBottomLevelRightmost.node && leftSubtreeBottomLevelRightmost.node.depth > rightSubtreeBottomLevelRightmost.node.depth)) {
+            rightmost.node = leftSubtreeBottomLevelRightmost.node;
+            rightmost.offset = leftSubtreeBottomLevelRightmost.offset - node.offset;
+            if (log) { console.log(`#${node.name} right outmost is left subtree bottom rightmost #${rightmost.node?.name} offset ${rightmost.offset}`); }
+        } else {
+            rightmost.node = rightSubtreeBottomLevelRightmost.node;
+            rightmost.offset = rightSubtreeBottomLevelRightmost.offset + node.offset;
+            if (log) { console.log(`#${node.name} right outmost is right subtree bottom rightmost #${rightmost.node?.name} offset ${rightmost.offset}`); }
         }
 
-        if (!node.right || leftSubtreeRightmost.depth > rightSubtreeRightmost.depth) {
-            rightmost.node = leftSubtreeRightmost.node;
-            rightmost.offset = leftSubtreeRightmost.offset - node.offset;
-        } else {
-            rightmost.node = rightSubtreeRightmost.node;
-            rightmost.offset = rightSubtreeRightmost.offset + node.offset;
-        }
-
-        // If subtrees of node were of uneven heights, check
-        // to see if threading is necessary. At most one
-        // thread needs to be inserted.
-
+        // when left == node.left, that means node.left != null and node.right == null, in this case, no right subtree bottom most is set, cannot add thread
         if (left && left.name != node.left.name) {
-            if (rightSubtreeRightmost.node) {
-                rightSubtreeRightmost.node.thread = true;
-                rightSubtreeRightmost.node.offset = Math.abs(rightSubtreeRightmost.offset + node.offset - leftTotalOffset);
-                if (leftTotalOffset - node.offset <= rightSubtreeRightmost.offset) {
-                    rightSubtreeRightmost.node.left = left;
-                } else {
-                    rightSubtreeRightmost.node.right = left;
-                }
+            // if left, then right is null, left subtree is deeper than right subtree,
+            // then add a thread to the right subtree bottom level right most node to left side final node, which is left subtree rightmost node at the level that is one level below right subtree bottom level
+            // this thread correctly maintains right boundary of subtree of thisnode
+            // no need to continue linking is because the subtree inside left subtree below bottom of right subtree bottom already maintains its right boundary
+            rightSubtreeBottomLevelRightmost.node.thread = true;
+            if (log) { console.log(`#${node.name} alternating right subtree right most #${rightSubtreeBottomLevelRightmost.node
+                .name} offset from ${rightSubtreeBottomLevelRightmost.node.offset} to ${Math.abs(rightSubtreeBottomLevelRightmost.offset + node.offset - leftSubtreeRightmostOffset)}`); }
+            // TODO what's this + then -
+            rightSubtreeBottomLevelRightmost.node.offset = Math.abs(rightSubtreeBottomLevelRightmost.offset + node.offset - leftSubtreeRightmostOffset);
+            if (leftSubtreeRightmostOffset - node.offset <= rightSubtreeBottomLevelRightmost.offset) {
+                rightSubtreeBottomLevelRightmost.node.left = left;
+                if (log) { console.log(`#${node.name} threading right subtree right most #${rightSubtreeBottomLevelRightmost.node.name}.left to #${left.name}`); }
+            } else {
+                rightSubtreeBottomLevelRightmost.node.right = left;
+                if (log) { console.log(`#${node.name} threading right subtree right most #${rightSubtreeBottomLevelRightmost.node.name}.right to #${left.name}`); }
             }
         } else if (right && right.name != node.right.name) {
-            if (leftSubtreeLeftmost.node) {
-                leftSubtreeLeftmost.node.thread = true;
-                leftSubtreeLeftmost.node.offset = Math.abs(leftSubtreeLeftmost.offset - node.offset - rightTotalOffset);
-                if (rightTotalOffset + node.offset >= leftSubtreeLeftmost.offset) {
-                    leftSubtreeLeftmost.node.right = right;
-                } else {
-                    leftSubtreeLeftmost.node.left = right;
-                }
+            leftSubtreeBottomLevelLeftmost.node.thread = true;
+            if (log) { console.log(`#${node.name} alternating left subtree left most #${leftSubtreeBottomLevelLeftmost.node
+                .name} offset from ${leftSubtreeBottomLevelLeftmost.node.offset} to ${Math.abs(leftSubtreeBottomLevelLeftmost.offset - node.offset - leftSubtreeRightmostOffset)}`); }
+            leftSubtreeBottomLevelLeftmost.node.offset = Math.abs(leftSubtreeBottomLevelLeftmost.offset - node.offset - rightSubtreeLeftmostOffset);
+            if (rightSubtreeLeftmostOffset + node.offset >= leftSubtreeBottomLevelLeftmost.offset) {
+                leftSubtreeBottomLevelLeftmost.node.right = right;
+                if (log) { console.log(`#${node.name} threading left subtree left most #${leftSubtreeBottomLevelLeftmost.node.name}.right to #${right.name}`); }
+            } else {
+                leftSubtreeBottomLevelLeftmost.node.left = right;
+                if (log) { console.log(`#${node.name} threading left subtree left most #${leftSubtreeBottomLevelLeftmost.node.name}.left to #${right.name}`); }
             }
         }
     }
-
-    /**
-     * This procedure performs a preorder traversal of the tree,
-     * converting the relative offsets to absolute coordinates.
-     */
-    function petrify(node: BinaryNode2 | null, position: number): void {
+    
+    const [rootLeftmost, rootRightmost] = [{ node: null, offset: 0 }, { node: null, offset: 0 }];
+    setup(root, rootLeftmost, rootRightmost);
+    // TODO check again after understand how the outmost parameters work
+    let minPosition = 100;
+    function setPosition1(node: BinaryNode2, position: number) {
         node.position = position;
+        minPosition = Math.min(minPosition, position);
         if (node.thread) {
             node.thread = false;
+            node.left = null;
             node.right = null;
-            node.left = null; // Threaded node must be a leaf
         }
-        if (node.left) { petrify(node.left, position - node.offset); }
-        if (node.right) { petrify(node.right, position + node.offset); }
+        if (node.left) {
+            setPosition1(node.left, position - node.offset);
+        }
+        if (node.right) {
+            setPosition1(node.right, position + node.offset);
+        }
     }
-    
-    const [rootLeftmost, rootRightmost] = [{ node: null, offset: 0, depth: -1 }, { node: null, offset: 0, depth: -1 }];
-    setup(root, 0, rootLeftmost, rootRightmost);
-    // console.log(rootLeftmost, rootRightmost);
-    // TODO the paper skips the function to find the leftmost position to determine root node's absolute position
-    petrify(root, 1);
+    setPosition1(root, 0);
+    // make minposition=0
+    function setPosition2(node: BinaryNode2) {
+        node.position -= minPosition;
+        if (node.left) {
+            setPosition2(node.left);
+        }
+        if (node.right) {
+            setPosition2(node.right);
+        }
+    }
+    setPosition2(root);
 }
 
-const tree1 = case5 as BinaryNode1;
+// it's ok to call layout2_3's node BinaryNode3, because layout3 will work on m-ary node, not binary node
+interface BinaryNode3 extends BinaryNode {
+    left?: BinaryNode3,
+    right?: BinaryNode3,
+    parent?: BinaryNode3,
+    // distance between this node and left child if have left child,
+    // distance between this node and right child if have right child,
+    // they use same distance
+    offset?: number,
+    // link to next node on the left or right boundary, only for leaf node
+    // TODO is all leaf node linked?
+    thread?: BinaryNode3,
+}
+interface BottomBoundary {
+    left?: BinaryNode3,
+    leftOffset?: number,
+    right?: BinaryNode3,
+    rightOffset?: number,
+}
+function layout2_3(root: BinaryNode3) {
+
+    function setup(thisnode: BinaryNode3, bottomBoundary: BottomBoundary) {
+
+        if (!thisnode.left && !thisnode.right) {
+            thisnode.offset = 0;
+            bottomBoundary.left = thisnode;
+            bottomBoundary.leftOffset = 0;
+            bottomBoundary.right = thisnode;
+            bottomBoundary.rightOffset = 0;
+        }
+
+        let leftSubtreeBottomBoundary: BottomBoundary = {};
+        if (thisnode.left) {
+            setup(thisnode.left, leftSubtreeBottomBoundary);
+            // early return when no right child
+            if (!thisnode.right) {
+                thisnode.offset = Math.floor((MinSeparation + 1) / 2);
+                bottomBoundary.left = leftSubtreeBottomBoundary.left;
+                bottomBoundary.leftOffset = leftSubtreeBottomBoundary.leftOffset;
+                bottomBoundary.right = leftSubtreeBottomBoundary.right;
+                bottomBoundary.rightOffset = leftSubtreeBottomBoundary.rightOffset;
+            }
+        }
+
+        let righSubtreeBottomBoundary: BottomBoundary = {};
+        if (thisnode.right) {
+            setup(thisnode.right, righSubtreeBottomBoundary);
+            // early return when no left child
+            if (!thisnode.left) {
+                thisnode.offset = Math.floor((MinSeparation + 1) / 2);
+                bottomBoundary.left = righSubtreeBottomBoundary.left;
+                bottomBoundary.leftOffset = righSubtreeBottomBoundary.leftOffset;
+                bottomBoundary.right = righSubtreeBottomBoundary.right;
+                bottomBoundary.rightOffset = righSubtreeBottomBoundary.rightOffset;
+            }
+        }
+
+        let thisnodeRequiredSeparation = MinSeparation;
+        let currentSeparation = MinSeparation;
+        let leftSubtreeOffset = 0;
+        let rightSubtreeOffset = 0;
+    }
+}
+
+// case 6: a random case looks good by layout2, not very good by layout1
+const case6 = createBinaryTree([
+    [1, 2, 6],
+    [2, 3, 0],
+    [3, 4, 5],
+    [6, 7, 8],
+    [8, 9, 26],
+    [9, 10, 0],
+    [10, 11, 0],
+    [11, 12, 25],
+    [12, 13, 24],
+    [13, 0, 14],
+    [14, 15, 23],
+    [15, 16, 22],
+    [16, 17, 21],
+    [17, 0, 18],
+    [18, 19, 20],
+]);
+
+// case 7: layout 2 is wider than layout 1, although looks better, is this ok?
+//         UPDATE: it's common that lyout 2 is wider than layout 1, layout 2 is persueing aethentic rule 4, not narrow
+const case7 = createBinaryTree([
+    [1, 2, 28],
+    [2, 3, 27],
+    [3, 0, 4],
+    [4, 5, 6],
+    [6, 7, 0],
+    [7, 8, 26],
+    [8, 9, 10],
+    [10, 11, 25],
+    [11, 12, 24],
+    [12, 13, 23],
+    [13, 14, 22],
+    [14, 15, 21],
+    [15, 16, 0],
+    [16, 17, 20],
+    [17, 18, 19],
+]);
+
+// case 8, a random case layout 2 is narrower than layout 1
+const case8 = createBinaryTree([
+    [1, 2, 22],
+    [2, 0, 3],
+    [3, 0, 4],
+    [4, 5, 6],
+    [6, 0, 7],
+    [7, 0, 8],
+    [8, 9, 10],
+    [10, 11, 0],
+    [11, 12, 13],
+    [13, 14, 17],
+    [14, 0, 15],
+    [15, 0, 16],
+    [17, 18, 21],
+    [18, 19, 20],
+]);
+
+// case 9, a looks more balanced random case after upgrading random tree generator
+const case9 = createBinaryTree([
+    [1, 2, 8],
+    [2, 3, 6],
+    [3, 4, 5],
+    [6, 7, 0],
+    [8, 9, 20],
+    [9, 10, 19],
+    [10, 11, 18],
+    [11, 0, 12],
+    [12, 13, 15],
+    [13, 0, 14],
+    [15, 16, 17],
+    [20, 21, 22],
+    [22, 23, 24],
+]);
+
+const case10 = createBinaryTree([
+    [1, 2, 28],
+    [2, 3, 17],
+    [3, 4, 6],
+    [4, 0, 5],
+    [6, 0, 7],
+    [7, 8, 13],
+    [8, 9, 0],
+    [9, 10, 11],
+    [11, 12, 0],
+    [13, 14, 15],
+    [15, 0, 16],
+    [17, 18, 19],
+    [19, 20, 26],
+    [20, 0, 21],
+    [21, 22, 25],
+    [22, 0, 23],
+    [23, 24, 0],
+    [26, 0, 27],
+]);
+
+// case 11: a wide tree with low height, should have many push apart cases
+const case11 = createBinaryTree([
+    [1, 2, 25],
+    [2, 3, 21],
+    [3, 4, 16],
+    [4, 5, 11],
+    [5, 0, 6],
+    [6, 7, 0],
+    [7, 0, 8],
+    [8, 0, 9],
+    [9, 0, 10],
+    [11, 12, 15],
+    [12, 0, 13],
+    [13, 14, 0],
+    [16, 17, 19],
+    [17, 18, 0],
+    [19, 0, 20],
+    [21, 0, 22],
+    [22, 23, 0],
+    [23, 24, 0],
+    [25, 26, 27],
+]);
+
+// case 12: manually create to see what happens when a subtree have kind of flat bottom (more than 2 nodes at bottom)
+// RESULT: correctly finds leftmost and rightmost in bottom level, also correct when leftmost and rightmost is in different branch
+const case12 = createBinaryTree([
+    [1, 2, 3],
+    [2, 4, 0],
+    [3, 0, 5],
+]);
+
+// case 13: obvious empty column from layout1
+const case13 = createBinaryTree([
+    [1, 2, 22],
+    [2, 3, 18],
+    [3, 0, 4],
+    [4, 5, 11],
+    [5, 6, 10],
+    [6, 7, 8],
+    [8, 0, 9],
+    [11, 12, 14],
+    [12, 13, 0],
+    [14, 0, 15],
+    [15, 16, 17],
+    [18, 19, 21],
+    [19, 0, 20],
+    [22, 23, 30],
+    [23, 24, 25],
+    [25, 26, 0],
+    [26, 0, 27],
+    [27, 28, 29],
+]);
+
+// const tree1 = generateBinaryTree2() as BinaryNode1;
+const tree1 = case13 as BinaryNode1;
 notPrettyPrintBinaryTree(tree1);
+
 layout1_3(tree1);
 veryPrettyPrintBinaryTree(tree1);
-
+// maybeClearerPrettyPrintBinaryTree(tree1);
 const tree2 = tree1 as BinaryNode2;
 layout2_1(tree2);
 veryPrettyPrintBinaryTree(tree2);
-layout2_2(tree2);
+// maybeClearerPrettyPrintBinaryTree(tree2);
+layout2_2(tree2, false);
 // kindOfPrettyPrintBinaryTree(tree2);
 veryPrettyPrintBinaryTree(tree2);
+maybeClearerPrettyPrintBinaryTree(tree2);
