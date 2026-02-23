@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 
 // To make the production tree beautiful, you need...
 
@@ -89,7 +90,8 @@ function createBinaryTree(relationships: [number, number, number][]): BinaryNode
     }
     return nodes[0];
 }
-const allcase: BinaryNode[] = new Array(100).fill(null);
+const allcase: BinaryNode[] = JSON.parse(await fs.readFile('trees.json', 'utf-8'))
+    .map((v: number[][]) => createBinaryTree(v.filter(r => typeof r != 'string') as [number, number, number][]));
 
 function notPrettyPrintBinaryTree(node: BinaryNode) {
     if (node.left || node.right) {
@@ -386,87 +388,6 @@ function layout1_3(root: BinaryNode1, log: boolean = false, basePosition: number
 // // random case
 // const tree = generateBinaryTree() as BinaryNode1;
 // notPrettyPrintBinaryTree(tree);
-
-// case 1: paper 1 fig 5
-allcase[1] = createBinaryTree([
-    [1, 2, 3],
-    [2, 4, 5],
-    [3, 0, 6],
-    [5, 7, 8],
-    [6, 0, 9],
-    [9, 10, 0],
-    [10, 11, 12],
-    [11, 13, 14],
-]) as BinaryNode1;
-
-// // case 2: paper 1 fig 8
-allcase[2] = createBinaryTree([
-    [1, 2, 3],
-    [2, 4, 5],
-    [3, 6, 7],
-    [7, 8, 9],
-    [8, 0, 10],
-    [10, 0, 11],
-    [11, 0, 12],
-    [12, 0, 13],
-]) as BinaryNode1;
-
-// case 3: paper 2 fig 1, this have unwanted shift right at node#15
-// this also shows layout1_2 have defact, it is fixed in layout1_3
-allcase[3] = createBinaryTree([
-    [1, 2, 3],
-    [2, 4, 5],
-    [3, 6, 7],
-    [4, 8, 9],
-    [7, 10, 11],
-    [8, 12, 13],
-    [11, 14, 15],
-    [12, 16, 17],
-    [15, 18, 19],
-    [17, 20, 21],
-    [18, 22, 23],
-    [21, 24, 25],
-    [22, 26, 27],
-    [25, 28, 29],
-    [26, 30, 31],
-]) as BinaryNode1;
-
-// case 4: a random case also shows layout1_2 have defact
-allcase[4] = createBinaryTree([
-    [1, 2, 4],
-    [2, 0, 3],
-    [4, 5, 26],
-    [5, 6, 25],
-    [6, 7, 24],
-    [7, 8, 0],
-    [8, 9, 0],
-    [9, 10, 23],
-    [10, 11, 0],
-    [11, 0, 12],
-    [12, 13, 0],
-    [13, 14, 22],
-    [14, 15, 21],
-    [15, 16, 0],
-    [16, 17, 0],
-    [17, 18, 20],
-    [18, 0 , 19],
-]) as BinaryNode1;
-
-// case 5: paper 2 fig 5 shows paper 1 produce different subtree even though they are same structure
-// this example seems refer to modified version of paper 1 (layout1_4), which is not implmenented here, but original version also have this issue
-allcase[5] = createBinaryTree([
-    [1, 2, 3],
-    [3, 4, 5],
-    [4, 6, 0],
-    [6, 0, 9],
-    [5, 7, 8],
-    [8, 10, 11],
-    [10, 12, 0],
-    [11, 13, 14],
-    [12, 0, 15],
-    [13, 0, 16],
-    [14, 17, 0],
-]) as BinaryNode1;
 
 // layout1_1(tree);
 // veryPrettyPrintBinaryTree(tree);
@@ -1272,96 +1193,106 @@ function layout2_3(root: BinaryNode3) {
     }
     function setPosition(node: BinaryNode3, position: number) {
         node.position = position;
+        node.thread = null; // don't forget to clean thread to avoid use by later implementations
         if (node.left) { setPosition(node.left, position - node.offset); }
         if (node.right) { setPosition(node.right, position + node.offset); }
     }
     setPosition(root, -minCursorOffset);
 }
 
-// TODO 2_4: try avoid bottom boundary by going down left boundary of left subtree and right boundary of right subtree as well
+// layout2_4: try avoid bottom boundary by going down left boundary of left subtree and right boundary of right subtree as well
+// RESULT: pass 1000 cases of 100 nodes immediately
 function layout2_4(root: BinaryNode3) {
 
     function setup(thisnode: BinaryNode3) {
-
         if (!thisnode.left && !thisnode.right) {
             thisnode.offset = 0;
             return;
         }
-
         thisnode.offset = Math.floor((MinDistance + 1) / 2);
 
         if (thisnode.left) {
             setup(thisnode.left);
-            // early return when no right child
             if (!thisnode.right) { return; }
         }
         if (thisnode.right) {
             setup(thisnode.right);
-            // early return when no left child
             if (!thisnode.left) { return; }
         }
 
-        let [leftcursor, rightcursor] = [thisnode.left, thisnode.right];
-        let [leftCursorOffset, rightCursorOffset] = [0, 0];
+        // don't forget cursor offset is subtract thisnode.left or thisnode.right, not thisnode
+        let [leftSubtreeLeftCursor, leftSubtreeLeftCursorOffset] = [thisnode.left, 0];
+        let [leftSubtreeRightCursor, leftSubtreeRightCursorOffset] = [thisnode.left, 0];
+        let [rightSubtreeLeftCursor, rightSubtreeLeftCursorOffset] = [thisnode.right, 0];
+        let [rightSubtreeRightCursor, rightSubtreeRightCursorOffset] = [thisnode.right, 0];
 
-        while (leftcursor && rightcursor) {
+        // can keep use this iteration condition because
+        // left left cursor and left right cursor ends at same depth, right left cursor and right right cursor ends at same depth
+        while (leftSubtreeRightCursor && rightSubtreeLeftCursor) {
 
-            if (leftcursor.thread) {
-                leftCursorOffset += leftcursor.offset;
-                leftcursor = leftcursor.thread;
-            } else if (leftcursor.right) {
-                leftCursorOffset += leftcursor.offset;
-                leftcursor = leftcursor.right;
+            if (leftSubtreeRightCursor.thread) {
+                leftSubtreeRightCursorOffset += leftSubtreeRightCursor.offset;
+                leftSubtreeRightCursor = leftSubtreeRightCursor.thread;
+            } else if (leftSubtreeRightCursor.right) {
+                leftSubtreeRightCursorOffset += leftSubtreeRightCursor.offset;
+                leftSubtreeRightCursor = leftSubtreeRightCursor.right;
             } else {
-                leftCursorOffset -= leftcursor.offset;
-                leftcursor = leftcursor.left;
+                leftSubtreeRightCursorOffset -= leftSubtreeRightCursor.offset;
+                leftSubtreeRightCursor = leftSubtreeRightCursor.left;
+            }
+            // left left cursor is similar to right left cursor, but do not go into null
+            if (leftSubtreeLeftCursor.thread) {
+                leftSubtreeLeftCursorOffset += leftSubtreeLeftCursor.offset;
+                leftSubtreeLeftCursor = leftSubtreeLeftCursor.thread;
+            } else if (leftSubtreeLeftCursor.left) {
+                leftSubtreeLeftCursorOffset -= leftSubtreeLeftCursor.offset;
+                leftSubtreeLeftCursor = leftSubtreeLeftCursor.left;
+            } else if (leftSubtreeLeftCursor.right) {
+                leftSubtreeLeftCursorOffset += leftSubtreeLeftCursor.offset;
+                leftSubtreeLeftCursor = leftSubtreeLeftCursor.right;
+            }
+            
+            if (rightSubtreeLeftCursor.thread) {
+                rightSubtreeLeftCursorOffset += rightSubtreeLeftCursor.offset;
+                rightSubtreeLeftCursor = rightSubtreeLeftCursor.thread;
+            } else if (rightSubtreeLeftCursor.left) {
+                rightSubtreeLeftCursorOffset -= rightSubtreeLeftCursor.offset;
+                rightSubtreeLeftCursor = rightSubtreeLeftCursor.left;
+            } else {
+                rightSubtreeLeftCursorOffset += rightSubtreeLeftCursor.offset;
+                rightSubtreeLeftCursor = rightSubtreeLeftCursor.right;
+            }
+            // right right cursor is simlar to left right cursor, but do not go into null
+            if (rightSubtreeRightCursor.thread) {
+                rightSubtreeRightCursorOffset += rightSubtreeRightCursor.offset;
+                rightSubtreeRightCursor = rightSubtreeRightCursor.thread;
+            } else if (rightSubtreeRightCursor.right) {
+                rightSubtreeRightCursorOffset += rightSubtreeRightCursor.offset;
+                rightSubtreeRightCursor = rightSubtreeRightCursor.right;
+            } else if (rightSubtreeRightCursor.left) {
+                rightSubtreeRightCursorOffset -= rightSubtreeRightCursor.offset;
+                rightSubtreeRightCursor = rightSubtreeRightCursor.left;
             }
 
-            if (rightcursor.thread) {
-                rightCursorOffset += rightcursor.offset;
-                rightcursor = rightcursor.thread;
-            } else if (rightcursor.left) {
-                rightCursorOffset -= rightcursor.offset;
-                rightcursor = rightcursor.left;
-            } else {
-                rightCursorOffset += rightcursor.offset;
-                rightcursor = rightcursor.right;
-            }
-
-            if (leftcursor && rightcursor && 2 * thisnode.offset + rightCursorOffset - leftCursorOffset < MinSeparation) {
-                thisnode.offset = Math.ceil((MinSeparation + leftCursorOffset - rightCursorOffset) / 2);
+            // console.log(`#${thisnode.name} try push apart #${leftSubtreeRightCursor?.name ?? '(empty)'} and #${
+            //     rightSubtreeLeftCursor?.name ?? '(empty)'}, by the way, ll is #${leftSubtreeLeftCursor?.name ?? '(empty)'}, rr is #${rightSubtreeRightCursor?.name ?? '(empty)'}`);
+            if (
+                leftSubtreeRightCursor && rightSubtreeLeftCursor
+                && 2 * thisnode.offset + rightSubtreeLeftCursorOffset - leftSubtreeRightCursorOffset < MinSeparation
+            ) {
+                thisnode.offset = Math.ceil((MinSeparation + leftSubtreeRightCursorOffset - rightSubtreeLeftCursorOffset) / 2);
             }
         }
 
-
-        // create thread if necessary
-        if (leftcursor) {
-            // left subtree is deeper than right subtree,
-            // connect right subtree bottom right boundary to left subtree right boundary at one level below right subtree bottom, which is exactly left cursor
-            rightSubtreeBottomBoundary.right.thread = leftcursor;
-            // requirement: if node.thread, node.offset = node.thread.position - node.position
-            // requirement: thisnode.right.bottomBoundary.right.offset = leftcursor.position - thisnode.right.bottomBoundary.right.position
-            // given thisnode.right.bottomBoundary.rightOffset = thisnode.right.bottomBoundary.right.position - thisnode.right.position
-            // negate: -thisnode.right.bottomBoundary.rightOffset = thisnode.right.position - thisnode.right.bottomBoundary.right.position
-            // given leftCursorOffset = leftcursor.position - thisnode.left.position
-            // change left to right: leftCursorOffset = leftcursor.position - (thisnode.right.position - 2 * thisnode.offset)
-            // transform: thisnode.right.position + leftCursorOffset - 2 * thisnode.offset = leftcursor.position
-            // append +leftCursorOffset-2thisnode.offset makes thisnode.right.position becomes leftcursor.position, which is same as requirement
-            rightSubtreeBottomBoundary.right.offset = leftCursorOffset - 2 * thisnode.offset - rightSubtreeBottomBoundary.rightOffset;
-        } else if (rightcursor) {
-            // right subtree is deeper than left subtree
-            // connect left subtree bottom left boundary to right subtree left boundary at one level below left subtree bottom, which is exactly right cursor
-            leftSubtreeBottomBoundary.left.thread = rightcursor;
-            // requirement: if node.thread, node.offset = node.thread.position - node.position
-            // requirement: thisnode.left.bottomBoundary.left.offset = rightcursor.position - thisnode.left.bottomBoundary.left.position
-            // given thisnode.left.bottomBoundary.leftOffset = thisnode.left.bottomBoundary.left.position - thisnode.left.position
-            // negate: -thisnode.left.bottomBoundary.leftOffset = thisnode.left.position - thisnode.left.bottomBoundary.left.position
-            // given rightCursorOffset = rightcursor.position - thisnode.right.position
-            // change right to left: rightCursorOffset = rightcursor.position - (thisnode.left.position + 2 * thisnode.offset)
-            // transform: thisnode.left.position + rightCursorOffset + 2 * thisnode.offset = rightcursor.position
-            // append +rightCursorOffset+2thisnode.offset makes thisnode.left.position becomes rightcursor.position, which is same as requirement
-            leftSubtreeBottomBoundary.left.offset = rightCursorOffset + 2 * thisnode.offset - leftSubtreeBottomBoundary.leftOffset;
-        } // else they are balanced, no need thread
+        if (leftSubtreeRightCursor) {
+            // console.log(`#${thisnode.name} threading #${rightSubtreeRightCursor.name} to #${leftSubtreeRightCursor.name}`);
+            rightSubtreeRightCursor.thread = leftSubtreeRightCursor;
+            rightSubtreeRightCursor.offset = leftSubtreeRightCursorOffset - 2 * thisnode.offset - rightSubtreeRightCursorOffset;
+        } else if (rightSubtreeLeftCursor) {
+            // console.log(`#${thisnode.name} threading #${leftSubtreeLeftCursor.name} to #${rightSubtreeLeftCursor.name}`);
+            leftSubtreeLeftCursor.thread = rightSubtreeLeftCursor;
+            leftSubtreeLeftCursor.offset = rightSubtreeLeftCursorOffset + 2 * thisnode.offset - leftSubtreeLeftCursorOffset;
+        }
     }
 
     setup(root);
@@ -1396,277 +1327,12 @@ function layout2_4(root: BinaryNode3) {
     }
     setPosition(root, -minCursorOffset);
 }
-// TODO 2_5: use an array to store relative positions for each level, this is same time complexity and more cache friendly
 
-// case 6: a random case looks good by layout2, not very good by layout1
-allcase[6] = createBinaryTree([
-    [1, 2, 6],
-    [2, 3, 0],
-    [3, 4, 5],
-    [6, 7, 8],
-    [8, 9, 26],
-    [9, 10, 0],
-    [10, 11, 0],
-    [11, 12, 25],
-    [12, 13, 24],
-    [13, 0, 14],
-    [14, 15, 23],
-    [15, 16, 22],
-    [16, 17, 21],
-    [17, 0, 18],
-    [18, 19, 20],
-]);
-
-// case 7: layout 2 is wider than layout 1, although looks better, is this ok?
-//         UPDATE: it's common that lyout 2 is wider than layout 1, layout 2 is persueing aethentic rule 4, not narrow
-allcase[7] = createBinaryTree([
-    [1, 2, 28],
-    [2, 3, 27],
-    [3, 0, 4],
-    [4, 5, 6],
-    [6, 7, 0],
-    [7, 8, 26],
-    [8, 9, 10],
-    [10, 11, 25],
-    [11, 12, 24],
-    [12, 13, 23],
-    [13, 14, 22],
-    [14, 15, 21],
-    [15, 16, 0],
-    [16, 17, 20],
-    [17, 18, 19],
-]);
-
-// case 8, a random case layout 2 is narrower than layout 1
-allcase[8] = createBinaryTree([
-    [1, 2, 22],
-    [2, 0, 3],
-    [3, 0, 4],
-    [4, 5, 6],
-    [6, 0, 7],
-    [7, 0, 8],
-    [8, 9, 10],
-    [10, 11, 0],
-    [11, 12, 13],
-    [13, 14, 17],
-    [14, 0, 15],
-    [15, 0, 16],
-    [17, 18, 21],
-    [18, 19, 20],
-]);
-
-// case 9, a looks more balanced random case after upgrading random tree generator
-allcase[9] = createBinaryTree([
-    [1, 2, 8],
-    [2, 3, 6],
-    [3, 4, 5],
-    [6, 7, 0],
-    [8, 9, 20],
-    [9, 10, 19],
-    [10, 11, 18],
-    [11, 0, 12],
-    [12, 13, 15],
-    [13, 0, 14],
-    [15, 16, 17],
-    [20, 21, 22],
-    [22, 23, 24],
-]);
-
-allcase[10] = createBinaryTree([
-    [1, 2, 28],
-    [2, 3, 17],
-    [3, 4, 6],
-    [4, 0, 5],
-    [6, 0, 7],
-    [7, 8, 13],
-    [8, 9, 0],
-    [9, 10, 11],
-    [11, 12, 0],
-    [13, 14, 15],
-    [15, 0, 16],
-    [17, 18, 19],
-    [19, 20, 26],
-    [20, 0, 21],
-    [21, 22, 25],
-    [22, 0, 23],
-    [23, 24, 0],
-    [26, 0, 27],
-]);
-
-// case 11: a wide tree with low height, should have many push apart cases
-allcase[11] = createBinaryTree([
-    [1, 2, 25],
-    [2, 3, 21],
-    [3, 4, 16],
-    [4, 5, 11],
-    [5, 0, 6],
-    [6, 7, 0],
-    [7, 0, 8],
-    [8, 0, 9],
-    [9, 0, 10],
-    [11, 12, 15],
-    [12, 0, 13],
-    [13, 14, 0],
-    [16, 17, 19],
-    [17, 18, 0],
-    [19, 0, 20],
-    [21, 0, 22],
-    [22, 23, 0],
-    [23, 24, 0],
-    [25, 26, 27],
-]);
-
-// case 12: manually create to see what happens when a subtree have kind of flat bottom (more than 2 nodes at bottom)
-// RESULT: correctly finds leftmost and rightmost in bottom level, also correct when leftmost and rightmost is in different branch
-allcase[12] = createBinaryTree([
-    [1, 2, 3],
-    [2, 4, 0],
-    [3, 0, 5],
-]);
-
-// case 13: obvious empty column from layout1
-allcase[13] = createBinaryTree([
-    [1, 2, 22],
-    [2, 3, 18],
-    [3, 0, 4],
-    [4, 5, 11],
-    [5, 6, 10],
-    [6, 7, 8],
-    [8, 0, 9],
-    [11, 12, 14],
-    [12, 13, 0],
-    [14, 0, 15],
-    [15, 16, 17],
-    [18, 19, 21],
-    [19, 0, 20],
-    [22, 23, 30],
-    [23, 24, 25],
-    [25, 26, 0],
-    [26, 0, 27],
-    [27, 28, 29],
-]);
-
-// case 14: layout2_1 and layout2_2 provides not optimal #1.offset = 3 result
-// while layout1_3 and layout2_3 correctly gives #1.offset = 2 result
-// this is because of the original ROOTSEP design is not precise enough comparing to layout2_3's directly calculate thisnode.offset design
-// amazingly this situation does not appear again in later about 30 random case manual checks, so add automatic mechanism for that
-allcase[14] = createBinaryTree([
-    [1, 2, 8],
-    [2, 0, 3],
-    [3, 4, 0],
-    [4, 5, 0],
-    [5, 0, 6],
-    [6, 0, 7],
-    [8, 9, 10],
-    [10, 11, 0],
-    [11, 12, 14],
-    [12, 13, 0],
-    [14, 15, 0],
-    [15, 16, 0],
-]);
-
-// case 15: a not very special random tree with 30 nodes and layout2s are 2 blocks better
-allcase[15] = createBinaryTree([
-    [1, 2, 9],
-    [2, 3, 6],
-    [3, 0, 4],
-    [4, 5, 0],
-    [6, 7, 0],
-    [7, 8, 0],
-    [9, 10, 20],
-    [10, 11, 0],
-    [11, 12, 0],
-    [12, 13, 16],
-    [13, 14, 15],
-    [16, 17, 0],
-    [17, 18, 0],
-    [18, 0, 19],
-    [20, 21, 24],
-    [21, 0, 22],
-    [22, 0, 23],
-    [24, 25, 0],
-    [25, 0, 26],
-    [26, 27, 29],
-    [27, 0, 28],
-    [29, 30, 0],
-]);
-
-// case 16: a looks good random tree
-allcase[16] = createBinaryTree([
-    [1, 2, 19],
-    [2, 3, 0],
-    [3, 4, 6],
-    [4, 5, 0],
-    [6, 7, 9],
-    [7, 8, 0],
-    [9, 10, 15],
-    [10, 11, 12],
-    [12, 13, 0],
-    [13, 0, 14],
-    [15, 16, 17],
-    [17, 18, 0],
-    [19, 0, 20],
-    [20, 21, 22],
-    [22, 0, 23],
-]);
-
-// case 17: layout2s are 4 blocks better than layout1
-allcase[17] = createBinaryTree([
-    [1, 2, 4],
-    [2, 3, 0],
-    [4, 5, 7],
-    [5, 0, 6],
-    [7, 8, 10],
-    [8, 0, 9],
-    [10, 11, 14],
-    [11, 12, 0],
-    [12, 0, 13],
-    [14, 15, 22],
-    [15, 16, 21],
-    [16, 17, 18],
-    [18, 0, 19],
-    [19, 0, 20],
-    [22, 23, 0],
-    [23, 0, 24],
-    [24, 0, 25],
-    [25, 0, 26],
-]);
-
-// case 18: another case14 find by auto mechanism
-allcase[18] = createBinaryTree([
-    [1, 2, 39],
-    [2, 3, 24],
-    [3, 4, 8],
-    [4, 0, 5],
-    [5, 0, 6],
-    [6, 7, 0],
-    [8, 9, 0],
-    [9, 10, 20],
-    [10, 11, 0],
-    [11, 12, 14],
-    [12, 0, 13],
-    [14, 0, 15],
-    [15, 16, 17],
-    [17, 18, 0],
-    [18, 0, 19],
-    [20, 21, 22],
-    [22, 23, 0],
-    [24, 25, 26],
-    [26, 27, 29],
-    [27, 28, 0],
-    [29, 30, 34],
-    [30, 31, 33],
-    [31, 0, 32],
-    [34, 35, 36],
-    [36, 37, 0],
-    [37, 0, 38],
-    [39, 40, 46],
-    [40, 41, 42],
-    [42, 43, 44],
-    [44, 45, 0],
-    [46, 47, 48],
-    [48, 49, 50]
-]);
+// 2_5: use an array to store relative positions for each level, this is same time complexity and more cache friendly
+//      I guess this does not help with paper 3 and 4 and final target, so skip for now
+// function layout2_4() {
+//     ...
+// }
 
 function autotest2_3() {
     let T = 100;
@@ -1691,10 +1357,38 @@ function autotest2_3() {
         }
     }
 }
+function autotest2_4() {
+    console.log('auto test 2_4');
+    let T = 100;
+    while (T--) {
+        const tree = generateBinaryTree2(100);
+        layout2_3(tree);
+        const map3 = collectLayoutResult(tree);
+        layout2_4(tree);
+        const map4 = collectLayoutResult(tree);
+        const [keys3, keys4] = [new Set(map3.keys()), new Set(map4.keys())];
+        const same = (() => {
+            if (!keys3.isSubsetOf(keys4) || !keys4.isSubsetOf(keys3)) { return false; }
+            for (const nodeName of keys3) {
+                if (map3.get(nodeName) != map4.get(nodeName)) { return false; }
+            }
+            return true;
+        })();
+        if (!same) {
+            console.log(`not ok: #${100 - T}`);
+            notPrettyPrintBinaryTree(tree);
+            return;
+        }
+    }
+    console.log('pass 100x100 case!');
+}
 
 let tree: BinaryNode;
 if (process.argv[2] == 'auto2_3') {
     autotest2_3();
+    process.exit(0);
+} else if (process.argv[2] == 'auto2_4') {
+    autotest2_4();
     process.exit(0);
 } else if (process.argv[2]) {
     tree = allcase[+process.argv[2]];
@@ -1707,19 +1401,21 @@ if (process.argv[2] == 'auto2_3') {
 }
 notPrettyPrintBinaryTree(tree);
 
-const tree1 = tree as BinaryNode1;
-layout1_3(tree1);
-veryPrettyPrintBinaryTree(tree1);
+// const tree1 = tree as BinaryNode1;
+// layout1_3(tree1);
+// veryPrettyPrintBinaryTree(tree1);
 // maybeClearerPrettyPrintBinaryTree(tree1);
-const tree2 = tree as BinaryNode2;
-layout2_1(tree2);
-veryPrettyPrintBinaryTree(tree2);
+// const tree2 = tree as BinaryNode2;
+// layout2_1(tree2);
+// veryPrettyPrintBinaryTree(tree2);
 // maybeClearerPrettyPrintBinaryTree(tree2);
-layout2_2(tree2, false);
+// layout2_2(tree2, false);
 // kindOfPrettyPrintBinaryTree(tree2);
-veryPrettyPrintBinaryTree(tree2);
+// veryPrettyPrintBinaryTree(tree2);
 // maybeClearerPrettyPrintBinaryTree(tree2);
 const tree3 = tree as BinaryNode3;
 layout2_3(tree3);
 veryPrettyPrintBinaryTree(tree3);
 // maybeClearerPrettyPrintBinaryTree(tree3);
+layout2_4(tree3);
+veryPrettyPrintBinaryTree(tree3);
