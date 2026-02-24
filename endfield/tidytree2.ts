@@ -17,12 +17,19 @@ interface Node {
     depth: number, // start from 0
 }
 
+function round(value: number, decimalPlace: number = 0) {
+    const multiplier = Math.pow(10, decimalPlace);
+    return Math.round(value * multiplier) / multiplier;
+}
+// debug display normally use round2
+const round2 = (value: number) => round(value, 2);
+
 function randomInt(min: number, max: number) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function generateTree(size: number = 0): Node {
-    size = size || randomInt(20, 60);
+    size = size || randomInt(20, 80);
     let nodeNameIndex = 1;
 
     const root: Node = { name: nodeNameIndex++, children: [], position: 0, depth: 0 };
@@ -95,7 +102,7 @@ function printTreePositions(root: Node) {
     for (const depth of new Array(maxDepth + 1).fill(0).keys()) {
         let sb = `depth ${depth}: `;
         for (const node of allNodes.filter(n => n.depth == depth)) {
-            sb += `#${node.name} at ${node.position}, `;
+            sb += `#${node.name} at ${round2(node.position)}, `;
         }
         sb = sb.substring(0, sb.length - 2);
         console.log(sb);
@@ -111,12 +118,12 @@ function prettyPrintTree(root: Node) {
     for (const depth of new Array(maxDepth + 1).fill(0).keys()) {
         let sb = '';
         const thisDepthNodes = allNodes.filter(n => n.depth == depth);
-        const maxPosition = thisDepthNodes.reduce((m, n) => Math.max(m, n.position), 0);
+        const maxPosition = thisDepthNodes.reduce((m, n) => Math.max(m, Math.round(n.position)), 0);
         for (const position of new Array(maxPosition + 1).fill(0).keys()) {
-            if (thisDepthNodes.filter(n => n.position == position).length > 1) {
+            if (thisDepthNodes.filter(n => Math.round(n.position) == position).length > 1) {
                 console.log(`!!! depth ${depth} position ${position} have overlapped nodes`);
             }
-            const node = thisDepthNodes.find(n => n.position == position);
+            const node = thisDepthNodes.find(n => Math.round(n.position) == position);
             if (node) {
                 sb += `#${node.name}`.padStart(5);
             } else {
@@ -127,12 +134,6 @@ function prettyPrintTree(root: Node) {
     }
     console.log(); // margin bottom 1 line
 }
-
-// if (!process.argv[2]) {
-//     console.log(`missing argv[2] as test case if you are running this code`);
-//     process.exit(1);
-// }
-// const binaryTree = createBinaryTree(allcases[+process.argv[2] - 1]);
 
 // -----------------------------------------
 // -------------- PAPER 3 ------------------
@@ -152,7 +153,9 @@ interface Node {
 
 const MinDistance = 1;
 // layout1: try expand 2_3 to generic trees
-function layout1(root: Node, log: boolean = false) {
+function layout1(root: Node, stat: { logs?: string[] }) {
+    stat.logs = [];
+    const log = (record: string) => stat.logs.push(record);
 
     function setup(thisnode: Node) {
         // nothing to do for leaf node (relative position is now in child nodes,
@@ -169,16 +172,13 @@ function layout1(root: Node, log: boolean = false) {
         const childCount = thisnode.children.length;
         const childIndexSequence = new Array(childCount).fill(0).map((_, i) => i);
         // assign initial position to childrens
-        for (const childIndex of childIndexSequence) {
-            thisnode.children[childIndex].position = childIndex * MinDistance;
-        }
+        childIndexSequence.forEach(childIndex => thisnode.children[childIndex].position = childIndex == 0 ? 0 : MinDistance);
 
-        if (log) { console.log(`#${thisnode.name} children [${thisnode.children.map(c => c.name).join(', ')}]`); }
-
-        // most left descendant position, leftmostDescendantPosition = leftmostNode.position - node.children[0].position
-        let leftmostDescendantPosition = 0;
-        // most right descendant position, rightmostDescendantPosition = rightmostNode.position - node.children[0].position
-        let rightmostDescendantPosition = (thisnode.children.length - 1) * MinDistance;
+        log(`#${thisnode.name} children [${thisnode.children.map(c => c.name).join(', ')}]`);
+    
+        // active child indexes, start from all children indexes, remove from this list if the subtree is exhausted
+        // find active siblings to push apart and leftmost and rightmost subtree index to find leftmost and rightmost descendant
+        let activeIndexes = childIndexSequence.map(i => i);
         // child index => left cursor node
         // ATTENTION: this is the left boundary of all children subtrees, is NOT same as bin tree solution's left subtree right boundary cursor
         const leftCursors = thisnode.children.map(n => n);
@@ -192,9 +192,14 @@ function layout1(root: Node, log: boolean = false) {
         // ATTENTION: this is the relative position of right boundaries of child subtrees, is not same as bin tree solution's right subtree left boundary cursor
         const rightCursorOffsets = thisnode.children.map(() => 0);
 
-        // active child indexes, start from all children indexes, remove from this list if the subtree is exhausted
-        // find active siblings to push apart and leftmost and rightmost subtree index to find leftmost and rightmost descendant
-        let activeIndexes = childIndexSequence.map(i => i);
+        // most left descendant position, leftmostDescendantPosition = leftmostNode.position - node.children[0].position
+        let leftmostDescendantPosition = 0;
+        // - leftmost descendant can be compared cross iterations, but rightmost node may be pushed apart in later loops,
+        //   cannot simply record single value relative to thisnode.children[0], need to record rightmost node for each subtree and compare them later
+        // - not all subtree may record rightmost node, if a subtree is shadowed by a right side subtree, no rightmost node recorded
+        // child index => rightmostNode.position - node.children[childIndex].position, initialize with the rightmost child
+        let rightmostNodes = childIndexSequence.map(childIndex =>
+            childIndex == childCount - 1 ? { node: thisnode.children[childIndex], offset: 0 } : { node: null, offset: undefined });
 
         // add a hard loop count limit to help debug
         let loopCount = 0;
@@ -206,131 +211,157 @@ function layout1(root: Node, log: boolean = false) {
         //   connect previous leftmost subtree left boundary node to new leftmost subtree current left cursor and continue finding leftmost node position
         // - this avoids duplicate threading mechanism in intermediate boundaries, and looks very COOL
         while (activeIndexes.length) {
-            if (log) {
-                console.log(`  begin loop, activeIndexes = ${activeIndexes.join(',')}`);
-                console.log(`  leftCursors = ${childIndexSequence.map(i => `[${i}]=#${leftCursors[i]?.name ?? '()'},${leftCursorOffsets[i]}`).join(',')}`);
-                console.log(`  rightCursors = ${childIndexSequence.map(i => `[${i}]=#${rightCursors[i]?.name ?? '()'},${rightCursorOffsets[i]}`).join(',')}`);
-            }
+            log(`  begin loop, activeIndexes = ${activeIndexes.join(',')}`);
+            log(`  leftCursors = ${childIndexSequence.map(i => `[${i}]=#${leftCursors[i]?.name ?? '()'},${round2(leftCursorOffsets[i])}`).join(',')}`);
+            log(`  rightCursors = ${childIndexSequence.map(i => `[${i}]=#${rightCursors[i]?.name ?? '()'},${round2(rightCursorOffsets[i])}`).join(',')}`);
 
             // first go down all boundaries of all subtrees if active
-            for (const childIndex of childIndexSequence) {
-                if (leftCursors[childIndex] && leftCursors[childIndex].thread) {
-                    if (log) { console.log(`  subtree[${childIndex}] left cursor go down from #${leftCursors[childIndex].name} to thread #${
-                        leftCursors[childIndex].thread.name} offset ${leftCursorOffsets[childIndex]} reduce ${leftCursors[childIndex].thread.threadOffset}`); }
+            for (const childIndex of activeIndexes) {
+                if (leftCursors[childIndex].thread) {
+                    log(`  subtree[${childIndex}] left cursor go down from #${leftCursors[childIndex].name} to thread #${
+                        leftCursors[childIndex].thread.name} offset ${round2(leftCursorOffsets[childIndex])} increase ${round2(leftCursors[childIndex].thread.threadOffset)}`);
                     leftCursors[childIndex] = leftCursors[childIndex].thread;
-                    // TODO proof the sign
-                    leftCursorOffsets[childIndex] -= leftCursors[childIndex].threadOffset;
-                } else if (leftCursors[childIndex] && leftCursors[childIndex].children.length) {
-                    if (log) { console.log(`  subtree[${childIndex}] left cursor go down from #${leftCursors[childIndex].name} to #${leftCursors[childIndex].children[
-                        leftCursors[childIndex].children.length - 1].name} offset ${leftCursorOffsets[childIndex]} reduce ${leftCursors[childIndex].children[leftCursors[childIndex].children.length - 1].position}`); }
-                    leftCursors[childIndex] = leftCursors[childIndex].children[leftCursors[childIndex].children.length - 1];
-                    // TODO proof the sign
-                    leftCursorOffsets[childIndex] -= leftCursors[childIndex].position;
-                } else if (leftCursors[childIndex] && (childIndex != activeIndexes[0] || activeIndexes.length == 1)) {
+                    // thisnode.children[childIndex].position + oldCursorOffsets[childIndex] = oldCursors[childIndex].position
+                    // oldCursors[childIndex].position + threadOffset = newCursors[childIndex]
+                    // require thisnode.children[childIndex].position + newCursorOffsets[childIndex] = newCursors[childIndex].position
+                    // so +threadOffset meets the requirement
+                    leftCursorOffsets[childIndex] += leftCursors[childIndex].threadOffset;
+                } else if (leftCursors[childIndex].children.length) {
+                    log(`  subtree[${childIndex}] left cursor go down from #${leftCursors[childIndex].name} to #${
+                        leftCursors[childIndex].children[0].name} offset ${round2(leftCursorOffsets[childIndex])} increase ${round2(leftCursors[childIndex].children[0].position)}`);
+                    leftCursors[childIndex] = leftCursors[childIndex].children[0];
+                    // similar to threadOffset, need to add newLeftCursor.position - oldLeftCursor.position, which is exactly the preliminary position stored in node
+                    leftCursorOffsets[childIndex] += leftCursors[childIndex].position;
+                } else if (childIndex != activeIndexes[0] || activeIndexes.length == 1) {
                     // - normally go down null
                     //   if is leftmost subtree, stay here for later thread operation, a null right cursor of this subtree will indicate this situation
                     //   *while in this exception*, still go down null when only one remaining subtree, or else the loop does not end, no need to thread when only one active subtree
                     // - second leftmost subtree may go down null at the same time, but threading only adds
                     //   on leftmost subtree last node and new leftmost subtree current cursor, second leftmost subtree last node is not relevant
-                    if (log) { console.log(`  subtree[${childIndex}] left cursor go down from ${leftCursors[childIndex].name} to null`); }
+                    log(`  subtree[${childIndex}] left cursor go down from #${leftCursors[childIndex].name} to null`);
                     leftCursors[childIndex] = null;
                 } else {
-                    if (log) { console.log(`  subtree[${childIndex}] left cursor stay`); }
+                    log(`  subtree[${childIndex}] left cursor stay at #${leftCursors[childIndex].name}`);
                 }
 
-                if (rightCursors[childIndex] && rightCursors[childIndex].thread) {
-                    if (log) { console.log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to thread #${
-                        rightCursors[childIndex].thread.name} offset ${rightCursorOffsets[childIndex]} increase ${rightCursors[childIndex].thread.threadOffset}`); }
+                if (rightCursors[childIndex].thread) {
+                    log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to thread #${
+                        rightCursors[childIndex].thread.name} offset ${round2(rightCursorOffsets[childIndex])} increase ${round2(rightCursors[childIndex].thread.threadOffset)}`);
                     rightCursors[childIndex] = rightCursors[childIndex].thread;
-                    // TODO proof the sign
+                    // thisnode.children[childIndex].position + oldCursorOffsets[childIndex] = oldCursors[childIndex].position
+                    // oldCursors[childIndex].position + threadOffset = newCursors[childIndex]
+                    // require thisnode.children[childIndex].position + newCursorOffsets[childIndex] = newCursors[childIndex].position
+                    // so +threadOffset meets the requirement
                     rightCursorOffsets[childIndex] += rightCursors[childIndex].threadOffset;
-                } else if (rightCursors[childIndex] && rightCursors[childIndex].children.length) {
-                    if (log) { console.log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to #${
-                        rightCursors[childIndex].children[0].name} offset ${rightCursorOffsets[childIndex]} reduce ${rightCursors[childIndex].children[0].position}`); }
-                    rightCursors[childIndex] = rightCursors[childIndex].children[0];
-                    // TODO proof the sign
+                } else if (rightCursors[childIndex].children.length) {
+                    log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to #${
+                        rightCursors[childIndex].children[rightCursors[childIndex].children.length - 1].name} offset ${round2(rightCursorOffsets[
+                        childIndex])} increase ${round2(rightCursors[childIndex].children[rightCursors[childIndex].children.length - 1].position)}`);
+                    rightCursors[childIndex] = rightCursors[childIndex].children[rightCursors[childIndex].children.length - 1];
+                    // similar to threadOffset, need to add newLeftCursor.position - oldLeftCursor.position, which is exactly the preliminary position stored in node
                     rightCursorOffsets[childIndex] += rightCursors[childIndex].position;
-                } else if (rightCursors[childIndex] && (childIndex != activeIndexes[activeIndexes.length - 1] || activeIndexes.length == 1)) {
+                } else if (childIndex != activeIndexes[activeIndexes.length - 1] || activeIndexes.length == 1) {
                     // - normally go down null
                     //   if is rightmost subtree, stay here for later thread operation, a null left cursor of this subtree will indicate this situation
                     //   *while in this exception*, still go down null when only one remaining subtree, or else the loop does not end, no need to thread when only one active subtree
                     // - second rightmost subtree may go down null at the same time, but threading only adds
                     //   on rightmost subtree last node and new rightmost subtree current cursor, second rightmost subtree last node is not relevant
-                    if (log) { console.log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to null`); }
+                    log(`  subtree[${childIndex}] right cursor go down from #${rightCursors[childIndex].name} to null`);
                     rightCursors[childIndex] = null;
                 } else {
-                    if (log) { console.log(`  subtree[${childIndex}] right cursor stay`); }
+                    log(`  subtree[${childIndex}] right cursor stay at #${rightCursors[childIndex].name}`);
                 }
             }
 
             // update active indexes, check leftmost subtree's right boundary, others check left boundary
             const newActiveIndexes = activeIndexes.filter((childIndex, i) => i == 0 ? rightCursors[childIndex] : leftCursors[childIndex]);
-
             // push apart
             if (newActiveIndexes.length > 1) {
                 for (const [leftIndex, rightIndex] of new Array(newActiveIndexes.length - 1)
                     .fill(0).map<[number, number]>((_, i) => [newActiveIndexes[i], newActiveIndexes[i + 1]]))
                 {
-                    let distance = 0;
+                    let subtreeDistance = 0;
                     // base distance of the 2 subtrees
                     for (let childIndex = leftIndex + 1; childIndex <= rightIndex; childIndex++) {
-                        distance += thisnode.children[childIndex].position;
+                        subtreeDistance += thisnode.children[childIndex].position;
                     }
-                    // TODO proof the calculation
-                    if (distance + rightCursorOffsets[leftIndex] + leftCursorOffsets[rightIndex] < MinDistance) {
+                    // given thisnode.children[leftIndex].position + subtreeDistance = thisnode.children[rightIndex].position
+                    // given thisnode.children[leftIndex].position + rightCursorOffsets[leftIndex] = rightCursors[leftIndex].position
+                    // given thisnode.children[rightIndex].position + leftCursorOffsets[rightIndex] = leftCursors[rightIndex].position
+                    // require calculation of leftCursors[rightIndex].position - leftCursor[leftIndex].position
+                    // which is thisnode.children[rightIndex].position + leftCursorOffsets[rightIndex] - thisnode.children[leftIndex].position - rightCursorOffsets[leftIndex]
+                    // which is subtreeDistance + leftCursorOffsets[rightIndex] - rightCursorOffsets[leftIndex]
+                    if (subtreeDistance + leftCursorOffsets[rightIndex] - rightCursorOffsets[leftIndex] < MinDistance) {
                         // adjust rightIndex subtree
-                        thisnode.children[rightIndex].position = MinDistance - leftCursorOffsets[rightIndex] - rightCursorOffsets[leftIndex];
-                        if (log) { console.log(`  push apart #${thisnode.children[leftIndex].name} and #${thisnode.children[rightIndex].name} new offset ${thisnode.children[rightIndex].position}`); }
+                        thisnode.children[rightIndex].position += MinDistance - leftCursorOffsets[rightIndex] + rightCursorOffsets[leftIndex] - subtreeDistance;
+                        log(`  push apart #${thisnode.children[leftIndex].name} and #${thisnode.children[rightIndex].name} new offset ${round2(thisnode.children[rightIndex].position)}`);
                     }
                 }
             }
 
             // manage thread, this use activeIndexes instead of newActiveIndexes
-            if (activeIndexes.length > 1 && !rightCursors[activeIndexes[0]]) {
+            let leftmostChildIndex = activeIndexes[0];
+            if (activeIndexes.length > 1 && !rightCursors[leftmostChildIndex]) {
                 // distance between prev leftmost child and next leftmost child
-                let totalDistance = 0;
+                let subtreeDistance = 0;
                 // leftmost subtree is exhaused, connect to next leftmost subtree left boundary
                 // ATTENTION this is activeIndex's index
                 let nextLeftmostChildIndexIndex = 1;
                 // skip second leftmost subtree and even more subtrees if they are exhaused at the same time
                 // add up their base positions at the same time
                 while (nextLeftmostChildIndexIndex < activeIndexes.length && !leftCursors[activeIndexes[nextLeftmostChildIndexIndex]]) {
-                    totalDistance += thisnode.children[activeIndexes[nextLeftmostChildIndexIndex]].position;
+                    subtreeDistance += thisnode.children[activeIndexes[nextLeftmostChildIndexIndex]].position;
                     nextLeftmostChildIndexIndex += 1;
                 }
                 // equal means all subtrees exhaused at the exactly same time, which is normal for second bottom level
                 if (nextLeftmostChildIndexIndex < activeIndexes.length) {
                     const nextLeftmostChildIndex = activeIndexes[nextLeftmostChildIndexIndex];
-                    totalDistance += thisnode.children[nextLeftmostChildIndex].position;
-                    if (log) { console.log(`  thread from subtree[${activeIndexes[0]}] last left cursor #${leftCursors[activeIndexes[0]].name} to subtree[${
-                        nextLeftmostChildIndex}] left cursor #${leftCursors[nextLeftmostChildIndex].name}, store offset ${leftCursorOffsets[nextLeftmostChildIndex] - leftCursorOffsets[activeIndexes[0]] + totalDistance}`); }
-                    leftCursors[activeIndexes[0]].thread = leftCursors[nextLeftmostChildIndex];
+                    subtreeDistance += thisnode.children[nextLeftmostChildIndex].position;
+                    log(`  thread from subtree[${leftmostChildIndex}] last left cursor #${leftCursors[leftmostChildIndex].name} to subtree[${
+                        nextLeftmostChildIndex}] left cursor #${leftCursors[nextLeftmostChildIndex].name}, thread offset ${leftCursorOffsets[nextLeftmostChildIndex] - leftCursorOffsets[activeIndexes[0]] + subtreeDistance}`);
+                    leftCursors[leftmostChildIndex].thread = leftCursors[nextLeftmostChildIndex];
                     // ATTENTION don't forget offset is in .thread target node, not source node
-                    // TODO proof the calculation
-                    leftCursors[nextLeftmostChildIndex].threadOffset = leftCursorOffsets[nextLeftmostChildIndex] - leftCursorOffsets[activeIndexes[0]] + totalDistance;
+                    // thisnode.children[oldIndex].position + subtreeDistance = thisnode.children[newIndex].position
+                    // thisnode.children[oldIndex].position + cursorOffsets[oldIndex] = cursors[oldIndex].position
+                    // thisnode.children[newIndex].position + cursorOffsets[newIndex] = cursors[newIndex].position
+                    // require cursors[oldIndex].position + threadOffset = cursors[newIndex.position]
+                    // so threadOffset = cursors[newIndex].position - cursors[oldIndex].position
+                    //                 = thisnode.children[newIndex].position + cursorOffsets[newIndex] - thisnode.children[oldIndex].position + cursorOffsets[oldIndex]
+                    //                 = subtreeDistance + cursorOffsets[newIndex] - cursorOffsets[oldIndex]
+                    leftCursors[nextLeftmostChildIndex].threadOffset = leftCursorOffsets[nextLeftmostChildIndex] - leftCursorOffsets[leftmostChildIndex] + subtreeDistance;
+                    leftmostChildIndex = nextLeftmostChildIndex;
                 }
             }
             let rightmostChildIndex = activeIndexes[activeIndexes.length - 1];
             if (activeIndexes.length > 1 && !leftCursors[rightmostChildIndex]) {
-                // distance between prev leftmost child and next leftmost child
-                let totalDistance = 0;
+                // distance between prev rightmost child and next rightmost child
+                // ATTENTION children[childIndex].position is always relative to left,
+                // so left and right thread management is not same here, left boundary add last position later, right boundary add first position here
+                let subtreeDistance = thisnode.children[rightmostChildIndex].position;
                 // rightmost subtree is exhaused, connect to next rightmost subtree right boundary
                 // ATTENTION this is activeIndex's index
                 let nextRightmostChildIndexIndex = activeIndexes.length - 2;
                 // skip second rightmost subtree and even more subtrees if they are exhaused at the same time
                 while (nextRightmostChildIndexIndex >= 0 && !rightCursors[activeIndexes[nextRightmostChildIndexIndex]]) {
-                    totalDistance += thisnode.children[activeIndexes[nextRightmostChildIndexIndex]].position;
+                    subtreeDistance += thisnode.children[activeIndexes[nextRightmostChildIndexIndex]].position;
                     nextRightmostChildIndexIndex -= 1;
                 }
-                // less means all subtrees exhaused at the exactly same time, which is normal for second bottom level
+                // <0 means all subtrees exhaused at the exactly same time, which is normal for second bottom level
                 if (nextRightmostChildIndexIndex >= 0) {
                     const nextRightmostChildIndex = activeIndexes[nextRightmostChildIndexIndex];
-                    totalDistance += thisnode.children[nextRightmostChildIndex].position;
-                    if (log) { console.log(`  thread from subtree[${rightmostChildIndex}] last right cursor #${rightCursors[rightmostChildIndex].name} to subtree[${
-                        nextRightmostChildIndex}] left cursor #${rightCursors[nextRightmostChildIndex].name}, store offset ${rightCursorOffsets[nextRightmostChildIndex] - rightCursorOffsets[rightmostChildIndex] + totalDistance}`); }
-                    rightCursors[activeIndexes[rightmostChildIndex]].thread = rightCursors[nextRightmostChildIndex];
-                    // TODO proof the calculation
-                    rightCursors[nextRightmostChildIndex].threadOffset = rightCursorOffsets[nextRightmostChildIndex] - rightCursorOffsets[rightmostChildIndex] + totalDistance;
+                    log(`  thread from subtree[${rightmostChildIndex}] last right cursor #${rightCursors[rightmostChildIndex]
+                        .name} to subtree[${nextRightmostChildIndex}] right cursor #${rightCursors[nextRightmostChildIndex].name}, thread offset ${
+                            rightCursorOffsets[nextRightmostChildIndex] - rightCursorOffsets[rightmostChildIndex] - subtreeDistance}`);
+                    rightCursors[rightmostChildIndex].thread = rightCursors[nextRightmostChildIndex];
+                    // ATTENTION newIndex is at left of oldIndex, the first expression is reversed compared to left thread
+                    // thisnode.children[newIndex].position + subtreeDistance = thisnode.children[oldIndex].position
+                    // thisnode.children[oldIndex].position + cursorOffsets[oldIndex] = cursors[oldIndex].position
+                    // thisnode.children[newIndex].position + cursorOffsets[newIndex] = cursors[newIndex].position
+                    // require cursors[oldIndex].position + threadOffset = cursors[newIndex.position]
+                    // so threadOffset = cursors[newIndex].position - cursors[oldIndex].position
+                    //                 = thisnode.children[newIndex].position + cursorOffsets[newIndex] - thisnode.children[oldIndex].position + cursorOffsets[oldIndex]
+                    //                 = -subtreeDistance + cursorOffsets[newIndex] - cursorOffsets[oldIndex]
+                    rightCursors[nextRightmostChildIndex].threadOffset = rightCursorOffsets[nextRightmostChildIndex] - rightCursorOffsets[rightmostChildIndex] - subtreeDistance;
                     rightmostChildIndex = nextRightmostChildIndex;
                 }
             }
@@ -338,40 +369,57 @@ function layout1(root: Node, log: boolean = false) {
             activeIndexes = newActiveIndexes;
             if (activeIndexes.length) {
                 // now the cursors in activeIndexes are at the next level, then collect leftmost and rightmost descendant
-                leftmostDescendantPosition = Math.min(leftmostDescendantPosition, leftCursorOffsets[activeIndexes[0]]);
-                // rightmost position is also relative to thisnode.children[0],
-                // so need to add up all the gaps between thisnode.children[0] and current rightmost active subtree base position
-                let basePosition = 0;
-                for (let childIndex = 1; childIndex <= rightmostChildIndex; childIndex++) {
-                    basePosition += thisnode.children[childIndex].position;
+                log(`  original leftmostDescendantPosition ${round2(leftmostDescendantPosition)} current leftmost node #${
+                    leftCursors[leftmostChildIndex].name} position ${round2(leftCursorOffsets[leftmostChildIndex])}`);
+                // thisnode.children[0].position + leftCursorOffsets[childIndex] = leftCursors[childIndex].position
+                // thisnode.children[0].position + leftmostDescendantPosition = leftmostDescendantNode.position
+                // so can directly use leftCursorOffsets[leftmostChildIndex]
+                leftmostDescendantPosition = Math.min(leftmostDescendantPosition, leftCursorOffsets[leftmostChildIndex]);
+
+                log(`  original rightmostNodes[${rightmostChildIndex}] #${rightmostNodes[rightmostChildIndex].node?.name ?? '()'},${
+                    rightmostNodes[rightmostChildIndex].offset ?? ''}, current rightmost node #${rightCursors[rightmostChildIndex].name} offset ${rightCursorOffsets[rightmostChildIndex]}`);
+                if (!rightmostNodes[rightmostChildIndex].node || rightmostNodes[rightmostChildIndex].offset < rightCursorOffsets[rightmostChildIndex]) {
+                    rightmostNodes[rightmostChildIndex].node = rightCursors[rightmostChildIndex];
+                    rightmostNodes[rightmostChildIndex].offset = rightCursorOffsets[rightmostChildIndex];
                 }
-                // TODO proof the calculation
-                rightmostDescendantPosition = Math.max(rightmostDescendantPosition, rightCursorOffsets[rightmostChildIndex] + basePosition);
-                if (log) { console.log(`  end loop, leftmostDescendantPosition ${leftmostDescendantPosition} rightmostDescendantPosition ${rightmostDescendantPosition}`); }
-            } else {
-                console.log(`  end loop`);
             }
 
             loopCount += 1;
             if (loopCount > 20) { console.log('abort!'); process.exit(1); }
+            log(`  end loop`);
         } // this is end of the main loop if you lost track
 
-        // thisnode.position if thisnode.children[0].position is 0
-        const thisPosition = Math.floor((leftmostDescendantPosition + rightmostDescendantPosition) / 2);
-        // update child positions based on regard thisnode.position is 0
-        thisnode.children.forEach(child => child.position -= thisPosition);
-        if (log) { console.log(`  result this position ${thisPosition}`); }
-        if (log) { console.log(`  result child positions ${thisnode.children.map(c => `#${c.name}=${c.position}`).join(',')}`); }
+        let subtreeDistance = 0;
+        let rightmostDescendantPosition = 0;
+        for (const childIndex of childIndexSequence) {
+            if (childIndex != 0) {
+                subtreeDistance += thisnode.children[childIndex].position;
+            }
+            if (rightmostNodes[childIndex].node) {
+                log(`  rightmost node in subtree[${childIndex}] is #${rightmostNodes[childIndex].node.name} offset (${subtreeDistance}) ${rightmostNodes[childIndex].offset}`);
+                rightmostDescendantPosition = Math.max(rightmostDescendantPosition, subtreeDistance + rightmostNodes[childIndex].offset);
+            }
+        }
+
+        // children positions are relative position to left sibling child after the loop,
+        // convert them to relative position to thisnode, or thisnode.position + thisnode.children[childIndex].preliminaryPosition = thisnode.children[childIndex].position
+        // avg(leftmost, rightmost) is thisnode's position regarding thisnode.children[0]'s position as 0, so -avg is expected thisnode.children[0].position
+        // NOTE keep floating point positions here and align to grid when finally rendering
+        let currentPosition = -(leftmostDescendantPosition + rightmostDescendantPosition) / 2;
+        for (const child of thisnode.children) {
+            currentPosition = child.position += currentPosition;
+        }
+        log(`  result child positions ${thisnode.children.map(c => `#${c.name}=${c.position}`).join(',')}`);
     }
     setup(root);
 
+    log(`complete tree left contour`);
     let cursor = root;
     let cursorPosition = 0;
     let minCursorPosition = 0;
     while (true) {
         if (cursor.thread) {
             cursor = cursor.thread;
-            // TODO sync sign with leftcursor logic
             cursorPosition += cursor.threadOffset;
             minCursorPosition = Math.min(minCursorPosition, cursorPosition);
         } else if (cursor.children.length) {
@@ -381,10 +429,12 @@ function layout1(root: Node, log: boolean = false) {
         } else {
             break;
         }
-        // console.log(`finding left contour cursor #${cursor.name} offset ${cursorOffset} minoffset ${minCursorOffset}`);
+        log(`  cursor #${cursor.name} position ${round2(cursorPosition)} minoffset ${round2(minCursorPosition)}`);
     }
     function setPosition(node: Node, position: number) {
         node.position = position;
+        node.thread = null;
+        node.threadOffset = undefined;
         for (const child of node.children) {
             setPosition(child, position + child.position);
         }
@@ -466,7 +516,9 @@ if (process.argv[2]) {
 } else {
     tree = generateTree();
 }
-layout1(tree, true);
+const stat: { logs?: string[] } = {};
+layout1(tree, stat);
+await fs.writeFile('tidytree.log', stat.logs.join('\n'));
 printTreeEdges(tree);
 printTreePositions(tree);
 prettyPrintTree(tree);
