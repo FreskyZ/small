@@ -9,7 +9,7 @@
     nav img{padding:4px;grid-area:1/1/4/1;}
     nav div.name{margin-left:8px;margin-top:8px}
     nav div.description{margin-left:8px;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:192px;}
-    main div.item-container{width:80px;height:80px;border-radius:4px;background-color:#d8d8d8;box-shadow:2px 2px 5px rgba(0,0,0,0.2);}
+    main div.item-container{width:80px;height:80px;border-radius:4px;background-color:#d8d8d8;box-shadow:2px 2px 5px rgba(0,0,0,0.2);position:absolute;}
     main div.item-container img{padding:0 8px;}
     main div.item-container div.name{line-height:18px;text-align:center;font-size:12px;}
   </style>
@@ -36,187 +36,299 @@
             border-radius:8px;position:absolute;cursor:grab;background-color:#e0e0e0;box-shadow:2px 2px 5px rgba(0,0,0,0.2)"></div>
     </main>
     <script type="module">
-        // import recipeData from './data/recipes.json' with { type: 'json' };
-        const data = window.EndfieldRecipeData;
-        // console.log(data);
-        const elements = {
-            itemsContainer: document.querySelector('nav ul'),
-            searchInput: document.querySelector('div#nav-header>input'),
-            recipeContainer: document.querySelector('div#recipe-container'),
-        };
-        
-        for (const item of window.EndfieldRecipeData.items.sort((a, b) => a.id.localeCompare(b.id))) {
-            const itemElement = document.createElement('li');
-            itemElement.dataset.id = item.id;
-            itemElement.addEventListener('click', () => handleListItemClick(item));
-            const imageElement = document.createElement('img');
-            imageElement.alt = item.name;
-            imageElement.title = item.name;
-            imageElement.src = data.icons[item.id];
-            imageElement.width = 48;
-            imageElement.height = 48;
-            itemElement.appendChild(imageElement);
-            const nameElement = document.createElement('div');
-            nameElement.className = 'name';
-            nameElement.innerText = item.name;
-            itemElement.appendChild(nameElement);
-            const descriptionElement = document.createElement('div');
-            descriptionElement.className = 'description';
-            descriptionElement.innerText = item.desc[0].replace('\n', '');
-            descriptionElement.title = item.desc[0] + item.desc[1];
-            itemElement.appendChild(descriptionElement);
-            elements.itemsContainer.appendChild(itemElement);
+const imagedata = window['EndfieldImages'];
+const recipedata = window['EndfieldRecipes'];
+const elements = {
+    itemsContainer: document.querySelector('nav ul'),
+    searchInput: document.querySelector('div#nav-header>input'),
+    recipeContainer: document.querySelector('div#recipe-container'),
+};
+for (const item of recipedata.items.sort((a, b) => a.id.localeCompare(b.id))) {
+    const itemElement = document.createElement('li');
+    itemElement.dataset['id'] = item.id;
+    itemElement.addEventListener('click', () => handleListItemClick(item));
+    const imageElement = document.createElement('img');
+    imageElement.alt = item.name;
+    imageElement.title = item.name;
+    imageElement.src = imagedata[item.id];
+    imageElement.width = 48;
+    imageElement.height = 48;
+    itemElement.appendChild(imageElement);
+    const nameElement = document.createElement('div');
+    nameElement.className = 'name';
+    nameElement.innerText = item.name;
+    itemElement.appendChild(nameElement);
+    const descriptionElement = document.createElement('div');
+    descriptionElement.className = 'description';
+    descriptionElement.innerText = item.desc[0].replace('\n', '');
+    descriptionElement.title = item.desc[0] + item.desc[1];
+    itemElement.appendChild(descriptionElement);
+    elements.itemsContainer.appendChild(itemElement);
+}
+elements.searchInput.addEventListener('change', () => {
+    for (const itemElement of Array.from(elements.itemsContainer.children)) {
+        if (!elements.searchInput.value) {
+            itemElement.style.display = 'grid';
         }
-
-        // search
-        elements.searchInput.addEventListener('change', () => {
-            for (const itemElement of elements.itemsContainer.children) {
-                if (!elements.searchInput.value) {
-                    itemElement.style.display = 'grid';
-                } else {
-                    const item = data.items.find(i => i.id == itemElement.dataset.id);
-                    itemElement.style.display = item.name.includes(elements.searchInput.value) ? 'grid' : 'none';
+        else {
+            const item = recipedata.items.find(i => i.id == itemElement.dataset['id']);
+            itemElement.style.display = item.name.includes(elements.searchInput.value) ? 'grid' : 'none';
+        }
+    }
+});
+let recipeContainerBeginMoveX = 0;
+let recipeContainerBeginMoveY = 0;
+elements.recipeContainer.addEventListener('mousedown', e => {
+    e.preventDefault();
+    recipeContainerBeginMoveX = e.clientX;
+    recipeContainerBeginMoveY = e.clientY;
+    elements.recipeContainer.style.cursor = 'grabbing';
+    elements.recipeContainer.addEventListener('mouseup', handleMouseUp);
+    elements.recipeContainer.addEventListener('mousemove', handleMouseMove);
+    function handleMouseMove(e) {
+        e.preventDefault();
+        elements.recipeContainer.style.left = (elements.recipeContainer.offsetLeft - recipeContainerBeginMoveX + e.clientX) + 'px';
+        elements.recipeContainer.style.top = (elements.recipeContainer.offsetTop - recipeContainerBeginMoveY + e.clientY) + 'px';
+        recipeContainerBeginMoveX = e.clientX;
+        recipeContainerBeginMoveY = e.clientY;
+    }
+    function handleMouseUp(_) {
+        elements.recipeContainer.style.cursor = 'grab';
+        elements.recipeContainer.removeEventListener('mouseup', handleMouseUp);
+        elements.recipeContainer.removeEventListener('mousemove', handleMouseMove);
+    }
+});
+const allRecipesExceptPour = recipedata.recipes.filter(r => !(r.machineId == 'dismantler_1'
+    && r.products.length == 2 && r.products.some(p => p.id.includes('bottle')) && r.products.some(p => p.id.includes('liquid'))));
+function collectRecipeTree(item, path) {
+    const itemNode = { data: item, depth: 2 * path.length, duplicate: false, children: [], possibleProducts: [] };
+    if (path.includes(item.id)) {
+        itemNode.duplicate = true;
+        return itemNode;
+    }
+    if (!path.length) {
+        const possibleProductIds = recipedata.recipes.filter(r => r.ingredients.some(r => r.id == item.id)).flatMap(r => r.products.map(r => r.id));
+        itemNode.possibleProducts = Array.from(new Set(possibleProductIds)).map(id => recipedata.items.find(i => i.id == id));
+    }
+    if (path.length > 10) {
+        throw new Error('unexpected too deep');
+    }
+    for (const recipe of allRecipesExceptPour.filter(r => r.products.some(r => r.id == item.id))) {
+        itemNode.children.push({
+            data: recipe,
+            depth: 2 * path.length + 1,
+            children: recipe.ingredients.map(ingredient => collectRecipeTree(recipedata.items.find(i => i.id == ingredient.id), [...path, item.id])),
+        });
+    }
+    return itemNode;
+}
+const MinDistance = 1;
+function layoutRecipeTree(root) {
+    function setup(thisnode) {
+        for (const child of thisnode.children.filter(c => c.children.length)) {
+            setup(child);
+        }
+        if (thisnode.children.length == 1) {
+            thisnode.children[0].position = 0;
+            return;
+        }
+        const childCount = thisnode.children.length;
+        const childIndexSequence = new Array(childCount).fill(0).map((_, i) => i);
+        childIndexSequence.forEach(childIndex => thisnode.children[childIndex].position = childIndex == 0 ? 0 : MinDistance);
+        let activeIndexes = childIndexSequence.map(i => i);
+        const leftCursors = thisnode.children.map(n => n);
+        const leftCursorOffsets = thisnode.children.map(() => 0);
+        const rightCursors = thisnode.children.map(n => n);
+        const rightCursorOffsets = thisnode.children.map(() => 0);
+        let leftmostDescendantPosition = 0;
+        let rightmostNodes = childIndexSequence.map(childIndex => childIndex == childCount - 1 ? { node: thisnode.children[childIndex], offset: 0 } : { node: null, offset: undefined });
+        while (activeIndexes.length) {
+            for (const childIndex of activeIndexes) {
+                if (leftCursors[childIndex].thread) {
+                    leftCursors[childIndex] = leftCursors[childIndex].thread;
+                    leftCursorOffsets[childIndex] += leftCursors[childIndex].threadOffset;
+                }
+                else if (leftCursors[childIndex].children.length) {
+                    leftCursors[childIndex] = leftCursors[childIndex].children[0];
+                    leftCursorOffsets[childIndex] += leftCursors[childIndex].position;
+                }
+                else if (childIndex != activeIndexes[0] || activeIndexes.length == 1) {
+                    leftCursors[childIndex] = null;
+                }
+                if (rightCursors[childIndex].thread) {
+                    rightCursors[childIndex] = rightCursors[childIndex].thread;
+                    rightCursorOffsets[childIndex] += rightCursors[childIndex].threadOffset;
+                }
+                else if (rightCursors[childIndex].children.length) {
+                    rightCursors[childIndex] = rightCursors[childIndex].children[rightCursors[childIndex].children.length - 1];
+                    rightCursorOffsets[childIndex] += rightCursors[childIndex].position;
+                }
+                else if (childIndex != activeIndexes[activeIndexes.length - 1] || activeIndexes.length == 1) {
+                    rightCursors[childIndex] = null;
                 }
             }
-        });
-
-        // drag move recipe container
-        let recipeContainerBeginMoveX = 0;
-        let recipeContainerBeginMoveY = 0;
-        elements.recipeContainer.addEventListener('mousedown', e => {
-            e.preventDefault();
-            recipeContainerBeginMoveX = e.clientX;
-            recipeContainerBeginMoveY = e.clientY;
-            elements.recipeContainer.style.cursor = 'grabbing';
-            elements.recipeContainer.addEventListener('mouseup', handleMouseUp);
-            elements.recipeContainer.addEventListener('mousemove', handleMouseMove);
-            function handleMouseMove(e) {
-                e.preventDefault();
-                elements.recipeContainer.style.left = (elements.recipeContainer.offsetLeft - recipeContainerBeginMoveX + e.clientX) + 'px';
-                elements.recipeContainer.style.top = (elements.recipeContainer.offsetTop - recipeContainerBeginMoveY + e.clientY) + 'px';
-                recipeContainerBeginMoveX = e.clientX;
-                recipeContainerBeginMoveY = e.clientY;
+            const newActiveIndexes = activeIndexes.filter((childIndex, i) => i == 0 ? rightCursors[childIndex] : leftCursors[childIndex]);
+            if (newActiveIndexes.length > 1) {
+                for (const [leftIndex, rightIndex] of new Array(newActiveIndexes.length - 1)
+                    .fill(0).map((_, i) => [newActiveIndexes[i], newActiveIndexes[i + 1]])) {
+                    let subtreeDistance = 0;
+                    for (let childIndex = leftIndex + 1; childIndex <= rightIndex; childIndex++) {
+                        subtreeDistance += thisnode.children[childIndex].position;
+                    }
+                    if (subtreeDistance + leftCursorOffsets[rightIndex] - rightCursorOffsets[leftIndex] < MinDistance) {
+                        thisnode.children[rightIndex].position += MinDistance - leftCursorOffsets[rightIndex] + rightCursorOffsets[leftIndex] - subtreeDistance;
+                    }
+                }
             }
-            function handleMouseUp(e) {
-                elements.recipeContainer.style.cursor = 'grab';
-                elements.recipeContainer.removeEventListener('mouseup', handleMouseUp);
-                elements.recipeContainer.removeEventListener('mousemove', handleMouseMove);
+            let leftmostChildIndex = activeIndexes[0];
+            if (activeIndexes.length > 1 && !rightCursors[leftmostChildIndex]) {
+                let subtreeDistance = 0;
+                let nextLeftmostChildIndexIndex = 1;
+                while (nextLeftmostChildIndexIndex < activeIndexes.length && !leftCursors[activeIndexes[nextLeftmostChildIndexIndex]]) {
+                    subtreeDistance += thisnode.children[activeIndexes[nextLeftmostChildIndexIndex]].position;
+                    nextLeftmostChildIndexIndex += 1;
+                }
+                if (nextLeftmostChildIndexIndex < activeIndexes.length) {
+                    const nextLeftmostChildIndex = activeIndexes[nextLeftmostChildIndexIndex];
+                    subtreeDistance += thisnode.children[nextLeftmostChildIndex].position;
+                    leftCursors[leftmostChildIndex].thread = leftCursors[nextLeftmostChildIndex];
+                    leftCursors[nextLeftmostChildIndex].threadOffset = leftCursorOffsets[nextLeftmostChildIndex] - leftCursorOffsets[leftmostChildIndex] + subtreeDistance;
+                    leftmostChildIndex = nextLeftmostChildIndex;
+                }
             }
-        });
-        
-        // don't include pour liquid in left part of recipe tree
-        const allRecipesExceptPour = data.recipes.filter(r => !(r.machineId == 'dismantler_1'
-            && r.products.length == 2 && r.products.some(p => p.id.includes('bottle')) && r.products.some(p => p.id.includes('liquid'))));
-
-        // interface RecipeLink {
-        //     id: string,
-        //     name: string,
-        //     ingredients: { item: RecipeNode, count: number }[],
-        //     sideProducts: { item: Item, count: number }[],
-        //     machineName: string,
-        //     time: number,
-        // }
-        // interface RecipeNode {
-        //     info: Item,
-        //     links: RecipeLink[],
-        //     possibleProducts: Item[],
-        //     // is duplicate node on the path, only displays node itself no children
-        //     duplicate: boolean,
-        // }
-        // TODO change to this
-        // interface ItemNode {
-        //     // id, name, desc[0], desc[1], data.icons[id]
-        //     data: Item,
-        //     recipes: RecipeNode[],
-        //     // is duplicate node on the path, display an ellipsis for children
-        //     duplicate: boolean,
-        //     // TODO, this may be required
-        //     // parent: RecipeNode,
-        // }
-        // interface RecipeNode {
-        //     // id, name, machineId, time, ingredients, products
-        //     data: Recipe,
-        //     // use node[] here should make tree operations easier
-        //     // when need to display count, find them in node.data.ingredients
-        //     items: ItemNode[],
-        //     // TODO, this may be required
-        //     // parent: ItemNode,
-        // }
-        
-        // for loop recipe, allow same item appear in different line, disallow same item in same line
-        // path: node id[] from root to current item, include root, not include current item, empty for the main item
-        // return [ItemNode, Items[]], root node, possible products for root node
-        function collectRecipeTree(item, path) {
-            if (path.includes(item.id)) {
-                return { item, links: [], possibleProducts: [], duplicate: true };
+            let rightmostChildIndex = activeIndexes[activeIndexes.length - 1];
+            if (activeIndexes.length > 1 && !leftCursors[rightmostChildIndex]) {
+                let subtreeDistance = thisnode.children[rightmostChildIndex].position;
+                let nextRightmostChildIndexIndex = activeIndexes.length - 2;
+                while (nextRightmostChildIndexIndex >= 0 && !rightCursors[activeIndexes[nextRightmostChildIndexIndex]]) {
+                    subtreeDistance += thisnode.children[activeIndexes[nextRightmostChildIndexIndex]].position;
+                    nextRightmostChildIndexIndex -= 1;
+                }
+                if (nextRightmostChildIndexIndex >= 0) {
+                    const nextRightmostChildIndex = activeIndexes[nextRightmostChildIndexIndex];
+                    rightCursors[rightmostChildIndex].thread = rightCursors[nextRightmostChildIndex];
+                    rightCursors[nextRightmostChildIndex].threadOffset = rightCursorOffsets[nextRightmostChildIndex] - rightCursorOffsets[rightmostChildIndex] - subtreeDistance;
+                    rightmostChildIndex = nextRightmostChildIndex;
+                }
             }
-            // ATTENTION after duplicate flag check
-            if (item.id in recipeTreeCache) {
-                return recipeTreeCache[item.id];
+            activeIndexes = newActiveIndexes;
+            if (activeIndexes.length) {
+                leftmostDescendantPosition = Math.min(leftmostDescendantPosition, leftCursorOffsets[leftmostChildIndex]);
+                if (!rightmostNodes[rightmostChildIndex].node || rightmostNodes[rightmostChildIndex].offset < rightCursorOffsets[rightmostChildIndex]) {
+                    rightmostNodes[rightmostChildIndex].node = rightCursors[rightmostChildIndex];
+                    rightmostNodes[rightmostChildIndex].offset = rightCursorOffsets[rightmostChildIndex];
+                }
             }
-            const possibleProductIds = data.recipes.filter(r => r.ingredients.some(r => r.id == item.id)).flatMap(r => r.products.map(r => r.id));
-            const possibleProducts = Array.from(new Set(possibleProductIds)).map(id => data.items.find(i => i.id == id));
-            if (path.length > 10) {
-                throw new Error('unexpected too deep');
-            }
-            const links = [];
-            for (const recipe of allRecipesExceptPour.filter(r => r.products.some(r => r.id == item.id))) {
-                const machineName = data.machines.find(m => m.id == recipe.machineId).name;
-                const sideProducts = recipe.products.filter(i => i.id != item.id);
-                const ingredients = recipe.ingredients.map(ingredient => {
-                    const ingredientItem = data.items.find(i => i.id == ingredient.id);
-                    const ingredientNode = collectRecipeTree(ingredientItem, [...path, item.id]);
-                    return { item: ingredientNode, count: ingredient.count };
-                });
-                links.push({ id: recipe.id, name: recipe.name, time: recipe.time, machineName, ingredients, sideProducts });
-            }
-            return recipeTreeCache[item.id] = { info: item, links, possibleProducts, duplicate: false };
         }
-
-        // interface RecipeNodeLayout {
-        //     node: RecipeNode,
-        //     coordinate: [number, number],
-        //     parentLink: RecipeLink,
-        // }
-        function layoutRecipeTree(node) {
-            // first set root node coordinate (0, 0)
-            // then put all child nodes together (no gap) in next level, node count above 0 and node count below 0 are same or off by 1
-            // recursively put all nodes in their depth level, all levels are middle aligned to their parent node
-            // from left to right, adjust parent node vertical position if it does not match its children
-            // put possible products at x=1, align center to y=0, note that at this time, root note may not be at position 0, but possible products should still align middle of the graph
-            // normalize coordinates to start from 0
+        let subtreeDistance = 0;
+        let rightmostDescendantPosition = 0;
+        for (const childIndex of childIndexSequence) {
+            if (childIndex != 0) {
+                subtreeDistance += thisnode.children[childIndex].position;
+            }
+            if (rightmostNodes[childIndex].node) {
+                rightmostDescendantPosition = Math.max(rightmostDescendantPosition, subtreeDistance + rightmostNodes[childIndex].offset);
+            }
         }
-
-        function createRecipeItemElement(item) {
-            const itemElement = document.createElement('div');
-            itemElement.dataset.id = item.id;
-            itemElement.className = 'item-container';
-            const imageElement = document.createElement('img');
-            imageElement.alt = item.name;
-            imageElement.src = data.icons[item.id];
-            imageElement.width = 60;
-            imageElement.height = 60;
-            itemElement.appendChild(imageElement);
-            const nameElement = document.createElement('div');
-            nameElement.className = 'name';
-            nameElement.innerText = item.name;
-            itemElement.appendChild(nameElement);
-            return itemElement;
+        let currentPosition = -(leftmostDescendantPosition + rightmostDescendantPosition) / 2;
+        for (const child of thisnode.children) {
+            currentPosition = child.position += currentPosition;
         }
-
-        function handleListItemClick(item) {
-            Array.from(elements.itemsContainer.children).map(c => c.className = c.dataset.id == item.id.toString() ? 'active' : '');
-            elements.recipeContainer.innerHTML = '';
-
-            elements.recipeContainer.appendChild(createRecipeItemElement(item));
-            console.log(collectRecipeTree(item, []));
+    }
+    setup(root);
+    let cursor = root;
+    let cursorPosition = 0;
+    let minCursorPosition = 0;
+    while (true) {
+        if (cursor.thread) {
+            cursor = cursor.thread;
+            cursorPosition += cursor.threadOffset;
+            minCursorPosition = Math.min(minCursorPosition, cursorPosition);
         }
-
-        // 加上物品数量比例和合成用的机器
-        // 网页可交互，可以查看一点物品信息，机器信息（制造机器用的材料）和搜索
-
-    </script>
-    <script>window["EndfieldRecipeData"] = {"items":[
+        else if (cursor.children.length) {
+            cursor = cursor.children[0];
+            cursorPosition += cursor.position;
+            minCursorPosition = Math.min(minCursorPosition, cursorPosition);
+        }
+        else {
+            break;
+        }
+    }
+    function setPosition(node, position) {
+        node.position = position;
+        node.thread = null;
+        node.threadOffset = undefined;
+        for (const child of node.children) {
+            setPosition(child, position + child.position);
+        }
+    }
+    setPosition(root, -minCursorPosition);
+}
+function createRecipeItemElement(item) {
+    const itemElement = document.createElement('div');
+    itemElement.dataset['id'] = item.id;
+    itemElement.className = 'item-container';
+    const imageElement = document.createElement('img');
+    imageElement.alt = item.name;
+    imageElement.src = imagedata[item.id];
+    imageElement.width = 60;
+    imageElement.height = 60;
+    itemElement.appendChild(imageElement);
+    const nameElement = document.createElement('div');
+    nameElement.className = 'name';
+    nameElement.innerText = item.name;
+    itemElement.appendChild(nameElement);
+    return itemElement;
+}
+function handleListItemClick(item) {
+    Array.from(elements.itemsContainer.children).map(c => c.className = c.dataset['id'] == item.id.toString() ? 'active' : '');
+    elements.recipeContainer.innerHTML = '';
+    const tree = collectRecipeTree(item, []);
+    layoutRecipeTree(tree);
+    let maxDepth = 0;
+    let [minPosition, maxPosition] = [100, -100];
+    function collectCoordinates(node) {
+        maxDepth = Math.max(maxDepth, node.depth);
+        minPosition = Math.min(minPosition, node.position);
+        maxPosition = Math.max(maxPosition, node.position);
+        for (const child of node.children) {
+            collectCoordinates(child);
+        }
+    }
+    collectCoordinates(tree);
+    const rendercontext = {
+        itemWidth: 88,
+        recipeWidth: 88,
+        itemHeight: 88,
+    };
+    function isItemNode(node) {
+        return node.data.id.startsWith('item_');
+    }
+    function displayTree(node) {
+        if (isItemNode(node)) {
+            const element = createRecipeItemElement(node.data);
+            elements.recipeContainer.appendChild(element);
+            element.style.left = `${20 + (maxDepth - node.depth) * rendercontext.itemWidth}px`;
+            element.style.top = `${20 + (node.position - minPosition) * rendercontext.itemHeight}px`;
+        }
+        else {
+            const machineName = recipedata.machines.find(m => m.id == node.data.machineId).name;
+            const ingredients = node.data.ingredients.map(({ id, count }) => `${recipedata.items.find(i => i.id == id).name}x${count}`).join(',');
+            const element = document.createElement('div');
+            element.innerText = `${machineName}:${ingredients},${node.data.time}s`;
+            element.className = 'item-container';
+            elements.recipeContainer.appendChild(element);
+            element.style.left = `${20 + (maxDepth - node.depth) * rendercontext.itemWidth}px`;
+            element.style.top = `${20 + (node.position - minPosition) * rendercontext.itemHeight}px`;
+        }
+        for (const child of node.children) {
+            displayTree(child);
+        }
+    }
+    displayTree(tree);
+}
+</script>
+    <script>window["EndfieldRecipes"] = {"items":[
 {"id":"item_iron_nugget","name":"蓝铁块","desc":["由蓝铁矿石精炼得来的金属块，可用于其他材料合成。","在塔卫二为什么会存在与异铁如此近似的金属，这仍是未解之谜。"]},
 {"id":"item_plant_sp_seed_3","name":"琼叶参种子","desc":["野生琼叶参的种子，通过调制成田块并进行精细化培育，可产出琼叶参。","经严格筛选的琼叶参，其种子饱满完整，活力较高。"]},
 {"id":"item_plant_moss_enr_powder_1","name":"细磨荞花粉末","desc":["荞花粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，荞花提取物表现出了“异常”活性。"]},
@@ -451,7 +563,9 @@
 {"id":"dismantler_ironenr_grass_2_1","name":"钢质瓶生产","machineId":"dismantler_1","ingredients":[{"count":1,"id":"item_fbottle_ironenr_grass_2"}],"products":[{"count":1,"id":"item_iron_enr_bottle"},{"count":1,"id":"item_liquid_plant_grass_2"}],"time":2},
 {"id":"furnance_crystal_enr_1","name":"密制晶体生产","machineId":"furnance_1","ingredients":[{"count":1,"id":"item_crystal_enr_powder"}],"products":[{"count":1,"id":"item_crystal_enr"}],"time":2},
 {"id":"seedcollector_plant_moss_3_1","name":"砂叶种子生产","machineId":"seedcollector_1","ingredients":[{"count":1,"id":"item_plant_moss_3"}],"products":[{"count":2,"id":"item_plant_moss_seed_3"}],"time":2},
-],"icons":{
+]};
+    </script>
+    <script>window['EndfieldImages'] = {
 "item_iron_nugget": "data:image/webp;base64,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",
 "item_plant_sp_seed_3": "data:image/webp;base64,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",
 "item_plant_moss_enr_powder_1": "data:image/webp;base64,UklGRvYEAABXRUJQVlA4WAoAAAAQAAAAPwAAPwAAQUxQSKQCAAABCQZtIzlScv1u+BO+LxQi+j8B/KxQHqZe+hJrrVBi7ZBE5WYICQj+75YciIikXkBC+D9fipiApLttmynxeb5vjpY/W7HtpLTZsnf+onRpU9u2bZvr3TPzhbPnTLpUETEBElMQBAzDkhNRC0akKGaWjCgeoDPc2i3EL0c//7YCcBaSEPXQOeb0E448sLmXC4TF+LvP3n7tpfcDoqE1UQ+XXHXuocra89cevudFkJY0sPG6G84EvIkICAaYmSrMHrrrXpA2hPzm2w/BvIqwtpk5eP5iF7QFjr38fLwoTVsQPeOq/bR46hl4UVoNxtknFtqIwLYhONrWwIEtmTRgUOOVFAXfK0wa+Bgh2fCNrKXy/Pdq6fDxt6Wt4b68m0DKTynx6nfcZC4lu+rETS5KuHazSULK7nN2VlHGhWakbBy9tx8jITtCJCnYuWujRkC3R9pCsbHnooIlBlqVEjX9NTmvSqRp+BxLbOqDRCB8SOqjChcDryBJSZhkcca7QS0hY7HMTOI++4m0p56M+J8/xZL6PauLKHP+dQtJ/dD1nSjgcdGEpP6hW5dxgfu/k5CM8f2Pmrk4E+7cETQRsd2HHj3tShzCrqtJ96Ctx64q1pVwxuGmiWwY7ji4p2sh2ckSLIly0N+1taJBKXvikhC3cWOpjWjfTzBrxWDucb1SaNTE3vsaZ9aYIfw0WS1WIjQtfPfybyjBGjAEfn5/NB8vAi36vA7Zlp4IAQH5m/1NhPDTZ79uKX+oh9oGaL4Y19oZsK6Nvvt6tWEw+r1TCu2aeT/+/qtDD9m+sVPp38JyMvr1l1U5cNNp3lXaD/VqMd6ybdvWwaBwAlYvZtMy97NQdh1pWj2veoNhr1sVamD1bBQo+rmQriGa5bnLAMyv6tIJ/1kx/s8KVlA4ICwCAADQDACdASpAAEAAPrVMnkqnJCKhrBgMyOAWiUAZ3jcGOgOvQje7T5rvnqDXd9q2LM3e7IzJ8K9VjM7jgQsXRYNveEb3O3glQAQK2whZSg6Oq5DL8zn1TqJHhWhEQWNbVoeAh9VhVDTpBAP9BX/ITAAA/vz4SR94rFkOHhDClP8uIDym++7SpkziAavoyzRt0C+DgyYTdig+JC0ZP/6Q3GFdOOmNGzXbWffgs07ISVprZVRJdM4F/425UFBIhQ7Hln9U+Oxit957HUP0UUafDFung6rKH2hUVfoosTw8ltfRO8//KLXiv1vO/EEs7rfWXB5QfMbpu+VRuhb6ka/OzDidXuoIx6oNdWRJ6P94iKZ7IkrrRBRKlnliHNV7rakEefmhdA09v+3M6r72r6Ttp8tWoeHQ21Fni9hKQjA+lf64C7x79Glnoh3SzFmBmv+BNygHvHk5cZbeHbmon/x2KXPkldydXWtBnVrGGwyT1WBIjBIrnkHwjN+kWqaL6ilPclCNt0kC6A7+5ubSuh/J/eU49/EPUX3MsJHP716NS6G1DovogCJvDkXOcIMXldlGqskCIJlCnY8y2OX0EdXSJiHLi0xk/euepNm0Sfzn51I5fQKA3RRIO46VBzFqW/oGiDxnneYN3txm7H20xSAI/QANBXSMpACGksjGHxTalHVBIjMPwph4QVN9CFKbstG8V85isp6urMyqXDGxU6kx6FzaMVCI8n4cPWtAAAAA",
@@ -550,6 +664,7 @@
 "item_glass_enr_bottle": "data:image/webp;base64,UklGRtoEAABXRUJQVlA4WAoAAAAQAAAAPwAAPwAAQUxQSJACAAABL+WgbSRJWqd7tfwxf3cQIiIPf+RHhUW580gIGlxam4KNCpEoTiLVtCc7opkqGSOUgXIHGLWR5Khrtx4b+QO+fAgi+j8B+WOFJxW4Za1gu5F+0m6UAnhHD7Y7ArZ2ERXwRtRDu4oKrdyISu/39lrrTpJnp6Bj27ZqWxlz7ePP7eOuEQWAyCkHlaE2TvQjLIPMIXJ77nrvOQt5753d1o1+FhETwL1HJdlMJWa9X3j5he/fqSYzooHX33wA3vn4Ykbg4dfo3a7e+aKcBUlL9DIG23xvrUxFUjDzAwaBMdjnd38CSEMk40s3ru9/PJikw7++3cJCvd27X3fj/lcfkeJgb72n6U2DO2b8/VJZxkHV0/TXGf/3vuhS44H0wBLDNTdPOT1NCoPo7u7ht0LsnRRxMP9gwlj5bylQYpr6MW4nc0lRRGPGaGddyYMYjyaNg5W1pDDPZ3E26hTm8UtyunY3ixiiPcIzANuyEBi/M+RwJm2K8rkrB9h9TQqB8aI8i7O9deURxH33oRzAb6cWAfl9yyiH29GmeQTMHmwGZcDZoQgBNl97DmAlWQxVa6AMrvXKPARUq2T1at2ShxALbRZ8aV0WAvncHMqhq5+SQiCWG3K6dkvzEKCl1jUOWJc8hqmtPIOz1phiQFqRaxSe1qvkQahXyelzq56CiK7LAatl4TGQd10GeSpdQwzEQovGgLhvNQVBrHVo3NXSYhkFqa2HcUdFncJAWko+arOfDnGkcgV0K1XVYqc44M0ct68uy7Ygsmhq/AZHZz3ehwJ1DTg4yA/P+/4yGt4agOB4c6E8mVREV+p3V2suzo99oT+d1goHxeXUJ+dllaYXVMyic3wy6dVfeZuYTaW51Q2VtXHPGVZQOCAkAgAA0AwAnQEqQABAAD61UKFMJySjIigYDADgFollANMwEgvwDtAkWK1QuIGWs5nMlNO1mAmPeIy8PTBS2QF63lP35NDp0ohbngb3z4/zjUdW7EHLzhuss+/0pelaZVoJ+RDk+VabRwgeTNmJVoRp4FIAAP7fL0fWhtApENZQckpIC/yRgVM47I3EJkrvtRNnDQs91Hf7AAApP4XO/G6DQpiKBOLGmiQ6r/wmw0Ea7ceD3/nPs4hus6ugUZiNbhfJi8hIfL4A9dX06uD2O373XmwB/vPXF+ouOy0hcgaPgu2a0IxFGHUWnpkoypLMrPz9cyzqlpAQ4jQdcuTJjr7NSflY/xVZ6PX3PTf8Tzxt32ZWLA2KapuhG3fnOgPZX7w2Cfct7d6eQbZ7EcnRETUIrCBy5otXFWZ1dfprDGDhgi/poKXwyaJ3BvheiWpcwsg3msbhUCnlyFafCutednjzGJbeRHv5JZL5LFTcfp+/kwXC6htjEy6EOnKEcXZix671o+KF9JJQtd8zigbKSlh+rAX0z0QH4gJxkXkcx/wBbR0gWjReiD/VPlhRfD2QdYeKxzAiKNdS+Kh6qyT+GGJnly8W6lZyKZ5Be8vBiJnglAK5Xx9GXsUpfuwDjnPEcSjdox2jzeel8Rmm45CKN7gz+HiK2NgQMN0G+0ZLEDU04HKeG6/8zVCNtjitUyMt1mxChdnLvszsjkLqend3+lxsAkBF8DQAAAA=",
 "item_iron_powder": "data:image/webp;base64,UklGRu4EAABXRUJQVlA4WAoAAAAQAAAAPwAAPwAAQUxQSPgCAAABCQVtJCk5Zv+C78FCRP8nAL5lFoH2ArQLgHY3EYDCO0UgkLS/9wwRkdACCeH/fiFiApLSbdumrWfOtQ/uuff5s2Pbtu1fkJKT/5GibSellGzbtvmMi7P3LFzvaioRMQHSCqEuhKIjSA/ASCgItKB4SAYBqBbTaRPtiWsAJmhohBEMgK37e9sB1+58/d0bdt/dje0+kf752ON/AUZIHBwBSkBt29arDv1lpxqg39cl6PrJ7c9+X0c7B8PC+8lJ7D46fdzel+wCAAEk4AWQEBz++fW7P7965luA1hcd3E61Pfc7/+y99zp1DaBgIgEIRNcAA4DFZy7dMwHZ0+p8dbJXllx1gAAYJBgGK0l0wF9P3P1pHerG3NIl1zw9BzwJEMOVYPjnwev+bXSDEJRkB+wSkCJOBde6+7bPeqAzea3+7mzEG2z+nltSdhIkqUzf32UXiJFA4dPrq+hZTD5+6KyjUkQbfr1vguwFYPrlSxsPn4pn4dEM3YlRVybzfP2X1WcksUDPbap0ITBKr7GZ2R8PSIJF8/1Bq60DnWy55fzvxbo9RyFEu7zXuk4KpjzDxMLCtssQXDzac/uCbSCF4H3OrQ0Z4g1rd5uyDnD0oMeavRBiKjFeZacgA8yv2Q8Rq2xO/7EY2ogJa1Fyyac7ktGElV/e+mi2g8AgQJYtp0SspZ9+9smPV9gGwFnwbt/mCeftscbioKUbtlSALjQh2PjCxCnn7bhuvQ0v0DOtTRUm9DlSWbNt06b9mWUcim/Vl+dWBILo0xxkxcgmtPLVJMQBCcs/ffDJX3U5DJAyKavPFIvVvIDYRYQCDZBEsfLlU+//0yg5CAAEfLA/iqnRagFAlCDBa8XXSC03/fym4u+5UgGDJ7z5f/+ZOLjGJEGpenNpJZmdXsrXpvWVf5egqSwIQ2XqGgv1gtuP+STLG//9V/cNg9V9Apdx5E/vMGyGAGrNplHZZGX69+mV0rdaJZwhlCUhxBlcAm8FWw0FUESgCFGImwAg/L8VVlA4INABAABQCgCdASpAAEAAPrVSnkunJSKhrBgKaOAWiWMA0lVHsAG8bI2kahZnJqcu+fignhTmLL/pWHSAqRZXkmnW+9dhihfXinV9lsytixeevJv/DuNpq0RzTYfauAAAAP7614I5O8iUfjaTdR/hvn5kBrXbP1vuLQ2gsxGc59OTZnUCzt1/bl50+oc9P/ra3UTp+I1pgMaBSyecFKNcaPDZT12eq8JTBc40B4558QnF1TP7PfAQZXeRkOPmNgQgd37bVXF2212pxq+srj73aw14GSx1ha8LGRiVTTyQt+TfqaNU+5bQZvMvt2uQZjNdF0YJpi/fLe66mYiRWq6/rKjB9mG7o/M1qt5sQNQiJj4DhYGkygGhe2C0CpzYiceuK/Y86Cp89QqyECk4m4ERoRo9wkJpJtbVxtbHNHZgBkCeORnVRLEUKsyicOZhkDmPpoNeSDsT3VoynaVJckHKbNp3yj/IPsZ5U358OQ9Ifhn/GvkwlA040THtLs4yvN3EQwmZkY+RVdzv2ufNywT2C+KeX71EDHC8qXAi6UNp0vwBc4xiAkadOqXUyrJidHorgUJySa+dH2XHMfMc/KHjlkbGdOuDhcVTP/gPpzdvazooAAAAAA==",
 "item_quartz_enr": "data:image/webp;base64,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",
-}};</script>
+};
+    </script>
 </body>
 </html>

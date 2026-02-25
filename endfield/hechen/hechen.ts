@@ -19,8 +19,8 @@ interface RecipeData {
     time: number,
 }
 
-const imagedata = window['EndfieldImages'] as Record<string, string>;
-const recipedata = window['EndfieldRecipes'] as {
+const imagedata = (window as any)['EndfieldImages'] as Record<string, string>;
+const recipedata = (window as any)['EndfieldRecipes'] as {
     items: ItemData[],
     machines: MachineData[],
     recipes: RecipeData[],
@@ -34,7 +34,7 @@ const elements = {
 
 for (const item of recipedata.items.sort((a, b) => a.id.localeCompare(b.id))) {
     const itemElement = document.createElement('li');
-    itemElement.dataset.id = item.id;
+    itemElement.dataset['id'] = item.id;
     itemElement.addEventListener('click', () => handleListItemClick(item));
     const imageElement = document.createElement('img');
     imageElement.alt = item.name;
@@ -61,7 +61,7 @@ elements.searchInput.addEventListener('change', () => {
         if (!elements.searchInput.value) {
             itemElement.style.display = 'grid';
         } else {
-            const item = recipedata.items.find(i => i.id == itemElement.dataset.id);
+            const item = recipedata.items.find(i => i.id == itemElement.dataset['id']);
             itemElement.style.display = item.name.includes(elements.searchInput.value) ? 'grid' : 'none';
         }
     }
@@ -300,7 +300,7 @@ function layoutRecipeTree(root: NodeLike) {
 
 function createRecipeItemElement(item: ItemData) {
     const itemElement = document.createElement('div');
-    itemElement.dataset.id = item.id;
+    itemElement.dataset['id'] = item.id;
     itemElement.className = 'item-container';
     const imageElement = document.createElement('img');
     imageElement.alt = item.name;
@@ -316,7 +316,7 @@ function createRecipeItemElement(item: ItemData) {
 }
 
 function handleListItemClick(item: ItemData) {
-    Array.from<HTMLLIElement>(elements.itemsContainer.children as any).map(c => c.className = c.dataset.id == item.id.toString() ? 'active' : '');
+    Array.from<HTMLLIElement>(elements.itemsContainer.children as any).map(c => c.className = c.dataset['id'] == item.id.toString() ? 'active' : '');
     elements.recipeContainer.innerHTML = '';
 
     const tree = collectRecipeTree(item, []);
@@ -327,7 +327,7 @@ function handleListItemClick(item: ItemData) {
     // you can go down boundaries of the tree for this information,
     // but I'd like to avoid layout algorithm interns outside, so visit all nodes
     let [minPosition, maxPosition] = [100, -100];
-    function collectCoordinates(node) {
+    function collectCoordinates(node: ItemNode | RecipeNode) {
         // console.log(`#${node.data.id}: ${node.depth}, ${node.position}`);
         maxDepth = Math.max(maxDepth, node.depth);
         minPosition = Math.min(minPosition, node.position);

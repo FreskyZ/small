@@ -1,12 +1,14 @@
 import fs from 'node:fs/promises';
+import chalkNotTemplate from 'chalk';
+import chalk from 'chalk-template';
 import JSONBig from 'json-bigint';
+import ts from 'typescript';
 
 // this script
 // - migrate data from external source to required data structure
 // - transpile runtime script hechen.ts to hechen.js
 // - read template file index.html
 // - merge them into single html file hechen.html
-// TODO rename to hechen/make-icon.py and hechen/make-page.ts
 
 interface ItemData {
     id: string,
@@ -44,8 +46,9 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
             continue;
         }
         // runtime script is now relying on id.startsWith('item') for item node, add a check here
-        if (rawItem.id.startsWith('item_')) {
-            console.log(`unexpected item id, not start with item_`, rawItem.id);
+        if (!rawItem.id.startsWith('item_')) {
+            // a lot of gem_, wpn_ (weapon), achv_ (archive) ids, ignore for now
+            // console.log(`unexpected item id, not start with item_`, rawItem.id);
             continue;
         }
         items.push({ id: rawItem.id, name, desc: [desc, decoDesc] });
@@ -277,13 +280,94 @@ function createImageScript(icons: IconData[]): string {
     return sb;
 }
 
+// see freskyz/fine script/components/typescript.ts function transpile
+// return null for not ok
 function transpileRuntimeScript(): string {
-    return `console.log('runtimescript');`;
-    // ts.createProgram
+
+    const program = ts.createProgram(['hechen/hechen.ts'], {
+        lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
+        target: ts.ScriptTarget.ESNext,
+        module: ts.ModuleKind.NodeNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        skipLibCheck: true,
+        noEmitOnError: true,
+        strict: false,
+        allowUnreachableCode: false,
+        allowUnusedLabels: false,
+        alwaysStrict: true,
+        exactOptionalPropertyTypes: false,
+        noFallthroughCaseInSwitch: true,
+        noImplicitAny: true,
+        noImplicitReturns: true,
+        noImplicitThis: true,
+        noPropertyAccessFromIndexSignature: true,
+        noUnusedLocals: true,
+        noUnusedParameters: true,
+        strictNullChecks: false,
+        strictFunctionTypes: true,
+        strictBindCallApply: true,
+        strictBuiltinIteratorReturn: true,
+        strictPropertyInitialization: false,
+        removeComments: true,
+        outDir: '/build',
+    });
+
+    const files = {};
+    const emitResult = program.emit(undefined, (fileName, data) => {
+        if (data) { files[fileName] = data; }
+    });
+
+    let transpileResult = Object.values(files)[0] as string;
+    if (typeof transpileResult == 'string') {
+        transpileResult = transpileResult.trim();
+        if (transpileResult.endsWith('export {};')) {
+            transpileResult = transpileResult.substring(0, transpileResult.length - 10).trimEnd();
+        }
+        transpileResult += '\n';
+    }
+    
+    const diagnostics = emitResult.diagnostics;
+    const errorCount = diagnostics.filter(d => d.category == ts.DiagnosticCategory.Error || ts.DiagnosticCategory.Warning).length;
+    const normalCount = diagnostics.length - errorCount;
+
+    let summary: string;
+    if (normalCount == 0 && errorCount == 0) {
+        summary = 'no diagnostic';
+    } else if (normalCount != 0 && errorCount == 0) {
+        summary = chalk`{yellow ${normalCount}} infos`;
+    } else if (normalCount == 0 /* && errorCount != 0 */) {
+        summary = chalk`{yellow ${errorCount}} errors`;
+    } else /* normalCount != 0 && errorCount != 0 */ {
+        summary = chalk`{yellow ${errorCount}} errors and {yellow ${normalCount}} infos`;
+    }
+
+    const success = diagnostics.length == 0;
+    console.log(`hechen.js completed with ${summary}`);
+    for (const { category, code, messageText, file, start } of diagnostics) {
+        const displayColor = {
+            [ts.DiagnosticCategory.Warning]: chalkNotTemplate.red,
+            [ts.DiagnosticCategory.Error]: chalkNotTemplate.red,
+            [ts.DiagnosticCategory.Suggestion]: chalkNotTemplate.green,
+            [ts.DiagnosticCategory.Message]: chalkNotTemplate.cyan,
+        }[category];
+        const displayCode = displayColor(`  TS${code} `);
+
+        let fileAndPosition = '';
+        if (file && start) {
+            const { line, character: column } = ts.getLineAndCharacterOfPosition(file, start);
+            fileAndPosition = chalk`{yellow ${file.fileName}:${line + 1}:${column + 1}} `;
+        }
+
+        let flattenedMessage = ts.flattenDiagnosticMessageText(messageText, '\n');
+        if (flattenedMessage.includes('\n')) {
+            flattenedMessage = '\n' + flattenedMessage;
+        }
+        console.log(displayCode + fileAndPosition + flattenedMessage);
+    }
+    return success ? transpileResult : null;
 }
 
 async function createPage() {
-
     // the wiki site use very strange backend data structure and is not able to be understand by human or ai
     // there is a look like game data but look like not up to date repo https://github.com/XiaBei-cy/EndfieldData
     // it is ok for now because no recipe update since last major version (I mean major game content update, or minor version in semver)
@@ -313,16 +397,18 @@ async function createPage() {
     const machines = allMachines.filter(m => recipes.some(r => r.machineId == m.id));
     const datascript = createDataScript(items, machines, recipes);
 
-    const icons = collectIcons(fileContents[4], allItems);
+    const icons = collectIcons(fileContents[4], items);
     const imagescript = createImageScript(icons);
 
     const runtimescript = transpileRuntimeScript();
-    const template = fileContents[5];
-
-    const page = template
-        .replace('<script src="data.js"></script>', `<script>${datascript}</script>`)
-        .replace('<script src="image.js"></script>', `<script>${imagescript}</script>`)
-        .replace('<script src="hechen.js"></script>', `<script>${runtimescript}</script>`);
-    await fs.writeFile('hechen/hechen1.html', page);
+    if (!runtimescript) {
+        return;
+    }
+    const page = fileContents[5]
+        .replace('<script src="data.js"></script>', `<script>${datascript}    </script>`)
+        .replace('<script src="image.js"></script>', `<script>${imagescript}    </script>`)
+        .replace('<script src="hechen.js"></script>', `<script type="module">\n${runtimescript}</script>`);
+    await fs.writeFile('hechen/hechen.html', page);
+    console.log(`hechen.html completed`)
 }
 createPage();
