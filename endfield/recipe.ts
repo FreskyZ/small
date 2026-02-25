@@ -1,175 +1,156 @@
 import fs from 'node:fs/promises';
 import JSONBig from 'json-bigint';
 
-// this file migrate data structure for recipe.html
-// this is not the runtime front end script for recipe.html
+// this script
+// - migrate data from external source to required data structure
+// - transpile runtime script hechen.ts to hechen.js
+// - read template file index.html
+// - merge them into single html file hechen.html
+// TODO rename to hechen/make-icon.py and hechen/make-page.ts
 
-// the wiki site use very strange backend data structure and is not able to be understand by human or ai
-// there is a look like game data but look like not up to date repo https://github.com/XiaBei-cy/EndfieldData
-// it is ok for now because no recipe update since game release
-
-const fileContents: string[] = await Promise.all([
-    fs.readFile('data/I18nTextTable_CN.json', 'utf-8'),
-    fs.readFile('data/ItemTable.json', 'utf-8'),
-    fs.readFile('data/FactoryBuildingTable.json', 'utf-8'),
-    fs.readFile('data/FactoryMachineCraftTable.json', 'utf-8'),
-    fs.readFile('data/IconData2.json', 'utf-8'),
-]);
-
-// NOTE this simple solution does not handle all types of contents in these complex files, you have to parse
-// const fixedFileContents = fileContents.map(c => c
-//     // failed to exclude already in double quote numbers
-//     .replaceAll(/(-?\d+)\b/g,(match, capture) => Number.isSafeInteger(capture) ? match : `"${capture}"`)
-//     // so replace ""-?\d+"" back
-//     .replaceAll(/""-?\d+""/g, match => match.substring(1, match.length - 1)));
-// const parseWithBigInt = (text: string) => JSON.parse(text, (key, value) => !isNaN(value) && !Number.isSafeInteger(value) ? BigInt(value) : value);
-
-const rawText = JSONBig.parse(fileContents[0]) as Record<string, string>;
-
-const rawItems = JSONBig.parse(fileContents[1]) as {
-    [id: string]: {
-        id: string, // internal item id
-        name: { id: string }, // id in i18n table
-        desc: { id: string }, // id in i18n table, main description
-        decoDesc: { id: string }, // id in i18n table, additional description
-    },
-};
-interface Item {
+interface ItemData {
     id: string,
     name: string, // name for human
     desc: string[], // main desc and additional desc for human
 }
-const items: Item[] = [];
-for (const rawItem of Object.values(rawItems)) {
-    const name = rawText[rawItem.name.id.toString()];
-    if (typeof name == 'undefined' || name.length == 0) {
-        // missing names seems not important for now
-        // NOTE if game data updated, check again
-        // // where do you put these names?
-        // console.log('missing item name', rawItem.id);
-        continue;
-    }
-    const desc = rawText[rawItem.desc.id.toString()];
-    const decoDesc = rawText[rawItem.decoDesc.id.toString()];
-    if (typeof desc == 'undefined' || desc.length == 0 || typeof decoDesc == 'undefined' || decoDesc.length == 0) {
-        // for now this list includes
-        // item_settlement_exp definitely means local exp, which is not important here
-        // sysbp_tundra_* and sysbp_wulin_* these names have display name same as non prefix, investigate later
-        // NOTE if game data updated, check again
-        // // where do you put these strings?
-        // console.log('missing item desc', rawItem.id);
-        continue;
-    }
-    items.push({ id: rawItem.id, name, desc: [desc, decoDesc] });
-}
-
-// fix filled bottle name and description
-// no direct relationship with original bottle item name, e.g. original bottle name is glass_enr not glassenr
-const filledBottleItemIdPrefixes = [
-    'item_fbottle_glass_',
-    'item_fbottle_glassenr_',
-    'item_fbottle_iron_',
-    'item_fbottle_ironenr_',
-];
-const filledBottleLiquidPostfixes = {
-    'water': 'item_liquid_water',
-    'grass_1': 'item_liquid_plant_grass_1',
-    'grass_2': 'item_liquid_plant_grass_2',
-    'xiranite': 'item_liquid_xiranite',
-};
-for (const item of items) {
-    const prefix = filledBottleItemIdPrefixes.find(prefix => item.id.startsWith(prefix));
-    if (prefix) {
-        const postfix = item.id.substring(prefix.length);
-        if (!(postfix in filledBottleLiquidPostfixes)) {
-            console.log('item looks like filled bottle but liquid unknown', item);
+function collectItems(raw: string, strings: Record<string, string>): ItemData[] {
+    const rawItems = JSONBig.parse(raw) as {
+        [id: string]: {
+            id: string, // internal item id
+            name: { id: string }, // id in i18n table
+            desc: { id: string }, // id in i18n table, main description
+            decoDesc: { id: string }, // id in i18n table, additional description
+        },
+    };
+    const items: ItemData[] = [];
+    for (const rawItem of Object.values(rawItems)) {
+        const name = strings[rawItem.name.id.toString()];
+        if (typeof name == 'undefined' || name.length == 0) {
+            // missing names seems not important for now
+            // NOTE if game data updated, check again
+            // // where do you put these names?
+            // console.log('missing item name', rawItem.id);
             continue;
         }
-        const liquidItemId = filledBottleLiquidPostfixes[postfix];
-        const liquidName = items.find(i => i.id == liquidItemId)?.name;
-        item.desc[0] = `装有${liquidName}的${item.name}。`;
-        item.name = `${item.name} (${liquidName})`;
-        item.desc[1] = '我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？';
+        const desc = strings[rawItem.desc.id.toString()];
+        const decoDesc = strings[rawItem.decoDesc.id.toString()];
+        if (typeof desc == 'undefined' || desc.length == 0 || typeof decoDesc == 'undefined' || decoDesc.length == 0) {
+            // for now this list includes
+            // item_settlement_exp definitely means local exp, which is not important here
+            // sysbp_tundra_* and sysbp_wulin_* these names have display name same as non prefix, investigate later
+            // NOTE if game data updated, check again
+            // // where do you put these strings?
+            // console.log('missing item desc', rawItem.id);
+            continue;
+        }
+        // runtime script is now relying on id.startsWith('item') for item node, add a check here
+        if (rawItem.id.startsWith('item_')) {
+            console.log(`unexpected item id, not start with item_`, rawItem.id);
+            continue;
+        }
+        items.push({ id: rawItem.id, name, desc: [desc, decoDesc] });
     }
-}
-// console.log(items);
 
-// icondata.json handled filled bottle items, put after item name and description handling
-const nameToIcons = JSON.parse(fileContents[4]) as {
-    name: string,
-    icon: string, // icon data uri
-}[];
-const icons: { id: string, icon: string }[] = [];
-for (const item of items) {
-    const icon = nameToIcons.find(c => c.name == item.name)?.icon;
-    if (typeof icon == 'undefined') {
-        // missing item icon should mean that is not important
-        // TODO this list is too long, I think no missing item in final result should be enough
-        // console.log('missing item icon', rawItem.id);
-        continue;
+    // fix filled bottle name and description
+    // no direct relationship with original bottle item name, e.g. original bottle name is glass_enr not glassenr
+    const filledBottleItemIdPrefixes = [
+        'item_fbottle_glass_',
+        'item_fbottle_glassenr_',
+        'item_fbottle_iron_',
+        'item_fbottle_ironenr_',
+    ];
+    const filledBottleLiquidPostfixes = {
+        'water': 'item_liquid_water',
+        'grass_1': 'item_liquid_plant_grass_1',
+        'grass_2': 'item_liquid_plant_grass_2',
+        'xiranite': 'item_liquid_xiranite',
+    };
+    for (const item of items) {
+        const prefix = filledBottleItemIdPrefixes.find(prefix => item.id.startsWith(prefix));
+        if (prefix) {
+            const postfix = item.id.substring(prefix.length);
+            if (!(postfix in filledBottleLiquidPostfixes)) {
+                console.log('item looks like filled bottle but liquid unknown', item);
+                continue;
+            }
+            const liquidItemId = filledBottleLiquidPostfixes[postfix];
+            const liquidName = items.find(i => i.id == liquidItemId)?.name;
+            item.desc[0] = `装有${liquidName}的${item.name}。`;
+            item.name = `${item.name} (${liquidName})`;
+            item.desc[1] = '我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？';
+        }
     }
-    icons.push({ id: item.id, icon });
-}
-// negative direction check
-for (const { name } of nameToIcons) {
-    if (!items.find(i => i.name == name)) {
-        // for now this list include local exp and a few upgrade material, which are not important
-        // NOTE if game data updated, check again
-        // console.log(`wiki item ${name} not found`);
-    }
+    return items;
 }
 
-const rawMachines = JSONBig.parse(fileContents[2]) as {
-    [id: string]: {
-        id: string, // internal item id
-        name: { id: string }, // id in i18n table
-        desc: { id: string }, // id in i18n table, main description
-        powerConsume: number,
-    },
-};
-interface Machine {
+interface IconData {
+    id: string,
+    icon: string,
+}
+function collectIcons(raw: string, items: ItemData[]): IconData[] {
+    // icondata.json handled filled bottle items, put after item name and description handling
+    const nameToIcons = JSON.parse(raw) as {
+        name: string,
+        icon: string, // icon data uri
+    }[];
+    const icons: IconData[] = [];
+    for (const item of items) {
+        const icon = nameToIcons.find(c => c.name == item.name)?.icon;
+        if (typeof icon == 'undefined') {
+            // missing item icon should mean that is not important
+            // TODO this list is too long, I think no missing item in final result should be enough
+            // console.log('missing item icon', rawItem.id);
+            continue;
+        }
+        icons.push({ id: item.id, icon });
+    }
+    // negative direction check
+    for (const { name } of nameToIcons) {
+        if (!items.find(i => i.name == name)) {
+            // for now this list include local exp and a few upgrade material, which are not important
+            // NOTE if game data updated, check again
+            // console.log(`wiki item ${name} not found`);
+        }
+    }
+    return icons;
+}
+
+interface MachineData {
     id: string,
     name: string, // name for human
     desc: string, // desc for human
     power: number,
 }
-const machines: Machine[] = [];
-for (const rawMachine of Object.values(rawMachines)) {
-    const name = rawText[rawMachine.name.id.toString()];
-    if (typeof name == 'undefined' || name.length == 0) {
-        // all of them are name.id=0, not sure what happens
-        // NOTE if game data updated, check again
-        // console.log('missing machine name', rawMachine);
-        continue;
+function collectMachines(raw: string, strings: Record<string, string>): MachineData[] {
+    const rawMachines = JSONBig.parse(raw) as {
+        [id: string]: {
+            id: string, // internal item id
+            name: { id: string }, // id in i18n table
+            desc: { id: string }, // id in i18n table, main description
+            powerConsume: number,
+        },
+    };
+    const machines: MachineData[] = [];
+    for (const rawMachine of Object.values(rawMachines)) {
+        const name = strings[rawMachine.name.id.toString()];
+        if (typeof name == 'undefined' || name.length == 0) {
+            // all of them are name.id=0, not sure what happens
+            // NOTE if game data updated, check again
+            // console.log('missing machine name', rawMachine);
+            continue;
+        }
+        const desc = strings[rawMachine.desc.id.toString()];
+        if (typeof desc == 'undefined' || desc.length == 0) {
+            // none for now
+            console.log('missing machine desc', rawMachine);
+            continue;
+        }
+        machines.push({ id: rawMachine.id, name, desc, power: rawMachine.powerConsume });
     }
-    const desc = rawText[rawMachine.desc.id.toString()];
-    if (typeof desc == 'undefined' || desc.length == 0) {
-        // none for now
-        console.log('missing machine desc', rawMachine);
-        continue;
-    }
-    machines.push({ id: rawMachine.id, name, desc, power: rawMachine.powerConsume });
+    return machines;
 }
-// console.log(machines);
 
-const rawRecipes = JSONBig.parse(fileContents[3]) as {
-    [id: string]: {
-        id: string, // internal recipe id
-        formulaDesc: { id: number }, // this id is in i18n table, recipe display name
-        // multiple recipe to same item use different recipe object,
-        ingredients: {
-            // id is internal item id
-            group: { count: number, id: string }[],
-        }[],
-        // multiple outcome use multiple items in outcomes[0].group,
-        outcomes: {
-            group: { count: number, id: string }[],
-        }[],
-        machineId: string,
-        progressRound: number, // machine time in seconds
-    },
-};
-interface Recipe {
+interface RecipeData {
     id: string,
     name: string,
     machineId: string,
@@ -177,97 +158,171 @@ interface Recipe {
     products: { id: string, count: number }[],
     time: number,
 }
-const recipes: Recipe[] = [];
-for (const raw of Object.values(rawRecipes)) {
-    const name = rawText[raw.formulaDesc.id.toString()];
-    if (typeof name == 'undefined' || name.length == 0) {
-        // none for now
-        console.log('missing recipe name', raw);
-        continue;
-    }
-    if (!machines.some(m => m.id == raw.machineId)) {
-        // none for now
-        console.log('machine id not found', raw);
-        continue;
-    }
-    const ingredients: Recipe['ingredients'] = [];
-    if (raw.ingredients.length != 1) {
-        // none for now
-        console.log('ingredients length not 1', raw);
-    }
-    for (const ingredient of raw.ingredients[0].group) {
-        if (!items.some(i => i.id == ingredient.id)) {
+function collectRecipes(raw: string, strings: Record<string, string>, items: ItemData[], machines: MachineData[]): RecipeData[] {
+    const rawRecipes = JSONBig.parse(raw) as {
+        [id: string]: {
+            id: string, // internal recipe id
+            formulaDesc: { id: number }, // this id is in i18n table, recipe display name
+            // multiple recipe to same item use different recipe object,
+            ingredients: {
+                // id is internal item id
+                group: { count: number, id: string }[],
+            }[],
+            // multiple outcome use multiple items in outcomes[0].group,
+            outcomes: {
+                group: { count: number, id: string }[],
+            }[],
+            machineId: string,
+            progressRound: number, // machine time in seconds
+        },
+    };
+    const recipes: RecipeData[] = [];
+    for (const raw of Object.values(rawRecipes)) {
+        const name = strings[raw.formulaDesc.id.toString()];
+        if (typeof name == 'undefined' || name.length == 0) {
             // none for now
-            console.log('ingredient item id not found', raw);
+            console.log('missing recipe name', raw);
+            continue;
         }
-        ingredients.push(ingredient);
-    }
-    if (ingredients.length == 0) {
-        console.log('empty ingredient', raw);
-    }
-    const products: Recipe['ingredients'] = [];
-    if (raw.outcomes.length != 1) {
-        // none for now
-        console.log('outcomes length not 1', raw);
-    }
-    for (const product of raw.outcomes[0].group) {
-        if (!items.some(i => i.id == product.id)) {
+        if (!machines.some(m => m.id == raw.machineId)) {
             // none for now
-            console.log('product item id not found', raw);
+            console.log('machine id not found', raw);
+            continue;
         }
-        products.push(product);
+        const ingredients: RecipeData['ingredients'] = [];
+        if (raw.ingredients.length != 1) {
+            // none for now
+            console.log('ingredients length not 1', raw);
+        }
+        for (const ingredient of raw.ingredients[0].group) {
+            if (!items.some(i => i.id == ingredient.id)) {
+                // none for now
+                console.log('ingredient item id not found', raw);
+            }
+            ingredients.push(ingredient);
+        }
+        if (ingredients.length == 0) {
+            console.log('empty ingredient', raw);
+        }
+        const products: RecipeData['ingredients'] = [];
+        if (raw.outcomes.length != 1) {
+            // none for now
+            console.log('outcomes length not 1', raw);
+        }
+        for (const product of raw.outcomes[0].group) {
+            if (!items.some(i => i.id == product.id)) {
+                // none for now
+                console.log('product item id not found', raw);
+            }
+            products.push(product);
+        }
+        if (products.length == 0) {
+            console.log('empty products', raw);
+        }
+        recipes.push({ id: raw.id, name, machineId: raw.machineId, ingredients, products, time: raw.progressRound });
     }
-    if (products.length == 0) {
-        console.log('empty products', raw);
+    for (const recipe of recipes) {
+        let sb = ``;
+        for (const ingredient of recipe.ingredients) {
+            sb += `${ingredient.count}x${items.find(i => i.id == ingredient.id)?.name} + `;
+        }
+        sb = sb.substring(0, sb.length - 3);
+        sb += ` =>${machines.find(m => m.id == recipe.machineId)?.name}${recipe.time}s=> `;
+        for (const product of recipe.products) {
+            sb += `${product.count}x${items.find(i => i.id == product.id)?.name} + `;
+        }
+        sb = sb.substring(0, sb.length - 3);
+        sb += ` [${recipe.id}]`;
+        // console.log(sb);
     }
-    recipes.push({ id: raw.id, name, machineId: raw.machineId, ingredients, products, time: raw.progressRound });
-}
-for (const recipe of recipes) {
-    let sb = ``;
-    for (const ingredient of recipe.ingredients) {
-        sb += `${ingredient.count}x${items.find(i => i.id == ingredient.id)?.name} + `;
-    }
-    sb = sb.substring(0, sb.length - 3);
-    sb += ` =>${machines.find(m => m.id == recipe.machineId)?.name}${recipe.time}s=> `;
-    for (const product of recipe.products) {
-        sb += `${product.count}x${items.find(i => i.id == product.id)?.name} + `;
-    }
-    sb = sb.substring(0, sb.length - 3);
-    sb += ` [${recipe.id}]`;
-    // console.log(sb);
+    return recipes;
 }
 
-// filter out item and machine not used in recipe
-const filteredItems = items.filter(i => recipes.some(r => r.ingredients.some(r => r.id == i.id) || r.products.some(r => r.id == i.id)));
-const filteredMachines = machines.filter(m => recipes.some(r => r.machineId == m.id));
-const filteredIcons = icons.filter(c => filteredItems.some(r => r.id == c.id));
+function createDataScript(items: ItemData[], machines: MachineData[], recipes: RecipeData[]): string {
+    // filter out item and machine not used in recipe
 
-// JSON.stringify does not have line break option
-// it seems easier to manually format one line per entity (item, icon, machine, recipe)
-let sb = '';
-// now you can directly generate js instead of json
-// if this project is going to have a nginx, this file can be put separately
-sb += 'window["EndfieldRecipeData"] = {"items":[\n';
-for (const item of filteredItems) {
-    sb += JSON.stringify(item);
-    sb += ",\n";
+    // JSON.stringify does not have line break option
+    // it seems easier to manually format one line per entity (item, icon, machine, recipe)
+    let sb = '';
+    // now you can directly generate js instead of json
+    // if this project is going to have a nginx, this file can be put separately
+    sb += 'window["EndfieldRecipes"] = {"items":[\n';
+    for (const item of items) {
+        sb += JSON.stringify(item);
+        sb += ",\n";
+    }
+    // no indention by design
+    sb += '],"machines":[\n';
+    for (const machine of machines) {
+        sb += JSON.stringify(machine);
+        sb += ",\n";
+    }
+    sb += '],"recipes":[\n';
+    for (const recipe of recipes) {
+        sb += JSON.stringify(recipe);
+        sb += ",\n";
+    }
+    sb += ']};\n';
+    return sb;
 }
-// no indention by design
-sb += '],"machines":[\n';
-for (const machine of filteredMachines) {
-    sb += JSON.stringify(machine);
-    sb += ",\n";
-}
-sb += '],"recipes":[\n';
-for (const recipe of recipes) {
-    sb += JSON.stringify(recipe);
-    sb += ",\n";
-}
-// icons are very long, put them at bottom
-sb += '],"icons":{\n';
-for (const item of filteredIcons) {
-    sb += `"${item.id}": "${item.icon}",\n`;
-}
-sb += '}};\n';
 
-await fs.writeFile('data/recipes.js', sb);
+// icons are very long, put them in another <script>
+function createImageScript(icons: IconData[]): string {
+    let sb = '';
+    sb += "window['EndfieldImages'] = {\n";
+    for (const icon of icons) {
+        sb += `"${icon.id}": "${icon.icon}",\n`;
+    }
+    sb += '};\n';
+    return sb;
+}
+
+function transpileRuntimeScript(): string {
+    return `console.log('runtimescript');`;
+    // ts.createProgram
+}
+
+async function createPage() {
+
+    // the wiki site use very strange backend data structure and is not able to be understand by human or ai
+    // there is a look like game data but look like not up to date repo https://github.com/XiaBei-cy/EndfieldData
+    // it is ok for now because no recipe update since last major version (I mean major game content update, or minor version in semver)
+    const fileContents = await Promise.all([
+        fs.readFile('backup/I18nTextTable_CN.json', 'utf-8'),
+        fs.readFile('backup/ItemTable.json', 'utf-8'),
+        fs.readFile('backup/FactoryBuildingTable.json', 'utf-8'),
+        fs.readFile('backup/FactoryMachineCraftTable.json', 'utf-8'),
+        fs.readFile('tmp/icon-table.json', 'utf-8'),
+        fs.readFile('hechen/index.html', 'utf-8'),
+    ]);
+
+    // NOTE these files contains larger than safe int numbers, v8 JSON.parse does not handle this
+    //      and the following workaround does not handle these files correctly, the only correct way is manually parse or import a package
+    // const fixedFileContents = fileContents.map(c => c
+    //     .replaceAll(/(-?\d+)\b/g,(match, capture) => Number.isSafeInteger(capture) ? match : `"${capture}"`)
+    //     .replaceAll(/""-?\d+""/g, match => match.substring(1, match.length - 1)));
+    // const parseWithBigInt = (text: string) => JSON.parse(text, (key, value) => !isNaN(value) && !Number.isSafeInteger(value) ? BigInt(value) : value);
+    const strings = JSONBig.parse(fileContents[0]) as Record<string, string>;
+
+    const allItems = collectItems(fileContents[1], strings);
+    const allMachines = collectMachines(fileContents[2], strings);
+    const recipes = collectRecipes(fileContents[3], strings, allItems, allMachines);
+    
+    // reverse filter out not used items and machines that not recorded in recipes
+    const items = allItems.filter(i => recipes.some(r => r.ingredients.some(r => r.id == i.id) || r.products.some(r => r.id == i.id)));
+    const machines = allMachines.filter(m => recipes.some(r => r.machineId == m.id));
+    const datascript = createDataScript(items, machines, recipes);
+
+    const icons = collectIcons(fileContents[4], allItems);
+    const imagescript = createImageScript(icons);
+
+    const runtimescript = transpileRuntimeScript();
+    const template = fileContents[5];
+
+    const page = template
+        .replace('<script src="data.js"></script>', `<script>${datascript}</script>`)
+        .replace('<script src="image.js"></script>', `<script>${imagescript}</script>`)
+        .replace('<script src="hechen.js"></script>', `<script>${runtimescript}</script>`);
+    await fs.writeFile('hechen/hechen1.html', page);
+}
+createPage();
