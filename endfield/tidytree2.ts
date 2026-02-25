@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 
 // see tidytree.ts for background information
 
-// upgrade aesthentic rules
+// upgrade aesthetic rules
 // - nodes should be centered over its subtree means node is centered over its leftmost descendent and rightmost descendent
 
 // TODO paper 3 seems only improve the problem that small subtrees between large subtrees is stacked at left side of available space, 
@@ -134,16 +134,18 @@ function prettyPrintTree(root: Node) {
     }
     console.log(); // margin bottom 1 line
 }
+// by the way https://en.wikipedia.org/wiki/Box-drawing_characters
 
 // -----------------------------------------
 // -------------- PAPER 3 ------------------
 // -----------------------------------------
 
-interface Node {
+interface Node1 extends Node {
+    children: Node1[],
     // when setup, node.position is used for preliminary position,
     // which is node.preliminaryPosition = node.position - node.parent.position
-    position: number,
-    thread?: Node,
+    // position: number,
+    thread?: Node1,
     // thread relative position, because node.position is already used for 
     // relative position to parent, so need another property for this relative position,
     // to make the relative position usage more consistent,
@@ -153,11 +155,11 @@ interface Node {
 
 const MinDistance = 1;
 // layout1: try expand 2_3 to generic trees
-function layout1(root: Node, stat: { logs?: string[] }) {
+function layout1(root: Node1, stat: { logs?: string[] }) {
     stat.logs = [];
     const log = (record: string) => stat.logs.push(record);
 
-    function setup(thisnode: Node) {
+    function setup(thisnode: Node1) {
         // nothing to do for leaf node (relative position is now in child nodes,
         // leaf node don't need to manage position by itself), so skip leaf node
         for (const child of thisnode.children.filter(c => c.children.length)) { setup(child); }
@@ -431,7 +433,7 @@ function layout1(root: Node, stat: { logs?: string[] }) {
         }
         log(`  cursor #${cursor.name} position ${round2(cursorPosition)} minoffset ${round2(minCursorPosition)}`);
     }
-    function setPosition(node: Node, position: number) {
+    function setPosition(node: Node1, position: number) {
         node.position = position;
         node.thread = null;
         node.threadOffset = undefined;
@@ -442,70 +444,18 @@ function layout1(root: Node, stat: { logs?: string[] }) {
     setPosition(root, -minCursorPosition);
 }
 
+interface Node2 extends Node {
+    parent?: Node2,
+    modifier?: number,
+}
+
+// try convert code in paper
+function layout2(root: Node2) {
+
+}
+
 const allcases: Node[] = JSON.parse(await fs
     .readFile('trees.json', 'utf-8')).map((v: number[][]) => createTree(v.filter(r => typeof r != 'string')));
-
-// case 20: a normal random tree to check crash issues: update fixed crash
-allcases.push(createTree([
-    [1, 2, 3, 4],
-    [2, 5],
-    [5, 15, 16, 17],
-    [3, 6, 7, 8, 9],
-    [6, 18],
-    [7, 19, 20, 21, 22, 23],
-    [8, 24],
-    [9, 25, 26, 27, 28, 29],
-    [4, 10, 11, 12, 13, 14],
-    [10, 30, 31, 32, 33, 34],
-    [11, 35, 36, 37, 38],
-]));
-
-// case 21: a normal random case that will crash, update: fixed crash
-allcases.push(createTree([
-    [1, 2],
-    [2, 3, 4, 5, 6, 7],
-    [3, 8, 9],
-    [8, 20],
-    [9, 21, 22, 23],
-    [4, 10, 11],
-    [10, 24],
-    [11, 25, 26, 27, 28, 29],
-    [5, 12, 13, 14, 15, 16],
-    [12, 30],
-    [6, 17],
-    [7, 18, 19],
-]));
-
-// case 22: this make pretty print crash, update: fixed crash
-allcases.push(createTree([
-    [1, 2, 3, 4, 5],
-    [2, 6, 7],
-    [6, 14, 15, 16, 17, 18],
-    [14, 41, 42, 43],
-    [15, 44, 45, 46],
-    [16, 47],
-    [17, 48, 49],
-    [18, 50, 51],
-    [7, 19, 20, 21, 22],
-    [19, 52, 53],
-    [20, 54, 55, 56],
-    [3, 8],
-    [8, 23, 24, 25],
-    [4, 9, 10, 11, 12],
-    [9, 26, 27, 28],
-    [10, 29, 30, 31, 32, 33],
-    [11, 34, 35],
-    [12, 36, 37, 38, 39],
-    [5, 13],
-    [13, 40],
-]));
-
-// case 23: manually created to check errors
-allcases.push(createTree([
-    [1, 2, 3, 4, 5],
-    [2, 6, 7, 8, 9],
-]));
-
 let tree: Node;
 if (process.argv[2]) {
     tree = allcases[+process.argv[2] - 1];

@@ -1391,7 +1391,7 @@ if (process.argv[2] == 'auto2_3') {
     autotest2_4();
     process.exit(0);
 } else if (process.argv[2]) {
-    tree = allcase[+process.argv[2]];
+    tree = allcase[+process.argv[2] - 1];
     if (!tree) {
         console.log(`invalid case id ${process.argv[2]}`);
         process.exit(1);
@@ -1414,8 +1414,8 @@ notPrettyPrintBinaryTree(tree);
 // veryPrettyPrintBinaryTree(tree2);
 // maybeClearerPrettyPrintBinaryTree(tree2);
 const tree3 = tree as BinaryNode3;
-layout2_3(tree3);
-veryPrettyPrintBinaryTree(tree3);
+// layout2_3(tree3);
+// veryPrettyPrintBinaryTree(tree3);
 // maybeClearerPrettyPrintBinaryTree(tree3);
 layout2_4(tree3);
 veryPrettyPrintBinaryTree(tree3);
