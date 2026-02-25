@@ -454,6 +454,19 @@ function layout2(root: Node2) {
 
 }
 
+// TODO ask deepseek why my solution and this paper is so different by sending this file and source code *text*
+
+// TODO the small intermediate subtrees are stacked at left side should can be resolved by
+// if 2 non-sibling subtrees are pushing apart, then spread the push apart amount to all intermediate subtrees
+// e.g. subtree 2 and subtree 5 is push apart, increase distance 5, then subtree[5].position += 5, while subtree[3].position += 1.7, subtree[4] += 3.4
+function layout3() {}
+
+// by the way, record them if useful
+// https://llimllib.github.io/pymag-trees/
+// https://towardsdatascience.com/reingold-tilford-algorithm-explained-with-walkthrough-be5810e8ed93/
+// https://github.com/zxch3n/tidy/blob/master/rust/crates/tidy-tree/src/layout/tidy_layout.rs and https://www.zxch3n.com/tidy/tidy/
+// https://github.com/prefuse/Prefuse/blob/f62543210ad5b5e1ab656e0fbe3f54c2209d0cb7/src/prefuse/action/layout/graph/NodeLinkTreeLayout.java#L32
+
 const allcases: Node[] = JSON.parse(await fs
     .readFile('aesthetic/testcase.json', 'utf-8')).map((v: number[][]) => createTree(v.filter(r => typeof r != 'string')));
 let tree: Node;
