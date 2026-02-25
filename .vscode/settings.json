@@ -2,4 +2,7 @@
     "js/ts.implicitProjectConfig.strictNullChecks": false,
     "js/ts.implicitProjectConfig.strictFunctionTypes": false,
     "js/ts.implicitProjectConfig.target": "ESNext",
+    "explorer.fileNesting.patterns": {
+        "pyproject.toml": "uv.lock, .python-version"
+    },
 }

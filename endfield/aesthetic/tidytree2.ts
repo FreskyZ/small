@@ -455,7 +455,7 @@ function layout2(root: Node2) {
 }
 
 const allcases: Node[] = JSON.parse(await fs
-    .readFile('trees.json', 'utf-8')).map((v: number[][]) => createTree(v.filter(r => typeof r != 'string')));
+    .readFile('aesthetic/testcase.json', 'utf-8')).map((v: number[][]) => createTree(v.filter(r => typeof r != 'string')));
 let tree: Node;
 if (process.argv[2]) {
     tree = allcases[+process.argv[2] - 1];
@@ -468,7 +468,7 @@ if (process.argv[2]) {
 }
 const stat: { logs?: string[] } = {};
 layout1(tree, stat);
-await fs.writeFile('tidytree.log', stat.logs.join('\n'));
+await fs.writeFile('aesthetic/tidytree.log', stat.logs.join('\n'));
 printTreeEdges(tree);
 printTreePositions(tree);
 prettyPrintTree(tree);

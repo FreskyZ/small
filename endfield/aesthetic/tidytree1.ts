@@ -90,7 +90,7 @@ function createBinaryTree(relationships: [number, number, number][]): BinaryNode
     }
     return nodes[0];
 }
-const allcase: BinaryNode[] = JSON.parse(await fs.readFile('trees.json', 'utf-8'))
+const allcase: BinaryNode[] = JSON.parse(await fs.readFile('aesthetic/testcase.json', 'utf-8'))
     .map((v: number[][]) => createBinaryTree(v.filter(r => typeof r != 'string') as [number, number, number][]));
 
 function notPrettyPrintBinaryTree(node: BinaryNode) {

@@ -1,12 +1,5 @@
 # 明日方舟：终末地 地区建设 弹性需求物资 strategy
 
-# docker run -it -v.:/endfield --name endfield1 mydevc/python:2
-# cd /endfield
-# UV_CACHE_DIR=/endfield/.cache uv init
-# chown 1000:1000 main.py pyproject.toml uv.lock .python-version
-# uv add numpy pandas matplotlib
-# uv run trade.py
-
 # Problem statement
 # - There are several distinct products produced at location A and demanded at location A and B.
 # - Each day, every product has a price at A and a price at B. Prices are random, independent across days and products.
@@ -90,7 +83,7 @@ import matplotlib.pyplot as plt
 # def normal_cdf(x, mu, sigma):
 #     return 0.5 * (1 + math.erf((x - mu) / (sigma * math.sqrt(2))))
 
-# df = pd.read_csv('data/price1.csv')
+# df = pd.read_csv('finance/prices.csv')
 # prices = df['price'].dropna().to_numpy()
 # if prices.size == 0:
 #     print('no price data')
