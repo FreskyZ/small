@@ -3,48 +3,25 @@
 <head>
   <title>终末地配方</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    nav li{display:grid;grid-template-rows:36px 20px;grid-template-columns:56px 200px;cursor:pointer;border-radius:4px;}
-    nav li:hover, nav li.active{background-color:#ddd}
-    nav img{padding:4px;grid-area:1/1/4/1;}
-    nav div.name{margin-left:8px;margin-top:8px}
-    nav div.description{margin-left:8px;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:192px;}
-    div.recipe-panel{border:1px solid lightgray;border-radius:8px;position:absolute;cursor:grab;background-color:#e0e0e0;box-shadow:2px 2px 5px rgba(0,0,0,0.2)}
-    button.close{border:none;outline:none;background:transparent;cursor:pointer;padding:12px;border-radius:8px;width:36px;height:36px;}
-    button.close:hover{background:lightgray}
-    main div.item-node{position:absolute;}
-    main div.item-node img{padding:4px;border-radius:4px;background-color:#d8d8d8;box-shadow:2px 2px 5px rgba(0,0,0,0.2);}
-    main div.item-node div.name{font-size:12px;line-height:18px;text-align:center;width:48px;}
-    main div.recipe-item-line{border-style:solid;border-color:#555;position:absolute;}
-    main div.recipe-item-line-down{border-width:2px 2px 0 0;border-top-right-radius:8px;}
-    main div.recipe-item-line-up{border-width:0 2px 2px 0;border-bottom-right-radius:8px;}
-    main div.item-count-container{padding-left:4px;}
-    main div.item-recipe-line{border-style:solid;border-color:#555;border-width:0 0 2px 0;position:absolute;font-family:sans-serif;font-size:12px;}
-    main div.recipe-node{position:absolute;}
-    main div.recipe-node div.machine-name{line-height:18px;text-align:center;font-size:12px;width:48px;padding:3px 4px;border-radius:4px;background-color:#d8d8d8;box-shadow:2px 2px 5px rgba(0,0,0,0.2);}
-    main div.recipe-node div.name{line-height:18px;text-align:center;font-size:12px;font-family:sans-serif;}
-  </style>
+  <style></style>
 </head>
-<body style="background-color:#eee;display:grid;grid-template-rows:36px auto;grid-template-columns:280px auto;">
-    <header style="grid-area:1/1/1/3">
-        <span style="font-weight:bold;font-size:18px">终末地配方查看器</span>
-        <span style="font-size:12px">“他妈的游戏内配方查看器为什么没有数量配比”版</span>
-        <!-- TODO add a github link when publishing -->
+<body>
+    <header>
+        <span>终末地配方查看器</span>
+        <span>“他妈的游戏内配方查看器为什么没有数量配比”版</span>
+        <!-- github link here -->
     </header>
-    <nav style="width:276px;">
-        <div id="nav-header" style="height:24px;">
+    <nav>
+        <div id="nav-header">
             <!-- TODO collapse button here -->
-            <span style="font-size:14px;color:#333;cursor:default;">物品列表</span>
-            <input style="border:none;outline:none;background:transparent;margin-left:8px;line-height:20px" placeholder="搜索物品">
+            <span>物品列表</span>
+            <input placeholder="搜索物品">
         </div>
-        <div style="height:calc(100vh - 80px);overflow-x:hidden;overflow-y:auto;border-top:1px solid gray;border-bottom:1px solid gray;">
-            <ul style="list-style-type:none;margin:0;padding:4px 0;width:256px;"></ul>
-        </div>
+        <div id="nav-list-container"><ul></ul></div>
     </nav>
-    <!-- AI tells me position-absolute child inside overflow-hidden need a non default position in container element, why?
-        but it's ok to add position-relative here because it's already in a grid -->
-    <main style="overflow:hidden;position:relative;margin:8px;width:calc(100vw - 308px);height:calc(100vh - 72px);">
-    </main>
+    
+    <main></main>
+    
     <script src="hechen.js"></script>
     <script src="data.js"></script>
     <script src="image.js"></script>

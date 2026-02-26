@@ -13,6 +13,9 @@ import ts from 'typescript';
 interface ItemData {
     id: string,
     name: string, // name for human
+    // special handle seed in some sitations
+    // is seed = startsWith('item_plant_') && contains('seed')
+    kind?: 'seed',
     desc: string[], // main desc and additional desc for human
 }
 function collectItems(raw: string, strings: Record<string, string>): ItemData[] {
@@ -51,7 +54,8 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
             // console.log(`unexpected item id, not start with item_`, rawItem.id);
             continue;
         }
-        items.push({ id: rawItem.id, name, desc: [desc, decoDesc] });
+        const kind = rawItem.id.startsWith('item_plant_') && rawItem.id.includes('seed') ? 'seed' : undefined;
+        items.push({ id: rawItem.id, name, kind, desc: [desc, decoDesc] });
     }
 
     // fix filled bottle name and description
@@ -83,6 +87,8 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
             item.desc[1] = '我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？';
         }
     }
+
+    items.sort((a, b) => a.id.localeCompare(b.id));
     return items;
 }
 
@@ -156,6 +162,9 @@ function collectMachines(raw: string, strings: Record<string, string>): MachineD
 interface RecipeData {
     id: string,
     name: string,
+    // exclude pour in some situations
+    // is pour = machineId == 'dismantler_1' && products.length == 2 && one contains('bottle') && one contains('liquid')
+    kind?: 'pour',
     machineId: string,
     ingredients: { id: string, count: number }[],
     products: { id: string, count: number }[],
@@ -222,7 +231,9 @@ function collectRecipes(raw: string, strings: Record<string, string>, items: Ite
         if (products.length == 0) {
             console.log('empty products', raw);
         }
-        recipes.push({ id: raw.id, name, machineId: raw.machineId, ingredients, products, time: raw.progressRound });
+        const kind = raw.machineId == 'dismantler_1' && products.length == 2
+            && products.some(p => p.id.includes('bottle')) && products.some(p => p.id.includes('liquid')) ? 'pour' : undefined;
+        recipes.push({ id: raw.id, name, kind, machineId: raw.machineId, ingredients, products, time: raw.progressRound });
     }
     for (const recipe of recipes) {
         let sb = ``;
@@ -284,7 +295,7 @@ function createImageScript(icons: IconData[]): string {
 // return null for not ok
 function transpileRuntimeScript(): string {
 
-    const program = ts.createProgram(['hechen/hechen.ts'], {
+    const program = ts.createProgram(['hechen/index.ts'], {
         lib: ['lib.esnext.d.ts', 'lib.dom.d.ts'],
         target: ts.ScriptTarget.ESNext,
         module: ts.ModuleKind.NodeNext,
@@ -342,7 +353,7 @@ function transpileRuntimeScript(): string {
     }
 
     const success = diagnostics.length == 0;
-    console.log(`hechen.js completed with ${summary}`);
+    console.log(`index.js completed with ${summary}`);
     for (const { category, code, messageText, file, start } of diagnostics) {
         const displayColor = {
             [ts.DiagnosticCategory.Warning]: chalkNotTemplate.red,
@@ -377,6 +388,7 @@ async function createPage() {
         fs.readFile('backup/FactoryBuildingTable.json', 'utf-8'),
         fs.readFile('backup/FactoryMachineCraftTable.json', 'utf-8'),
         fs.readFile('tmp/icon-table.json', 'utf-8'),
+        fs.readFile('hechen/index.css', 'utf-8'),
         fs.readFile('hechen/index.html', 'utf-8'),
     ]);
 
@@ -404,7 +416,8 @@ async function createPage() {
     if (!runtimescript) {
         return;
     }
-    const page = fileContents[5]
+    const page = fileContents[6]
+        .replace('<style></style>', `<style>${fileContents[5]}  </style>`)
         .replace('<script src="data.js"></script>', `<script>${datascript}    </script>`)
         .replace('<script src="image.js"></script>', `<script>${imagescript}    </script>`)
         .replace('<script src="hechen.js"></script>', `<script type="module">\n${runtimescript}</script>`);
