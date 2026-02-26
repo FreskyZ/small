@@ -1,0 +1,285 @@
+
+PARENT(Node): The current node's hierarchical parent 
+FIRSTCHILD(Node): The current node's leftmost offspring 
+LEFTSIBLING(Node): The current node's closest sibling node on the left 
+RIGHTSIBLING(Node): The current node's closest sibling node on the right 
+XCOORD(Node): The current node's x-coordinate 
+YCOORD(Node): The current node's y-coordinate 
+PRELIM(Node): The current node's preliminary x-coordinate 
+MODIFIER(Node): The current node's modifier value 
+LEFTNEIGHBOR(Node): The current node's nearest neighbor to the left, at the same level
+
+Function POSITIONTREE. This function determines the coordinates for each 
+node in a tree. A pointer to the apex node of the tree is passed as input. 
+This assumes that the x and y coordinates of the apex node are set as 
+desired, since the tree underneath it will be positioned with respect to those 
+coordinates. Returns TRUE if no errors, otherwise returns FALSE.
+
+function POSITIONTREE(Node): BOOLEAN;
+begin
+    (* Initialize the list of previous nodes at each level. *)
+    INITPREVNODELIST;
+
+    (* Do the preliminary positioning with a postorder walk. *)
+    FIRSTWALK(Node, 0);
+
+    (* Determine how to adjust all the nodes with respect to the location of the root. *)
+    xTopAdjustment <- XCOORD(Node) - PRELIM(Node);
+    yTopAdjustment <- YCOORD(Node);
+
+    (* Do the final positioning with a preorder walk. *)
+    return SECONDWALK(Node, 0, 0);
+end.
+
+Procedure FIRSTWALK. In this first postorder walk, every node of the tree is 
+assigned a preliminary x-coordinate (held in field PRELIM(Node)). In addition, 
+internal nodes are given modifiers, which will be used to move their offspring 
+to the right (held in field MODIFIER(Node)). 
+
+function FIRSTWALK(Node, Level):
+begin
+    (* Set the pointer to the previous node at this level. *)
+    LEFTNEIGHBOR(Node) <- GETPREVNODEATLEVEL(Level);
+    SETPREVNODEATLEVEL(Level, Node); (* This is now the previous. *)
+    MODIFIER(Node) <- 0; (* Set the default modifier value. *)
+    if (ISLEAF(Node) or Level = MaxDepth) then
+        begin
+            if HASLEFTSIBLING(Node) then
+                (* Determine the preliminary x-coordinate based on: *)
+                (*   the preliminary x-coordinate of the left sibling, *)
+                (*   the separation between sibling nodes, and *)
+                (*   the mean size of left sibling and current node. *)
+                PRELIM(Node) <- PRELIM(LEFTSIBLING(Node)) + SiblingSeparation + MEANNODESIZE(LEFTSIBLING(Node), Node);
+            else
+                (* No sibling on the left to worray about. *)
+                PRELIM(Node) <- 0;
+        end;
+    else
+        (* This Node is not a leaf, so call this procedure recursively for each of its offspring. *)
+        begin
+            Leftmost <- Rightmost <- FIRSTCHILD(Node);
+            FIRSTWALK(Leftmost, Level + 1);
+            while HASRIGHTSIBLING(Rightmost) do
+                begin
+                    Rightmost <- RIGHTSIBLING(Rihgtmost);
+                    FIRSTWALK(Rightmost, Level + 1);
+                end;
+            Midpoint <- (PRELIM(Leftmost) + PRELIM(Rightmost)) / 2;
+            if HASLEFTSIBLING(Node) then
+                begin
+                    PRELIM(Node) <- PRELIM(LEFTSIBLING(Node)) + SiblingSeparation + MEANNODESIZE(LEFTSIBLING(Node), Node);
+                    MODIFIER(Node) <- PRELIM(Node) - Midpoint;
+                    APPORTION(Node, Level);
+                end;
+            else
+                PRELIM(Node) <- Midpoint;
+        end;
+end.
+
+Function SECONDWALK. During a second preorder walk, each node is given 
+a final x-coordinate by summing its preliminary x-coordinate and the modifiers 
+of all the node's ancestors. The y-coordinate depends on the height of the 
+tree. If the actual position of an interior node is right of its preliminary place, 
+the subtree rooted at the node must be moved right to center the sons 
+around the father. Rather than immediately readjust all the nodes in the 
+subtree, each node remembers the distance to the provisional place in a mod
+ifier field (MODIFIER(Node)). In this second pass down the tree, modifiers are 
+accumulated and applied to every node. Returns TRUE if no errors, otherwise 
+returns FALSE. 
+
+function SECONDWALK(Node, Level, Modsum): BOOLEAN;
+begin
+    if Level <= MaxDepth then
+        begin
+            xTemp <- xTopAdjustment + PRELIM(Node) + Modsum;
+            yTemp <- yTopAdjustment + (Level * LevelSeparation);
+            XCOORD(Node) <- xTemp;
+            YCOORD(Node) <- yTemp;
+            if HASCHILD(Node) then
+                (* Apply the Modifier value for this node to all its offspring. *)
+                Result <- SECONDWALK(FIRSTCHILD(Node), Level + 1, Modsum + MODIFIER(Node));
+            if (Result = TRUE and HASRIGHTSIBLING(Node)) then
+                Result <- SECONDWALK(RIGHTSIBLING(Node), Level + 1, Modsum);
+        end;
+    else
+        (* We are at a level deeper than what we want to draw. *)
+        Result <- TRUE;
+    return Result;
+end.
+
+Procedure APPORTION. This procedure cleans up the positioning 
+of small sibling subtrees, thus fixing the "left-to-right gluing" problem evident 
+in earlier algorithms. When moving a new subtree farther and farther to the 
+right, gaps may open up among smaller subtrees that were previously 
+sandwiched between larger subtrees. Thus, when moving the new, larger 
+subtree to the right, the distance it is moved is also apportioned to smaller, 
+interior subtrees, creating a pleasing aesthetic placement.
+
+procedure APPORTION(Node, Level):
+begin
+    Leftmost <- FIRSTCHILD(Node);
+    Neighbor <- LEFTNEIGHBOR(Leftmost);
+    CompareDepth <- 1;
+    DepthToStop <- MaxDepth - Level;
+    
+    while (Leftmost != ∅ and Neighbor != ∅ and CompareDepth <= DepthToStop) do
+        begin
+            (* Compute the location of Leftmost and 11here it should be with respect to Neighbor. *)
+            LeftModsum <- 0;
+            RightModsum <- 0;
+            AncestorLeftmost <- Leftmost;
+            AncestorNeighbor <- Neighbor;
+            for i <- 0 until CompareDepth do
+                begin
+                    AncestorLeftmost <- PARENT(AncestorLeftmost);
+                    AncestorNeighbor <- PARENT(AncestorNeighbor);
+                    RightModsum <- RightModsum + MODIFIER(AncestorLeftmost);
+                    LeftModsum <- LeftModsum + MODIFIER(AncestorNeighbor);
+                end;
+            (* Find the MoveDistance, and apply it to Node's subtree. *)
+            (* Add appropriate portions to smaller interior subtrees. *)
+            MoveDistance <- (PRELIM(Neighbor) + LeftModsum + SubtreeSeparation + MEANNODESIZE(Leftmost, Neighbor)) - (PRELIM(Leftmost) + RightModsum);
+
+            if MoveDistance > 0 then
+                begin
+                    (* Count interior sibling subtrees in LeftSiblings *)
+                    TempPtr <- Node;
+                    LeftSibling <- 0;
+                    while (TempPtr != ∅ and TempPtr != AncestorNeighbor) do
+                        begin
+                            LeftSiblings <- LeftSiblings + 1;
+                            TempPtr <- LEFTSIBLING(TempPtr);
+                        end;
+                    if TempPtr != ∅ then
+                        (* Apply portions to appropriate leftsibling subtrees. *)
+                        begin
+                            Portion <- MoveDistance / LeftSiblings;
+                            TempPtr <- Node;
+                            while TempPtr = AncestorNeighbor do
+                                begin
+                                    PRELIM(TempPtr) <- PRELIM(TempPtr) + MoveDistance;
+                                    MODIFIER(TempPtr) <- MODIFIER(TempPtr) + MoveDistance;
+                                    MoveDistance <- MoveDistance - Portion;
+                                    TempPtr <- LEFTSIBLING(TempPtr);
+                                end;
+                        end;
+                    else
+                        (* Don't need to move anything--it needs to be done by an ancestor because *)
+                        (* AncestorNeighbor and AncestorLeftmost are not siblings of each other. *)
+                        return;
+                end;
+            (* Determine the leftmost descendant of Node at the next lower level to compare its positioning against that of its Neighbor *)
+            CompareDepth <- CompareDepth + 1;
+            if ISLEAF(Leftmost) then
+                Leftmost <- GETLEFTMOST(Node, 0, CompareDepth);
+            else
+                Leftmost <- FIRSTCHILD(Leftmost);
+        end;
+end.
+
+Function GETLEFTMOST. This function returns the leftmost descendant of a 
+node at a given Depth. This is implemented using a postorder walk of the 
+subtree under Node, down to the level of Depth. Level here is not the abso
+lute tree level used in the two main tree walks; it refers to the level below the 
+node whose leftmost descendant is being found.
+
+function GETLEFTMOST(Node, Level, Depth): NODE; 
+begin 
+    if Level >= Depth then 
+        return Node;
+    else if ISLEAF(Node) then 
+        return ∅;
+    else begin 
+        Rightmost <- FIRSTCHILD(Node); 
+        Leftmost <- GETLEFTMOST(Rightmost, Level + 1, Depth); 
+        (* Do a postorder walk of the subtree below Node. *)
+        while (Leftmost = ∅ and HASRIGHTSIBLING(Rightmost)) do
+            begin 
+                Rightmost <- RIGHTSIBLING(Rightmost); 
+                Leftmost <- GETLEFTMOST(Rightmost, Level + 1, Depth); 
+            end;
+        return Leftmost;
+    end;
+end.
+
+Function MEANNODESIZE. This function returns the mean size of the two 
+passed nodes. It adds the size of the right half of lefthand node to the left 
+half of righthand node. If all nodes are the same size, this is a trivial calculation.
+
+function MEANNODESIZE(LeftNode, RightNode): REAL; 
+begin
+    if LeftNode != ∅ then 
+        NodeSize <- NodeSize + RIGHTSIZE(LeftNode); 
+    if RightNode != ∅ then 
+        NodeSize <- NodeSize + LEFTSIZE(RightNode); 
+    return NodeSize; 
+end.
+
+Initialize the list of previous nodes at each level. Three list-maintenance procedures, 
+GETPREVNODEATLEVEL, SETPREVNODEATLEVEL, and  INITPREVNODELIST. maintain a singly-linked list.
+Each entry in the list corresponds to the node previous to the current node at a given level (for example, 
+element 2 in the list corresponds to the node to the left of the current node at level 2). 
+If the maximum tree size is known beforehand, this list can be 
+replaced with a fixed-size array, and these procedures become trivial. 
+Each list element contains two fields: PREVNODE-the previous node at this 
+level, and NEXTLEVEL-a forward pointer to the next list element. The list is 
+does not need to be cleaned up between calls to POSITIONTREE, for performance. 
+
+procedure INITPREVNODELIST: 
+begin 
+    (* Start with the node at level 0--the apex of the tree. *) 
+    TempPtr <- LevelZeroPtr; 
+    while TempPtr != ∅ do 
+        begin
+            PREVNODE(TempPtr) <- ∅;
+            TempPtr <- NEXTLEVEL(TempPtr);
+        end; 
+end.
+
+function GETPREVNOOEATLEVEL(Level): NODE; 
+begin 
+    (* Start with the node at level 0--the apex of the tree. *)
+    TempPtr <- LevelZeroPtr; 
+    i <- 0; 
+    while TempPtr != ∅ do 
+        begin 
+            if i = Level then 
+                return PREVNODE(TempPtr) 
+            TempPtr <- NEXTLEVEL(TempPtr); 
+            i <- i + 1; 
+        end;
+    (* Otherwise, there was no node at the specific level. *)
+    return ∅; 
+end.
+
+procedure SETPREVNOOEATLEVEL (Level, Node): 
+begin 
+    (* Start with the node at level 6--the apex of the tree. *)
+    TempPtr <- LevelZeroPtr; 
+    i <- 0; 
+    while TempPtr != ∅ do 
+        begin 
+            if i = Level then 
+                begin 
+                    (* At this level, replace the existing list element with the passed-in node. *)
+                    PREVNODE(TempPtr) <- Node; 
+                    return;
+                end;
+            else if NEXTLEVEL(TempPtr) = ∅ then 
+                (*There isn't a lfst element yet at this level, so add one. *)
+                (* The following instructions prepare the list element at the next level, not at this one. *)
+                begin 
+                    NewNode <- ALLOCATE_A_NODE; 
+                    PREVNODE(NewNode) <- ∅; 
+                    NEXTLEVEL(NewNode) <- ∅; 
+                    NEXTLEVEL(TempPtr) <- NewNode;
+                end;
+            (* Prepare to move to the next level, to look again. *)
+            TempPtr <- NEXTLEVEL(TempPtr); 
+            i <- i + 1; 
+        end;
+    (* Should only get here if LevelZeroPtr is nil. *)
+    LevelZeroPtr <- ALLOCATE_A_NODE; 
+    PREVNODE(LevelZeroPtr) <- Node; 
+    NEXTLEVEL(LevelZeroPtr) <- ∅; 
+end.
