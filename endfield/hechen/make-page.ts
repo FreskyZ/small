@@ -129,6 +129,7 @@ interface MachineData {
     name: string, // name for human
     desc: string, // desc for human
     power: number,
+    size: [number, number],
 }
 function collectMachines(raw: string, strings: Record<string, string>): MachineData[] {
     const rawMachines = JSONBig.parse(raw) as {
@@ -137,6 +138,7 @@ function collectMachines(raw: string, strings: Record<string, string>): MachineD
             name: { id: string }, // id in i18n table
             desc: { id: string }, // id in i18n table, main description
             powerConsume: number,
+            range: { depth: number, width: number },
         },
     };
     const machines: MachineData[] = [];
@@ -154,7 +156,12 @@ function collectMachines(raw: string, strings: Record<string, string>): MachineD
             console.log('missing machine desc', rawMachine);
             continue;
         }
-        machines.push({ id: rawMachine.id, name, desc, power: rawMachine.powerConsume });
+        if (!rawMachine.range?.depth || !rawMachine.range?.width) {
+            // non for now
+            console.log('missing range', rawMachine);
+            continue;
+        }
+        machines.push({ id: rawMachine.id, name, desc, power: rawMachine.powerConsume, size: [rawMachine.range.depth, rawMachine.range.width] });
     }
     return machines;
 }

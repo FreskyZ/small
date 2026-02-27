@@ -146,11 +146,29 @@ div.panel > span.speed-container > input::-webkit-inner-spin-button {
     -webkit-appearance: none;
     margin: 0;
 }
+div.panel > span.speed-container > button.reset {
+    outline: none;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+}
+div.panel > span.speed-container > button.reset:hover {
+    background: lightgray;
+}
+div.panel > span.speed-container > button.reset > svg {
+    width: 14px;
+    height: 14px;
+}
 
 /* item node */
 div.panel > div.item-node {
     position: absolute;
     display: grid;
+    /* TODO change back to 48px 24px */
     grid-template-rows: 18px 12px 18px 24px;
     grid-template-columns: 8px 48px 24px;
     cursor: default;
@@ -193,22 +211,14 @@ div.panel > div.item-node > div.ellipsis {
     border-color: #333;
     cursor: help;
 }
-div.panel > div.item-node > span.amount,
-div.panel > div.item-node > span.amount-ps,
-div.panel > div.item-node > span.amount-bps {
+div.panel > div.item-node > span.amount-by-recipe {
+    grid-area: 1/2/1/2;
     font-size: 12px;
     font-family: sans-serif;
-    margin-left: 2px;
-}
-div.panel > div.item-node > span.amount {
-    grid-area: 1/3/1/3;
-    margin-top: 4px;
-}
-div.panel > div.item-node > span.amount-ps {
-    grid-area: 2/3/2/3;
-}
-div.panel > div.item-node > span.amount-bps {
-    grid-area: 3/3/3/3;
+    margin-top: 2px;
+    margin-right: 2px;
+    text-align: right;
+    line-height: 14px;
 }
 div.panel > div.item-node > div.name {
     grid-area: 4/1/4/4;
@@ -224,6 +234,13 @@ div.panel > div.item-node > div.name > span {
     padding: 4px 0;
     text-align: center;
     width: 108px;
+}
+div.panel > div.item-node > span.amount-by-speed {
+    grid-area: 1/3/1/3;
+    font-size: 12px;
+    font-family: sans-serif;
+    margin-top: 8px;
+    margin-left: 2px;
 }
 div.panel > div.item-node > div.arrow-line-right {
     grid-area: 2/3/2/3;
@@ -319,10 +336,11 @@ div.panel > div.recipe-node {
     position: absolute;
     display: grid;
     grid-template-columns: 8px 68px 24px;
-    grid-template-rows: 24px 12px;
+    grid-template-rows: 12px 24px 12px;
+    cursor: default;
 }
 div.panel > div.recipe-node > div.machine-name {
-    grid-area: 1/2/1/2;
+    grid-area: 2/2/2/2;
     line-height: 18px;
     text-align: center;
     font-size: 12px;
@@ -333,12 +351,18 @@ div.panel > div.recipe-node > div.machine-name {
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
 }
 div.panel > div.recipe-node > div.info-container {
-    grid-area: 2/2/2/2;
-    margin-top: 4px;
     display: flex;
     flex-flow: row;
     align-items: center;
     justify-content: space-evenly;
+}
+div.panel > div.recipe-node > div.info-container1 {
+    margin-bottom: 2px;
+    grid-area: 1/2/1/2;
+}
+div.panel > div.recipe-node > div.info-container2 {
+    margin-top: 4px;
+    grid-area: 3/2/3/2;
 }
 div.panel > div.recipe-node > div.info-container > svg {
     width: 10px;
@@ -354,14 +378,21 @@ div.panel > div.recipe-node > div.info-container > span {
     font-size: 12px;
     font-family: sans-serif;
 }
-div.panel > div.recipe-node > span.amount {
+div.panel > div.recipe-node > div.info-container > span.amount-not-1 {
+    color: #422705;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 14px;
+}
+div.panel > div.recipe-node > span.machine-count {
     grid-area: 1/3/1/3;
     font-size: 12px;
     font-family: sans-serif;
-    margin-left: 2px;
-    margin-top: 2px;
+    margin-left: 4px;
+    margin-top: 8px;
 }
 div.panel > div.recipe-node > div.arrow-line {
+    grid-area: 2/1/2/1;
     height: 0;
     margin-top: 14px;
     border-width: 0 0 2px 0;
@@ -369,7 +400,7 @@ div.panel > div.recipe-node > div.arrow-line {
     border-color: #333;
 }
 div.panel > div.recipe-node > div.arrow-line-right {
-    grid-area: 1/3/1/3;
+    grid-area: 2/3/2/3;
     width: 22px;
     height: 0;
     margin-left: 2px;

@@ -10,6 +10,7 @@ interface MachineData {
     name: string, // name for human
     desc: string, // desc for human
     power: number,
+    size: [number, number],
 }
 interface RecipeData {
     id: string,
@@ -309,13 +310,41 @@ function j<K extends keyof HTMLElementTagNameMap>(parent: Element, tag: K, props
     return element;
 }
 
-// and delete icon (trash icon?)
-const Clock = [
+const ClockIcon = [
     "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z",
     "M686.7 638.6L544.1 535.5V288c0-4.4-3.6-8-8-8H488c-4.4 0-8 3.6-8 8v275.4c0 2.6 1.2 5 3.3 6.5l165.4 120.6c3.6 2.6 8.6 1.8 11.2-1.7l28.6-39c2.6-3.7 1.8-8.7-1.8-11.2z",
 ];
-const Thunderbolt = ["M848 359.3H627.7L825.8 109c4.1-5.3.4-13-6.3-13H436c-2.8 0-5.5 1.5-6.9 4L170 547.5c-3.1 5.3.7 12 6.9 12h174.4l-89.4 " +
-    "357.6c-1.9 7.8 7.5 13.3 13.3 7.7L853.5 373c5.2-4.9 1.7-13.7-5.5-13.7zM378.2 732.5l60.3-241H281.1l189.6-327.4h224.6L487 427.4h211L378.2 732.5z"];
+// TODO close all panels
+// const DeleteIcon = [
+//     "M360 184h-8c4.4 0 8-3.6 8-8v8h304v-8c0 4.4 3.6 8 8 8h-8v72h72v-80c0-35.3-28.7-64-64-64H352c-35.3 0-64 28.7-64 64v80h72v-72zm504 72H160c-17.7 0-32 14.3-32 32v32c0 4.4 3.6 8 8 " +
+//     "8h60.4l24.7 523c1.6 34.1 29.8 61 63.9 61h454c34.2 0 62.3-26.8 63.9-61l24.7-523H888c4.4 0 8-3.6 8-8v-32c0-17.7-14.3-32-32-32zM731.3 840H292.7l-24.2-512h487l-24.2 512z"
+// ];
+const ThunderboltIcon = [
+    "M848 359.3H627.7L825.8 109c4.1-5.3.4-13-6.3-13H436c-2.8 0-5.5 1.5-6.9 4L170 547.5c-3.1 5.3.7 12 6.9 12h174.4l-89.4 " +
+    "357.6c-1.9 7.8 7.5 13.3 13.3 7.7L853.5 373c5.2-4.9 1.7-13.7-5.5-13.7zM378.2 732.5l60.3-241H281.1l189.6-327.4h224.6L487 427.4h211L378.2 732.5z",
+];
+const ReloadIcon = [
+    "M909.1 209.3l-56.4 44.1C775.8 155.1 656.2 92 521.9 92 290 92 102.3 279.5 102 511.5 101.7 743.7 289.8 932 521.9 932c181.3 0 335.8-115 394.6-276.1 1.5-4.2-.7-8.9-4.9-10.3l-56.7-19.5a8 " +
+    "8 0 00-10.1 4.8c-1.8 5-3.8 10-5.9 14.9-17.3 41-42.1 77.8-73.7 109.4A344.77 344.77 0 01655.9 829c-42.3 17.9-87.4 27-133.8 27-46.5 0-91.5-9.1-133.8-27A341.5 341.5 0 01279 755.2a342.16 " +
+    "342.16 0 01-73.7-109.4c-17.9-42.4-27-87.4-27-133.9s9.1-91.5 27-133.9c17.3-41 42.1-77.8 73.7-109.4 31.6-31.6 68.4-56.4 109.3-73.8 42.3-17.9 87.4-27 133.8-27 46.5 0 91.5 9.1 133.8 27a341.5 " +
+    "341.5 0 01109.3 73.8c9.9 9.9 19.2 20.4 27.8 31.4l-60.2 47a8 8 0 003 14.1l175.6 43c5 1.2 9.9-2.6 9.9-7.7l.8-180.9c-.1-6.6-7.8-10.3-13-6.2z",
+];
+const SharpIcon = [
+    "M872 394c4.4 0 8-3.6 8-8v-60c0-4.4-3.6-8-8-8H708V152c0-4.4-3.6-8-8-8h-64c-4.4 0-8 3.6-8 8v166H400V152c0-4.4-3.6-8-8-8h-64c-4.4 0-8 3.6-8 8v166H152c-4.4 0-8 3.6-8 8v60c0 4.4 3.6 8 8 " +
+    "8h168v236H152c-4.4 0-8 3.6-8 8v60c0 4.4 3.6 8 8 8h168v166c0 4.4 3.6 8 8 8h64c4.4 0 8-3.6 8-8V706h228v166c0 4.4 3.6 8 8 8h64c4.4 0 8-3.6 8-8V706h164c4.4 0 8-3.6 " +
+    "8-8v-60c0-4.4-3.6-8-8-8H708V394h164zM628 630H400V394h228v236z",
+];
+const ProductIcon = [
+    "M464 144a16 16 0 0116 16v304a16 16 0 01-16 16H160a16 16 0 01-16-16V160a16 16 0 0116-16zm-52 68H212v200h200zm493.33 87.69a16 16 0 010 22.62L724.31 503.33a16 16 0 01-22.62 0L520.67 322.31a16 " +
+    "16 0 010-22.62l181.02-181.02a16 16 0 0122.62 0zm-84.85 11.3L713 203.53 605.52 311 713 418.48zM464 544a16 16 0 0116 16v304a16 16 0 01-16 16H160a16 16 0 01-16-16V560a16 16 0 0116-16zm-52 " +
+    "68H212v200h200zm452-68a16 16 0 0116 16v304a16 16 0 01-16 16H560a16 16 0 01-16-16V560a16 16 0 0116-16zm-52 68H612v200h200z",
+];
+const LinkIcon = [
+    "M574 665.4a8.03 8.03 0 00-11.3 0L446.5 781.6c-53.8 53.8-144.6 59.5-204 0-59.5-59.5-53.8-150.2 0-204l116.2-116.2c3.1-3.1 3.1-8.2 0-11.3l-39.8-39.8a8.03 8.03 0 00-11.3 0L191.4 526.5c-84.6 " +
+    "84.6-84.6 221.5 0 306s221.5 84.6 306 0l116.2-116.2c3.1-3.1 3.1-8.2 0-11.3L574 665.4zm258.6-474c-84.6-84.6-221.5-84.6-306 0L410.3 307.6a8.03 8.03 0 000 11.3l39.7 39.7c3.1 3.1 8.2 3.1 11.3 " +
+    "0l116.2-116.2c53.8-53.8 144.6-59.5 204 0 59.5 59.5 53.8 150.2 0 204L665.3 562.6a8.03 8.03 0 000 11.3l39.8 39.8c3.1 3.1 8.2 3.1 11.3 0l116.2-116.2c84.5-84.6 84.5-221.5 0-306.1zM610.1 372.3a8.03 " +
+    "8.03 0 00-11.3 0L372.3 598.7a8.03 8.03 0 000 11.3l39.6 39.6c3.1 3.1 8.2 3.1 11.3 0l226.4-226.4c3.1-3.1 3.1-8.2 0-11.3l-39.5-39.6z",
+];
 
 function createSVGElement(parent: Element, pathdata: string[], className?: string) {
     const svgns = 'http://www.w3.org/2000/svg';
@@ -447,14 +476,18 @@ function drawRecipeTree(tree: ItemNode) {
             speedHandlers.push(newSpeed => e.value = (Math.round(newSpeed * 60 * 100) / 100).toString());
         });
         /* speed label */ j(speedContainer, 'label', { innerText: '个每分钟' }, e => e.htmlFor = 'item-count-requirement');
-        // TODO reset icon to set speed to initial
+        /* reset button */ j(speedContainer, 'button', { className: 'reset' }, button => {
+            /* icon */ createSVGElement(button, ReloadIcon);
+            button.addEventListener('click', () => { for (const handler of speedHandlers) { handler(initSpeed); } });
+        })
     }
     // TODO machine count and power report as in "100个机器1000W电" .title = "50个粉碎机10个精炼炉"
 
     function isItemNode(node: ItemNode | RecipeNode): node is ItemNode {
         return node.data.id.startsWith('item_');
     }
-    function createNode(node: ItemNode | RecipeNode, parent: ItemNode | RecipeNode) {
+    // speed: relative speed requirement of the item/recipe based on root item 1/s, this value * new speed is the display speed
+    function createNode(node: ItemNode | RecipeNode, parent: ItemNode | RecipeNode, speed: number) {
         // TODO consider allow collapse an item node
         if (isItemNode(node)) {
             const item = node;
@@ -476,26 +509,22 @@ function drawRecipeTree(tree: ItemNode) {
                 e.height = 40;
             });
             // now item-node width 80px cannot fit "bottle with liquid" names, try add a span and make it wider
-            const nameContainer = j(itemElement, 'div', { className: 'name' });
-            /* name */ j(nameContainer, 'span', { innerText: item.data.name }, e => e.title = item.data.desc[0]);
+            /* name-container */ j(itemElement, 'div', { className: 'name' }, nameContainer => {
+                /* name */ j(nameContainer, 'span', { innerText: item.data.name }, e => e.title = item.data.desc[0]);
+            });
             if (item.children.length) {
-                // TODO antd arrwoline icon looks not good
-                // /* arrow line */ createSVGElement(itemElement, ArrowLine, 'arrow-line');
                 /* arrow line */ j(itemElement, 'div', { className: 'arrow-line' });
             } else if (item.duplicate) {
                 /* ellipsis */ j(itemElement, 'div', { className: 'ellipsis' }, e => e.title = '之前在链路上出现过了');
             }
 
             if (parent && !isItemNode(parent)) {
-                // TODO recipe amount seems can be put inside item img, and put calculated speed requirement at this amount location
-                const amount = parent.data.ingredients.find(i => i.id == item.data.id).count;
-                // TODO seems need to calculate based on final requirement, so empty them for now
-                const perSecond = ''; // `${Math.round(amount / parent.data.time * 10) / 10}/s`;
-                const beltPerSecond = ''; // `${Math.round(amount / parent.data.time / 0.5 * 10) / 10}带`;
-                /* amount */ j(itemElement, 'span', { className: 'amount', innerText: `×${amount}` });
-                /* amount ps */ j(itemElement, 'span', { className: 'amount-ps', innerText: perSecond });
-                /* amount bps */ j(itemElement, 'span', { className: 'amount-bps', innerText: beltPerSecond });
-                // only one amount element for now, need a arrow line at right
+                const recipeAmount = parent.data.ingredients.find(i => i.id == item.data.id).count;
+                /* amount by recipe */ j(itemElement, 'span', { className: 'amount-by-recipe', innerText: `×${recipeAmount}` });
+                /* amount by speed */ j(itemElement, 'span', { className: 'amount-by-speed', innerText: `30/m` }, e => {
+                    e.title = '根据速度需求计算的物品数量';
+                    speedHandlers.push(() => { e.innerText = `30/m` });
+                });
                 // TODO change left arrow line and right arrow line to both width 16, rename arrow line because it does not have arrow, may be connect-line?
                 /* arrow line */ j(itemElement, 'div', { className: 'arrow-line-right' });
             }
@@ -540,10 +569,10 @@ function drawRecipeTree(tree: ItemNode) {
                         e.width = 40;
                         e.height = 40;
                     });
-                    const nameContainer = j(productElement, 'div', { className: 'name' });
-                    /* name */ j(nameContainer, 'span', { innerText: product.name }, e => e.title = product.desc[0]);
+                    /* name container */ j(productElement, 'div', { className: 'name' }, nameContainer => {
+                        /* name */ j(nameContainer, 'span', { innerText: product.name }, e => e.title = product.desc[0])
+                    });
                     /* arrow line */ j(productElement, 'div', { className: 'arrow-line' });
-                    
                     /* collect line */ j(panelElement, 'div', {
                         // spread line: opposite of collect line
                         className: 'spread-line ' + (item.position > productPosition
@@ -564,20 +593,38 @@ function drawRecipeTree(tree: ItemNode) {
                 className: 'recipe-node',
                 dataset: { 'id': recipe.data.id },
                 left: GridWidth * (maxDepth - recipe.depth - 1) + 112,
-                top: GridHeight * recipe.position + 52,
+                // TODO comments not updated for this recipe-node grid layout change
+                top: GridHeight * recipe.position + 40,
             });
+            // time and amount
+            const infoElement1 = j(recipeElement, 'div', { className: 'info-container info-container1' });
+            /* time icon */ createSVGElement(infoElement1, ClockIcon, 'time-icon');
+            /* time */ j(infoElement1, 'span', { className: 'time', innerText: `${recipe.data.time}s` });
+            /* amount icon */ createSVGElement(infoElement1, ProductIcon, 'amount-icon');
+            const amount = recipe.data.products.find(p => p.id == parent.data.id).count;
+            /* amount */ j(infoElement1, 'span', { className: 'amount' +
+                (amount != 1 ? ` amount-not-1` : ''), innerText: `×${amount}` }, e => e.title = '产物数量' + (amount != 1 ? '大于1！' : ''));
+            if (recipe.data.products.length > 1) {
+                const sideProducts = recipe.data.products.filter(p => p.id != parent.data.id)
+                    .map(p => `${pagedata.items.find(i => i.id == p.id).name}×${p.count}`).join('，');
+                const sideProductIconContainer = j(infoElement1, 'span', { className: 'side-product-icon-container' }, e => e.title = `副产物：${sideProducts}`);
+                createSVGElement(sideProductIconContainer, LinkIcon, 'side-product-icon');
+            }
             /* arrow line */ j(recipeElement, 'div', { className: 'arrow-line' });
             const machine = pagedata.machines.find(m => m.id == recipe.data.machineId);
             /* machine name */ j(recipeElement, 'div', { className: 'machine-name', innerText: machine.name });
-            // TODO change to top info and bottom info, top info time and amount, bottom info power and machine size
-            const infoElement = j(recipeElement, 'div', { className: 'info-container' });
-            /* time icon */ createSVGElement(infoElement, Clock, 'time-icon');
-            /* time */ j(infoElement, 'span', { className: 'time', innerText: `${recipe.data.time}s` });
-            /* power icon */ createSVGElement(infoElement, Thunderbolt, 'power-icon');
-            /* power */ j(infoElement, 'span', { className: 'power', innerText: `${machine.power}W` });
-            const amount = recipe.data.products.find(p => p.id == parent.data.id).count;
-            /* amount */ j(recipeElement, 'span', { className: 'amount', innerText: `×${amount}` });
+            // power and size
+            const infoElement2 = j(recipeElement, 'div', { className: 'info-container info-container2' });
+            /* power icon */ createSVGElement(infoElement2, ThunderboltIcon, 'power-icon');
+            /* power */ j(infoElement2, 'span', { className: 'power',
+                innerText: `${machine.power}W` }, e => e.title = `额定功率${machine.power}W，注意啦注意啦机器摸鱼和卡住的时候也要用这么多电`);
+            /* size icon */ createSVGElement(infoElement2, SharpIcon, 'size-icon');
+            /* power */ j(infoElement2, 'span', { className: 'size', innerText: `${machine.size[0]}×${machine.size[1]}` }, e => e.title = `占地面积`);
             /* arrow line right */ j(recipeElement, 'div', { className: 'arrow-line-right' });
+            /* machine count */ j(recipeElement, 'span', { className: 'machine-count', innerText: `30/m` }, e => {
+                e.title = '机器数量';
+                speedHandlers.push(() => { e.innerText = `30/m` });
+            });
             for (const item of recipe.children) {
                 // collect line belong to panel element, not recipe element
                 /* collect line */ j(panelElement, 'div', {
@@ -594,10 +641,11 @@ function drawRecipeTree(tree: ItemNode) {
             }
         }
         for (const child of node.children) {
-            createNode(child, node);
+            // ATTENTION TODO not this speed
+            createNode(child, node, speed);
         }
     }
-    createNode(tree, null);
+    createNode(tree, null, initSpeed);
 }
 
 function focusPanel(itemId: string) {
@@ -608,6 +656,8 @@ function focusPanel(itemId: string) {
         panel.style.zIndex = (panelIndex + 1).toString();
     }
 }
+
+// TODO speedDisplayTypeHandlers: { id: string, handler: (newType: string) => void }[]
 function handleItemClick(item: ItemData) {
     // TODO consider make <main> scroll zoom, make main look like drag move that actually moves all panels
     // TODO add a dropdown menu displaying all opened panels and allow center and close, also a clear button
