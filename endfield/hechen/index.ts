@@ -10,6 +10,7 @@ interface MachineData {
     name: string, // name for human
     desc: string, // desc for human
     power: number,
+    size: [number, number],
 }
 interface RecipeData {
     id: string,
@@ -22,9 +23,11 @@ interface RecipeData {
 }
 
 const elements = {
-    itemsContainer: document.querySelector('nav ul') as HTMLUListElement,
+    itemList: document.querySelector('nav ul') as HTMLUListElement,
     searchInput: document.querySelector('div#nav-header>input') as HTMLInputElement,
     main: document.querySelector('main'),
+    sortButton: document.querySelector('button#sort') as HTMLButtonElement,
+    clearButton: document.querySelector('button#clear') as HTMLButtonElement,
 };
 
 const pagedata = { ...(window as any)['EndfieldRecipes'], icons: (window as any)['EndfieldImages'] } as {
@@ -54,14 +57,13 @@ function setupNavigationBar() {
         descriptionElement.innerText = item.desc[0].replace('\n', '');
         descriptionElement.title = item.desc[0] + item.desc[1];
         itemElement.appendChild(descriptionElement);
-        elements.itemsContainer.appendChild(itemElement);
-        // TODO active all opened items?
-        itemElement.addEventListener('click', () => handleItemClick(item));
+        elements.itemList.appendChild(itemElement);
+        itemElement.addEventListener('click', () => handleToggleOpen(item));
     }
 
     // search
     elements.searchInput.addEventListener('change', () => {
-        for (const itemElement of Array.from<HTMLLIElement>(elements.itemsContainer.children as any)) {
+        for (const itemElement of Array.from<HTMLLIElement>(elements.itemList.children as any)) {
             if (!elements.searchInput.value) {
                 itemElement.style.display = 'grid';
             } else {
@@ -286,7 +288,6 @@ function layoutRecipeTree(tree: NodeLike) {
 }
 
 // this name inherits from jsx?
-// TODO see whether parent and additionalOperations parameters works ok
 function j<K extends keyof HTMLElementTagNameMap>(parent: Element, tag: K, props: {
     className?: string,
     dataset?: Record<string, string>,
@@ -309,13 +310,36 @@ function j<K extends keyof HTMLElementTagNameMap>(parent: Element, tag: K, props
     return element;
 }
 
-// and delete icon (trash icon?)
-const Clock = [
+const ClockIcon = [
     "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z",
     "M686.7 638.6L544.1 535.5V288c0-4.4-3.6-8-8-8H488c-4.4 0-8 3.6-8 8v275.4c0 2.6 1.2 5 3.3 6.5l165.4 120.6c3.6 2.6 8.6 1.8 11.2-1.7l28.6-39c2.6-3.7 1.8-8.7-1.8-11.2z",
 ];
-const Thunderbolt = ["M848 359.3H627.7L825.8 109c4.1-5.3.4-13-6.3-13H436c-2.8 0-5.5 1.5-6.9 4L170 547.5c-3.1 5.3.7 12 6.9 12h174.4l-89.4 " +
-    "357.6c-1.9 7.8 7.5 13.3 13.3 7.7L853.5 373c5.2-4.9 1.7-13.7-5.5-13.7zM378.2 732.5l60.3-241H281.1l189.6-327.4h224.6L487 427.4h211L378.2 732.5z"];
+const ThunderboltIcon = [
+    "M848 359.3H627.7L825.8 109c4.1-5.3.4-13-6.3-13H436c-2.8 0-5.5 1.5-6.9 4L170 547.5c-3.1 5.3.7 12 6.9 12h174.4l-89.4 " +
+    "357.6c-1.9 7.8 7.5 13.3 13.3 7.7L853.5 373c5.2-4.9 1.7-13.7-5.5-13.7zM378.2 732.5l60.3-241H281.1l189.6-327.4h224.6L487 427.4h211L378.2 732.5z",
+];
+const ReloadIcon = [
+    "M909.1 209.3l-56.4 44.1C775.8 155.1 656.2 92 521.9 92 290 92 102.3 279.5 102 511.5 101.7 743.7 289.8 932 521.9 932c181.3 0 335.8-115 394.6-276.1 1.5-4.2-.7-8.9-4.9-10.3l-56.7-19.5a8 " +
+    "8 0 00-10.1 4.8c-1.8 5-3.8 10-5.9 14.9-17.3 41-42.1 77.8-73.7 109.4A344.77 344.77 0 01655.9 829c-42.3 17.9-87.4 27-133.8 27-46.5 0-91.5-9.1-133.8-27A341.5 341.5 0 01279 755.2a342.16 " +
+    "342.16 0 01-73.7-109.4c-17.9-42.4-27-87.4-27-133.9s9.1-91.5 27-133.9c17.3-41 42.1-77.8 73.7-109.4 31.6-31.6 68.4-56.4 109.3-73.8 42.3-17.9 87.4-27 133.8-27 46.5 0 91.5 9.1 133.8 27a341.5 " +
+    "341.5 0 01109.3 73.8c9.9 9.9 19.2 20.4 27.8 31.4l-60.2 47a8 8 0 003 14.1l175.6 43c5 1.2 9.9-2.6 9.9-7.7l.8-180.9c-.1-6.6-7.8-10.3-13-6.2z",
+];
+const SharpIcon = [
+    "M872 394c4.4 0 8-3.6 8-8v-60c0-4.4-3.6-8-8-8H708V152c0-4.4-3.6-8-8-8h-64c-4.4 0-8 3.6-8 8v166H400V152c0-4.4-3.6-8-8-8h-64c-4.4 0-8 3.6-8 8v166H152c-4.4 0-8 3.6-8 8v60c0 4.4 3.6 8 8 " +
+    "8h168v236H152c-4.4 0-8 3.6-8 8v60c0 4.4 3.6 8 8 8h168v166c0 4.4 3.6 8 8 8h64c4.4 0 8-3.6 8-8V706h228v166c0 4.4 3.6 8 8 8h64c4.4 0 8-3.6 8-8V706h164c4.4 0 8-3.6 " +
+    "8-8v-60c0-4.4-3.6-8-8-8H708V394h164zM628 630H400V394h228v236z",
+];
+const ProductIcon = [
+    "M464 144a16 16 0 0116 16v304a16 16 0 01-16 16H160a16 16 0 01-16-16V160a16 16 0 0116-16zm-52 68H212v200h200zm493.33 87.69a16 16 0 010 22.62L724.31 503.33a16 16 0 01-22.62 0L520.67 322.31a16 " +
+    "16 0 010-22.62l181.02-181.02a16 16 0 0122.62 0zm-84.85 11.3L713 203.53 605.52 311 713 418.48zM464 544a16 16 0 0116 16v304a16 16 0 01-16 16H160a16 16 0 01-16-16V560a16 16 0 0116-16zm-52 " +
+    "68H212v200h200zm452-68a16 16 0 0116 16v304a16 16 0 01-16 16H560a16 16 0 01-16-16V560a16 16 0 0116-16zm-52 68H612v200h200z",
+];
+const LinkIcon = [
+    "M574 665.4a8.03 8.03 0 00-11.3 0L446.5 781.6c-53.8 53.8-144.6 59.5-204 0-59.5-59.5-53.8-150.2 0-204l116.2-116.2c3.1-3.1 3.1-8.2 0-11.3l-39.8-39.8a8.03 8.03 0 00-11.3 0L191.4 526.5c-84.6 " +
+    "84.6-84.6 221.5 0 306s221.5 84.6 306 0l116.2-116.2c3.1-3.1 3.1-8.2 0-11.3L574 665.4zm258.6-474c-84.6-84.6-221.5-84.6-306 0L410.3 307.6a8.03 8.03 0 000 11.3l39.7 39.7c3.1 3.1 8.2 3.1 11.3 " +
+    "0l116.2-116.2c53.8-53.8 144.6-59.5 204 0 59.5 59.5 53.8 150.2 0 204L665.3 562.6a8.03 8.03 0 000 11.3l39.8 39.8c3.1 3.1 8.2 3.1 11.3 0l116.2-116.2c84.5-84.6 84.5-221.5 0-306.1zM610.1 372.3a8.03 " +
+    "8.03 0 00-11.3 0L372.3 598.7a8.03 8.03 0 000 11.3l39.6 39.6c3.1 3.1 8.2 3.1 11.3 0l226.4-226.4c3.1-3.1 3.1-8.2 0-11.3l-39.5-39.6z",
+];
 
 function createSVGElement(parent: Element, pathdata: string[], className?: string) {
     const svgns = 'http://www.w3.org/2000/svg';
@@ -332,7 +356,38 @@ function createSVGElement(parent: Element, pathdata: string[], className?: strin
     return svgElement;
 }
 
-function drawRecipeTree(tree: ItemNode) {
+// TODO localStorage hiddenRecipeIds: string[]
+// TODO localStorage speedRequirements: { id: string, speed: number }[], this is also internal speed
+
+function setupDragMove(element: HTMLDivElement) {
+    let beginX = 0;
+    let beginY = 0;
+    element.addEventListener('mousedown', e => {
+        if ((e.target as any).matches('input')) {
+            return; // do not drag input
+        }
+        e.preventDefault();
+        beginX = e.clientX;
+        beginY = e.clientY;
+        element.style.cursor = 'grabbing';
+        element.addEventListener('mouseup', handleMouseUp);
+        element.addEventListener('mousemove', handleMouseMove);
+        function handleMouseMove(e: MouseEvent) {
+            e.preventDefault();
+            element.style.left = (element.offsetLeft - beginX + e.clientX) + 'px';
+            element.style.top = (element.offsetTop - beginY + e.clientY) + 'px';
+            beginX = e.clientX;
+            beginY = e.clientY;
+        }
+        function handleMouseUp(_: MouseEvent) {
+            element.style.cursor = 'grab';
+            element.removeEventListener('mouseup', handleMouseUp);
+            element.removeEventListener('mousemove', handleMouseMove);
+        }
+    });
+}
+
+function drawRecipeTree(root: ItemNode) {
 
     // you can go down boundaries of the tree for this information,
     // but I'd like to avoid layout algorithm internals outside, so visit all nodes
@@ -345,262 +400,338 @@ function drawRecipeTree(tree: ItemNode) {
             collectCoordinates(child);
         }
     }
-    collectCoordinates(tree);
+    collectCoordinates(root);
 
     // position: unit of position, as in node.position and node.depth,
     //           one item *or* one recipe occupy 1 unit of height, one item *and* one recipe occupy 1 unit of width
     // standardize calculation:
-    //   - panel left padding 32px, top padding 40px,
-    //     that is main visual element (item's img and recipe's machine name) leftmost and topmost position,
-    //   - item occupies full height 72px, so item.position = 0 starts at top: 40px
-    //   - item with .depth = maxdepth's img should be at left 32px, and item's grid: 8px 48px 24px, so item-node's left: 24px
-    //   - amount container and right arrow line use 24px, collect line use 8px, left arrow line use 8px,
-    //     so visual gap (gap between item img and recipe machine name) is 40px
-    //     // if you try to implement no collect-line use 32px or 24px, that's endless calculation (not actually, O(n2) I guess)
-    //   - item width .depth = maxdepth's img ends at 80px, so recipe with .depth = maxdepth - 1's machine name starts at 120px
-    //     recipe's grid 8px 68px 24px, so recipe with .depth = maxdepth - 1 start at left: 112px, ends at left 188px
-    //     add same visual gap 40px, item with .depth = maxdepth - 1's img starts at left 228px, which means item-node starts at 220px
-    //     so grid width is 196px
-    //   - machine name height 24px, should be centered at item img if they have same .position
-    //     so recipe with .position = 0 starts at top: 52px
-    //   - if no possible products, final item with .depth = 0 have a right padding 32px
-    //     final item's starts at maxdepth * gridwidth + 24px, so img ends at maxdepth + gridwidth + 80px, panel width is maxdepth * gridwidth + 112px
-    //     if have possible products, add final item and possible products gap 40px, and possible product img width 48px, which is total add 88px
-    //   - if no possible products, item with .position = maxposition have top: maxposition * gridheight + 40px
-    //     between panel height and item's text (attention not img) should be 32px padding bottom, so panel height is (maxposition + 1) * gridheight + 40 + 32
-    //     if have possible products and count > maxposition, every item occupy gridheight height, plus 40 padding top and 32 padding bottom
-    const GridWidth = 196;
-    const GridHeight = 72;
+    //   - panel left, right, bottom padding 32px, top padding 40px (because of title bar)
+    //     this restrict on visual element, or item's img and text, recipe's machine name and information
+    //   - item height img 48px + text 24px, recipe height info 12px * 2 + machine name 24px, so cell height is 72px
+    //     node with .position = 0 starts at .top = 40, so for all nodes .top = cellheight * .position + 40
+    //   - item node grid template 12px 48px 12px, recipe node grid template 12px 72px 12px
+    //   - distance between item and item's recipe, recipe and recipe's item should be same
+    //     this distance should contain leading connect line and following connect line width 12px and collect line width 8px
+    //     so cell width = item img 48px + machine name 72px + 2 gaps 2 * 32px = 184px
+    //   - item with .depth = maxdepth's img should be at .left = 32px, so .item-node's .left = 20px
+    //     so for all .item-node, .left = cellwidth * (maxdepth - .depth) + 20
+    //   - recipe with .depth = maxdepth - 1's machine name should be at img.left = 32px + img width 48px + gap 32px = 112px
+    //     so .recipe-node's .left is 100px, so for all .recipe-node, .left = cellwidth * (maxdepth - 1 - .depth) + 100
+    //   - if no possible products, root item with .depth = 0 have .left = cellwidth * maxdepth + 20
+    //     root item's img calculated .right is cellwidth * maxdepth + 80, so panel .width = cellwidth * maxdepth + 112
+    //     if have possible products, gap is 32px, product's img width 48px, so add 80 more to panel width, or + 192
+    //   - if no possible products, item with .position = maxposition have top: cellheight * maxposition + 40
+    //     add another cellheight for bottom of this node, add 32px panel padding bottom, so panel .height = cellheight * (maxposition + 1) + 72
+    //     for possible products, height is cellheight * products.length + 40px padding top + 32px padding bottom
+    //     so panel height is the larger one cellheight * max(maxposition + 1, products.length) + 72
+    const CellWidth = 184;
+    const CellHeight = 72;
 
     const panelElement = j(elements.main, 'div', {
         className: 'panel',
-        dataset: { 'id': tree.data.id },
+        dataset: { 'id': root.data.id },
         left: 100,
         top: 100,
-        // UPDATE: add 16 if possible product because it's grid size increases
-        width: GridWidth * maxDepth + (tree.possibleProducts.length ? 216 : 112), 
-        height: GridHeight * (Math.max(maxPosition + 1, tree.possibleProducts.length)) + 72,
+        width: CellWidth * maxDepth + 112 + (root.possibleProducts.length ? 80 : 0), 
+        // calculate result require 72, but seems too much padding bottom, reduce some
+        height: CellHeight * (Math.max(maxPosition + 1, root.possibleProducts.length)) + 60,
     }, element => {
-        // drag move panel element
-        // TODO consider only title use cursor:grab, but still can click anywhere to start drag
-        let beginX = 0;
-        let beginY = 0;
+        setupDragMove(element);
         element.addEventListener('mousedown', e => {
-            focusPanel(tree.data.id);
-            if ((e.target as any).matches('input')) {
-                return; // do not drag input
-            }
-            e.preventDefault();
-            beginX = e.clientX;
-            beginY = e.clientY;
-            element.style.cursor = 'grabbing';
-            element.addEventListener('mouseup', handleMouseUp);
-            element.addEventListener('mousemove', handleMouseMove);
-            function handleMouseMove(e: MouseEvent) {
-                e.preventDefault();
-                element.style.left = (element.offsetLeft - beginX + e.clientX) + 'px';
-                element.style.top = (element.offsetTop - beginY + e.clientY) + 'px';
-                beginX = e.clientX;
-                beginY = e.clientY;
-            }
-            function handleMouseUp(_: MouseEvent) {
-                element.style.cursor = 'grab';
-                element.removeEventListener('mouseup', handleMouseUp);
-                element.removeEventListener('mousemove', handleMouseMove);
-            }
+            handleFocusPanel(root.data.id);
         });
     });
-    /* close */ j(panelElement, 'button', { className: 'close', innerText: 'X' }, e => e.addEventListener('click', () => panelElement.remove()));
-    /* title */ j(panelElement, 'span', { className: 'title', innerText: tree.data.name });
+    /* close */ j(panelElement, 'button', { className: 'close', innerText: 'X' },
+        e => e.addEventListener('click', () => handleClosePanel(root.data.id)));
+    /* title */ j(panelElement, 'span', { className: 'title', innerText: root.data.name });
 
-    // TODO speed requirement
     // speed in calculation is always item per second, note that user input per time speed is item per minute, not per second
-    const speedPerMachine0 = tree.children.length == 1 ? tree.children[0].data.products.find(i => i.id == tree.data.id).count / tree.children[0].data.time : 1;
+    const speedPerMachine0 = root.children.length == 1 ? root.children[0].data.products.find(i => i.id == root.data.id).count / root.children[0].data.time : 1;
     // starts with 1 machine if only 1 recipe, or 30 per minute (1 belt)
-    const initSpeed = tree.children.length == 1 ? speedPerMachine0 : 0.5;
+    // const initSpeed = root.children.length == 1 ? speedPerMachine0 : 0.5;
     const speedHandlers: ((newSpeed: number) => void)[] = [];
-    const speedContainer = j(panelElement, 'span', { className: 'speed-container' });
-    if (tree.children.length) {
-        if (tree.children.length == 1) {
-            /* machine count requirement */ j(speedContainer, 'input', {}, e => {
-                e.type = 'number';
-                e.name = 'machine-count-requirement';
-                e.value = (Math.round(initSpeed / speedPerMachine0 * 100) / 100).toString();
-                e.addEventListener('change', () => {
-                    const newMachineCount = +e.value;
-                    // ignore invalid value and 0
-                    if (newMachineCount) { for (const handler of speedHandlers) { handler(newMachineCount * speedPerMachine0); } }
-                });
-                speedHandlers.push(newSpeed => e.value = (Math.round(newSpeed / speedPerMachine0 * 100) / 100).toString());
-            });
-            /* speed label */ j(speedContainer, 'label', { innerText: '个机器或' }, e => e.htmlFor = 'machine-count-requirement');
-        }
-        /* item count requirement */ j(speedContainer, 'input', {}, e => {
-            e.type = 'number';
-            e.name = 'item-count-requirement';
-            e.value = (Math.round(initSpeed * 60 * 100) / 100).toString();
-            e.addEventListener('change', () => {
-                const newPerMinute = +e.value;
-                // ignore invalid value and 0
-                if (newPerMinute) { for (const handler of speedHandlers) { handler(newPerMinute / 60); } }
-            });
-            speedHandlers.push(newSpeed => e.value = (Math.round(newSpeed * 60 * 100) / 100).toString());
-        });
-        /* speed label */ j(speedContainer, 'label', { innerText: '个每分钟' }, e => e.htmlFor = 'item-count-requirement');
-        // TODO reset icon to set speed to initial
-    }
-    // TODO machine count and power report as in "100个机器1000W电" .title = "50个粉碎机10个精炼炉"
+    // TODO design ui for speed requirement later
+    // const speedContainer = j(panelElement, 'span', { className: 'speed-container' });
+    // if (root.children.length) {
+    //     if (root.children.length == 1) {
+    //         /* machine count requirement */ j(speedContainer, 'input', {}, e => {
+    //             e.type = 'number';
+    //             e.name = 'machine-count-requirement';
+    //             e.value = (Math.round(initSpeed / speedPerMachine0 * 100) / 100).toString();
+    //             e.addEventListener('change', () => {
+    //                 const newMachineCount = +e.value;
+    //                 // ignore invalid value and 0
+    //                 if (newMachineCount) { for (const handler of speedHandlers) { handler(newMachineCount * speedPerMachine0); } }
+    //             });
+    //             speedHandlers.push(newSpeed => e.value = (Math.round(newSpeed / speedPerMachine0 * 100) / 100).toString());
+    //         });
+    //         /* speed label */ j(speedContainer, 'label', { innerText: '个机器或' }, e => e.htmlFor = 'machine-count-requirement');
+    //     }
+    //     /* item count requirement */ j(speedContainer, 'input', {}, e => {
+    //         e.type = 'number';
+    //         e.name = 'item-count-requirement';
+    //         e.value = (Math.round(initSpeed * 60 * 100) / 100).toString();
+    //         e.addEventListener('change', () => {
+    //             const newPerMinute = +e.value;
+    //             // ignore invalid value and 0
+    //             if (newPerMinute) { for (const handler of speedHandlers) { handler(newPerMinute / 60); } }
+    //         });
+    //         speedHandlers.push(newSpeed => e.value = (Math.round(newSpeed * 60 * 100) / 100).toString());
+    //     });
+    //     /* speed label */ j(speedContainer, 'label', { innerText: '个每分钟' }, e => e.htmlFor = 'item-count-requirement');
+    //     /* reset button */ j(speedContainer, 'button', { className: 'reset' }, button => {
+    //         /* icon */ createSVGElement(button, ReloadIcon);
+    //         button.addEventListener('click', () => { for (const handler of speedHandlers) { handler(initSpeed); } });
+    //     })
+    // }
 
-    function isItemNode(node: ItemNode | RecipeNode): node is ItemNode {
-        return node.data.id.startsWith('item_');
-    }
-    function createNode(node: ItemNode | RecipeNode, parent: ItemNode | RecipeNode) {
-        // TODO consider allow collapse an item node
-        if (isItemNode(node)) {
-            const item = node;
-            const itemElement = j(panelElement, 'div', {
-                className: 'item-node' + (item.data.id == tree.data.id ? ' main-item-node' : ''),
-                dataset: { 'kind': 'item', 'id': item.data.id },
-                left: GridWidth * (maxDepth - item.depth) + 24,
-                top: GridHeight * item.position + 40,
-            }, e => {
-                if (item.data.id != tree.data.id) {
-                    e.style.cursor = 'pointer';
-                    e.addEventListener('click', () => handleItemClick(item.data));
-                }
-            });
-            /* item image */ j(itemElement, 'img', {}, e => {
-                e.alt = item.data.name;
-                e.src = pagedata.icons[item.data.id];
-                e.width = 40;
-                e.height = 40;
-            });
-            // now item-node width 80px cannot fit "bottle with liquid" names, try add a span and make it wider
-            const nameContainer = j(itemElement, 'div', { className: 'name' });
-            /* name */ j(nameContainer, 'span', { innerText: item.data.name }, e => e.title = item.data.desc[0]);
-            if (item.children.length) {
-                // TODO antd arrwoline icon looks not good
-                // /* arrow line */ createSVGElement(itemElement, ArrowLine, 'arrow-line');
-                /* arrow line */ j(itemElement, 'div', { className: 'arrow-line' });
-            } else if (item.duplicate) {
-                /* ellipsis */ j(itemElement, 'div', { className: 'ellipsis' }, e => e.title = '之前在链路上出现过了');
-            }
-
-            if (parent && !isItemNode(parent)) {
-                // TODO recipe amount seems can be put inside item img, and put calculated speed requirement at this amount location
-                const amount = parent.data.ingredients.find(i => i.id == item.data.id).count;
-                // TODO seems need to calculate based on final requirement, so empty them for now
-                const perSecond = ''; // `${Math.round(amount / parent.data.time * 10) / 10}/s`;
-                const beltPerSecond = ''; // `${Math.round(amount / parent.data.time / 0.5 * 10) / 10}带`;
-                /* amount */ j(itemElement, 'span', { className: 'amount', innerText: `×${amount}` });
-                /* amount ps */ j(itemElement, 'span', { className: 'amount-ps', innerText: perSecond });
-                /* amount bps */ j(itemElement, 'span', { className: 'amount-bps', innerText: beltPerSecond });
-                // only one amount element for now, need a arrow line at right
-                // TODO change left arrow line and right arrow line to both width 16, rename arrow line because it does not have arrow, may be connect-line?
-                /* arrow line */ j(itemElement, 'div', { className: 'arrow-line-right' });
-            }
+    // try bfs to make element order in main element more clear
+    let remainingItems: [ItemNode, RecipeNode][] = [[root, null]]; // [item, parent][]
+    while (remainingItems.length > 0) {
+        const newRemainingItems: [ItemNode, RecipeNode][] = [];
+        for (const [item, parent] of remainingItems) {
+            createNode(item, parent, 1);
             for (const recipe of item.children) {
-                // collect line belong to panel element, not item element
-                /* collect line */ j(panelElement, 'div', {
-                    // -no: no up and no down
-                    className: 'collect-line ' + (item.position > recipe.position
-                        ? 'collect-line-down' : item.position == recipe.position ? 'collect-line-no' : 'collect-line-up'),
-                    dataset: { 'item': item.data.id, 'recipe': recipe.data.id },
-                    // item-node.left - collect-line.width
-                    left: GridWidth * (maxDepth - item.depth) + 16,
-                    // if follow item, item-node.top + 24, if follow recipe, recipe-node.top + 12, both are add 64
-                    // why does visual inspection shows 66 is correct?
-                    top: item.position < recipe.position ? GridHeight * item.position + 66 : GridHeight * recipe.position + 66,
-                    height: GridHeight * Math.abs(recipe.position - item.position),
-                });
-            }
-            if (item.possibleProducts.length) {
-                // this right arrow line is same as if have parent's right arrow line
-                /* arrow line right */ j(itemElement, 'div', { className: 'arrow-line-right arrow-line-right-dotted' });
-                // if products length < maxposition + 1 (+1 because maxposition starts at 0), then products should be centered around root node's position
-                //   if length == 1, baseposition should be same as root item position, if length == 2, baseposition should be root item position -0.5
-                // else products should tightly fit in complete height of the panel
-                const basePosition = item.possibleProducts.length < maxPosition + 1 ? tree.position - (item.possibleProducts.length - 1) / 2 : 0;
-                // TODO this issue also happens in normal item node
-                // 什么叫 possible product 名字太长了和 spread-line 撞上了, so make left arrow line width 24
-                for (const [product, productIndex] of item.possibleProducts.map((p, i) => [p, i] as const)) {
-                    const productPosition = basePosition + productIndex;
-                    const productElement = j(panelElement, 'div', {
-                        className: 'product-node',
-                        dataset: { 'id': product.id },
-                        // same visual gap between root item and possible product item,
-                        // so this left is same as recipe position with depth = -1
-                        left: GridWidth * maxDepth + 112,
-                        // same as item-node regarding productPosition as item.position
-                        top: GridHeight * productPosition + 40,
-                    }, e => e.addEventListener('click', () => handleItemClick(product)));
-                    /* product image */ j(productElement, 'img', {}, e => {
-                        e.alt = product.name;
-                        e.src = pagedata.icons[product.id];
-                        e.width = 40;
-                        e.height = 40;
-                    });
-                    const nameContainer = j(productElement, 'div', { className: 'name' });
-                    /* name */ j(nameContainer, 'span', { innerText: product.name }, e => e.title = product.desc[0]);
-                    /* arrow line */ j(productElement, 'div', { className: 'arrow-line' });
-                    
-                    /* collect line */ j(panelElement, 'div', {
-                        // spread line: opposite of collect line
-                        className: 'spread-line ' + (item.position > productPosition
-                            ? 'spread-line-down' : item.position == productPosition ? 'spread-line-no' : 'spread-line-up'),
-                        dataset: { 'item': item.data.id, 'product': product.id },
-                        // product-node.left - 8
-                        left: GridWidth * maxDepth + 104,
-                        // if follow item, item-node.top + 24, if follow product, product-node.top + 24, both are add 64
-                        // why does visual inspection shows 66 is correct?
-                        top: item.position < productPosition ? GridHeight * item.position + 66 : GridHeight * productPosition + 66,
-                        height: GridHeight * Math.abs(productPosition - item.position),
-                    });
+                for (const item of recipe.children) {
+                    newRemainingItems.push([item, recipe]);
                 }
             }
-        } else {
-            const recipe = node;
+        }
+        remainingItems = newRemainingItems;
+    }
+
+    function createNode(item: ItemNode, parent: RecipeNode, speed: number) {
+        // TODO consider allow collapse an item node
+        //      a close button on right of recipe to hide a specific recipe, replace with an ellipsis recipe node
+        //      a close button on left of an item to hide all its recipes, replace with an ellipsis recipe node
+        //      in that case, open new panel event handler should change to only on img element
+        const itemElement = j(panelElement, 'div', {
+            className: 'item-node' + (item.data.id == root.data.id ? ' main-item-node' : ''),
+            dataset: { 'id': item.data.id },
+            left: CellWidth * (maxDepth - item.depth) + 20,
+            top: CellHeight * item.position + 40,
+        });
+
+        /* image */ j(itemElement, 'img', {}, e => {
+            e.alt = item.data.name;
+            e.src = pagedata.icons[item.data.id];
+            e.width = 40;
+            e.height = 40;
+            if (item.data.id != root.data.id) {
+                e.addEventListener('click', () => handleOpenPanel(item.data));
+            }
+        });
+        // item-node width 72 cannot fit in "bottle with liquid" names, add a container to allow more width
+        /* name-container */ j(itemElement, 'div', { className: 'name' }, nameContainer => {
+            /* name */ j(nameContainer, 'span', { innerText: item.data.name }, e => e.title = item.data.desc[0]);
+        });
+
+        if (item.children.length) {
+            /* left connect line */ j(itemElement, 'div', { className: 'connect-line connect-line1' });
+        } else if (item.duplicate) {
+            /* virtual left connect line */ j(itemElement, 'div', { className:
+                'connect-line connect-line1 connect-line-virtual' }, e => e.title = '之前在链路上出现过了');
+        }
+
+        if (parent) {
+            const amount = parent.data.ingredients.find(i => i.id == item.data.id).count;
+            /* amount by recipe */ j(itemElement, 'span', { className: 'amount-by-recipe', innerText: `×${amount}` });
+            /* amount by speed */ j(itemElement, 'span', { className: 'amount-by-speed', innerText: `` }, e => {
+                e.title = '根据速度需求计算的物品数量';
+                speedHandlers.push(() => { e.innerText = `30/m` });
+            });
+            /* right connect line */ j(itemElement, 'div', { className: 'connect-line connect-line2' });
+        }
+        for (const recipe of item.children) {
+            const direction = item.position > recipe.position ? 'down' : item.position == recipe.position ? 'level' : 'up';
+            // collect line belong to panel element, not item element
+            /* collect line */ j(panelElement, 'div', {
+                className: `collect-line collect-line-${direction}`,
+                dataset: { 'item': item.data.id, 'recipe': recipe.data.id },
+                // item-node.left - collect-line.width
+                left: CellWidth * (maxDepth - item.depth) + 12,
+                // item-node.top + half of img height 24
+                top: CellHeight * (direction == 'up' ? item.position : recipe.position) + 64,
+                height: CellHeight * Math.abs(recipe.position - item.position),
+            });
+        }
+
+        if (item.possibleProducts.length) {
+            /* virtual right connect line */ j(itemElement, 'div', { className: 'connect-line connect-line2 connect-line-virtual' });
+
+            // if products length < maxposition + 1, then products should be centered around root node's position
+            //   if length == 1, baseposition should be same as root item position, if length == 2, baseposition should be root item position -0.5
+            // else products should tightly fit in complete height of the panel
+            const basePosition = item.possibleProducts.length < maxPosition + 1 ? root.position - (item.possibleProducts.length - 1) / 2 : 0;
+            for (const [product, productIndex] of item.possibleProducts.map((p, i) => [p, i] as const)) {
+                const productPosition = basePosition + productIndex;
+                const productElement = j(panelElement, 'div', {
+                    className: 'product-node',
+                    dataset: { 'id': product.id },
+                    // same gap between root item and possible product item,
+                    // so this left is same as recipe position with depth = -1
+                    left: CellWidth * maxDepth + 100,
+                    // same as item-node regarding productPosition as item.position
+                    top: CellHeight * productPosition + 40,
+                }, e => e.addEventListener('click', () => handleOpenPanel(product)));
+
+                /* image */ j(productElement, 'img', {}, e => {
+                    e.alt = product.name;
+                    e.src = pagedata.icons[product.id];
+                    e.width = 40;
+                    e.height = 40;
+                });
+                /* name container */ j(productElement, 'div', { className: 'name' }, nameContainer => {
+                    /* name */ j(nameContainer, 'span', { innerText: product.name }, e => e.title = product.desc[0])
+                });
+                /* connect line */ j(productElement, 'div', { className: 'connect-line' });
+
+                // spread line: opposite of collect line
+                // direction is source to target's direction, so direction is also kind of reversed compared to collect-line
+                const direction = item.position > productPosition ? 'up' : item.position == productPosition ? 'level' : 'down';
+                /* spread line */ j(panelElement, 'div', {
+                    className: `spread-line spread-line-${direction}`,
+                    dataset: { 'id': product.id },
+                    // product-node.left - spread line width 8
+                    left: CellWidth * maxDepth + 92,
+                    // same as item collect line, item-node.top + 24
+                    top: CellHeight * (direction == 'up' ? productPosition : item.position) + 64,
+                    height: CellHeight * Math.abs(productPosition - item.position),
+                });
+            }
+        }
+
+        for (const recipe of item.children) {
             const recipeElement = j(panelElement, 'div', {
                 className: 'recipe-node',
                 dataset: { 'id': recipe.data.id },
-                left: GridWidth * (maxDepth - recipe.depth - 1) + 112,
-                top: GridHeight * recipe.position + 52,
+                left: CellWidth * (maxDepth - recipe.depth - 1) + 100,
+                top: CellHeight * recipe.position + 40,
             });
-            /* arrow line */ j(recipeElement, 'div', { className: 'arrow-line' });
             const machine = pagedata.machines.find(m => m.id == recipe.data.machineId);
+            const amount = recipe.data.products.find(p => p.id == item.data.id).count;
+
+            // time and amount
+            const infoElement1 = j(recipeElement, 'div', { className: 'info-container info-container1' });
+            /* time icon */ createSVGElement(infoElement1, ClockIcon, 'time-icon');
+            /* time */ j(infoElement1, 'span', { className: 'time', innerText: `${recipe.data.time}s` });
+            /* amount icon */ createSVGElement(infoElement1, ProductIcon, 'amount-icon');
+            /* amount */ j(infoElement1, 'span', { className: 'amount' +
+                (amount != 1 ? ` amount-not-1` : ''), innerText: `×${amount}` }, e => e.title = '产物数量' + (amount != 1 ? '大于1！' : ''));
+            if (recipe.data.products.length > 1) {
+                const sideProducts = recipe.data.products.filter(p => p.id != item.data.id)
+                    .map(p => `${pagedata.items.find(i => i.id == p.id).name}×${p.count}`).join('，');
+                const sideProductIconContainer = j(infoElement1, 'span', { className: 'side-product-icon-container' }, e => e.title = `副产物：${sideProducts}`);
+                createSVGElement(sideProductIconContainer, LinkIcon, 'side-product-icon');
+            }
+    
             /* machine name */ j(recipeElement, 'div', { className: 'machine-name', innerText: machine.name });
-            // TODO change to top info and bottom info, top info time and amount, bottom info power and machine size
-            const infoElement = j(recipeElement, 'div', { className: 'info-container' });
-            /* time icon */ createSVGElement(infoElement, Clock, 'time-icon');
-            /* time */ j(infoElement, 'span', { className: 'time', innerText: `${recipe.data.time}s` });
-            /* power icon */ createSVGElement(infoElement, Thunderbolt, 'power-icon');
-            /* power */ j(infoElement, 'span', { className: 'power', innerText: `${machine.power}W` });
-            const amount = recipe.data.products.find(p => p.id == parent.data.id).count;
-            /* amount */ j(recipeElement, 'span', { className: 'amount', innerText: `×${amount}` });
-            /* arrow line right */ j(recipeElement, 'div', { className: 'arrow-line-right' });
+            // power and size
+            const infoElement2 = j(recipeElement, 'div', { className: 'info-container info-container2' });
+            /* power icon */ createSVGElement(infoElement2, ThunderboltIcon, 'power-icon');
+            /* power */ j(infoElement2, 'span', { className: 'power', innerText: `${machine.power}W` }, e => {
+                e.style.fontWeight = machine.power == 50 ? 'bold' : '';
+                e.title = `额定功率${machine.power}W，注意啦注意啦机器摸鱼和卡住的时候也要用这么多电`;
+            });
+            /* size icon */ createSVGElement(infoElement2, SharpIcon, 'size-icon');
+            /* size */ j(infoElement2, 'span', { className: 'size', innerText: `${machine.size[0]}×${machine.size[1]}` }, e => e.title = `占地面积`);
+
+            /* machine count */ j(recipeElement, 'span', { className: 'machine-count', innerText: `` }, e => {
+                e.title = '机器数量';
+                speedHandlers.push(() => { e.innerText = `×0.33` });
+            });
+            /* left connect line */ j(recipeElement, 'div', { className: 'connect-line connect-line1' });
+            /* right connect line */ j(recipeElement, 'div', { className: 'connect-line connect-line2' });
+
             for (const item of recipe.children) {
+                const direction = recipe.position > item.position ? 'down' : recipe.position == item.position ? 'level' : 'up';
                 // collect line belong to panel element, not recipe element
                 /* collect line */ j(panelElement, 'div', {
-                    className: 'collect-line ' + (recipe.position > item.position
-                        ? 'collect-line-down' : recipe.position == item.position ? 'collect-line-no' : 'collect-line-up'),
+                    className: `collect-line collect-line-${direction}`,
                     dataset: { 'item': item.data.id, 'recipe': recipe.data.id },
-                    // recipe-node.left - 8
-                    left: GridWidth * (maxDepth - recipe.depth - 1) + 104,
-                    // if follow recipe, recipe-node.top + 12, if follow item, item-node.top + 24, both are add 64
-                    // why does visual inspection shows 66 is correct?
-                    top: GridHeight * (recipe.position > item.position ? item.position : recipe.position) + 66,
-                    height: Math.abs(item.position - recipe.position) * GridHeight,
+                    // recipe-node.left - collect line width 8
+                    left: CellWidth * (maxDepth - recipe.depth - 1) + 92,
+                    // item-node.top + 24
+                    top: CellHeight * (direction == 'up' ? recipe.position : item.position) + 64,
+                    height: CellHeight * Math.abs(item.position - recipe.position),
                 });
             }
         }
-        for (const child of node.children) {
-            createNode(child, node);
-        }
     }
-    createNode(tree, null);
 }
 
-function focusPanel(itemId: string) {
+function createPlanPanel(item: ItemNode) {
+
+    const panelElement = j(elements.main, 'div', { className: 'plan-panel' }, e => setupDragMove(e));
+
+    const remainingItems = [item];
+    while (remainingItems.length) {
+        const item = remainingItems.shift();
+        if (item.children.length) {
+            createLine(item.children[0].data);
+            remainingItems.unshift(...item.children[0].children);
+        }
+    }
+
+    function createLine(recipe: RecipeData) {
+        const lineElement = j(panelElement, 'div', { className: 'recipe-container' });
+        for (const [{ id: itemId, count }, index] of recipe.ingredients.map((i, index) => [i, index] as const)) {
+            /* img */ j(lineElement, 'img', {}, e => e.src = pagedata.icons[itemId]);
+            /* name */ j(lineElement, 'span', { className: 'item-name', innerText: pagedata.items.find(i => i.id == itemId).name });
+            /* amount */ j(lineElement, 'span', { className: 'amount', innerText: `×${count}` });
+            if (index != recipe.ingredients.length - 1) { /* plus */ j(lineElement, 'span', { className: 'plus', innerText: '+' }); }
+        }
+        /* arrow 1 */ j(lineElement, 'span', { className: 'arrow', innerText: `⇒` });
+        const machineName = pagedata.machines.find(m => m.id == recipe.machineId).name;
+        /* machine name */ j(lineElement, 'span', { className: 'machine-name', innerText: machineName });
+        /* arrow 2 */ j(lineElement, 'span', { className: 'arrow', innerText: `⇒` });
+        for (const [{ id: itemId, count }, index] of recipe.products.map((i, index) => [i, index] as const)) {
+            /* img */ j(lineElement, 'img', {}, e => e.src = pagedata.icons[itemId]);
+            /* name */ j(lineElement, 'span', { className: 'item-name', innerText: pagedata.items.find(i => i.id == itemId).name });
+            /* amount */ j(lineElement, 'span', { className: 'amount', innerText: `×${count}` });
+            if (index != recipe.products.length - 1) { /* plus */ j(lineElement, 'span', { className: 'plus', innerText: '+' }); }
+        }
+    }
+}
+
+let sortMethod: 'normal' | 'active' = 'normal';
+const sortMethodDescription = {
+    'normal': '现在是正常排序，点一下换成打开的窗口排在前面',
+    'active': '现在是打开的窗口排在前面，点一下换成默认排序',
+};
+elements.sortButton.title = sortMethodDescription[sortMethod];
+elements.sortButton.addEventListener('click', () => {
+    sortMethod = sortMethod == 'normal' ? 'active' : 'normal';
+    updateItemList();
+});
+elements.clearButton.addEventListener('click', () => {
+    Array.from(elements.main.querySelectorAll('div.panel')).forEach(p => p.remove());
+    updateItemList();
+});
+// update item list sort order, active state and by the way sort button
+function updateItemList() {
+    // active
+    const panels: HTMLDivElement[] = Array.from(elements.main.querySelectorAll('div.panel'));
+    const panelIds = new Set(panels.map(p => p.dataset['id']));
+    const items: HTMLLIElement[] = Array.from(elements.itemList.querySelectorAll('li'));
+    items.forEach(i => panelIds.has(i.dataset['id']) ? i.classList.add('active') : i.classList.remove('active'));
+
+    // sort order
+    elements.sortButton.title = sortMethodDescription[sortMethod];
+    elements.sortButton.style.background = sortMethod == 'active' ? 'lightgray' : '';
+    if (sortMethod == 'normal') {
+        items.sort((i1, i2) => i1.dataset['id'].localeCompare(i2.dataset['id']));
+    } else {
+        items.sort((i1, i2) => {
+            const i1InPanel = panelIds.has(i1.dataset['id']) ? 0 : 1;
+            const i2InPanel = panelIds.has(i2.dataset['id']) ? 0 : 1;
+            return i1InPanel != i2InPanel ? i1InPanel - i2InPanel : i1.dataset['id'].localeCompare(i2.dataset['id']);
+        });
+    }
+    items.forEach(i => elements.itemList.appendChild(i));
+}
+
+function handleFocusPanel(itemId: string) {
     const panels: HTMLDivElement[] = Array.from(elements.main.querySelectorAll('div.panel'));
     const getZIndex = (e: HTMLDivElement) => e.dataset['id'] == itemId ? 1000 : +(e.style.zIndex ?? '0');
     panels.sort((e1, e2) => getZIndex(e1) - getZIndex(e2));
@@ -608,19 +739,46 @@ function focusPanel(itemId: string) {
         panel.style.zIndex = (panelIndex + 1).toString();
     }
 }
-function handleItemClick(item: ItemData) {
+
+// TODO speed requirement radio group: per second, per minute, belt count
+// speedDisplayTypeHandlers: { id: string, handler: (newType: string) => void }[], need a NO option
+function handleOpenPanel(item: ItemData) {
     // TODO consider make <main> scroll zoom, make main look like drag move that actually moves all panels
-    // TODO add a dropdown menu displaying all opened panels and allow center and close, also a clear button
-    // TODO clear all button
-    // TODO speed requirement radio group: per second, per minute, belt count
     const panels: HTMLDivElement[] = Array.from(elements.main.querySelectorAll('div.panel'));
     const existPanel = panels.find(p => p.dataset['id'] == item.id);
     if (existPanel) {
-        focusPanel(item.id);
+        handleFocusPanel(item.id);
     } else {
         const tree = collectRecipeTree(item, []);
         layoutRecipeTree(tree);
         drawRecipeTree(tree);
-        focusPanel(tree.data.id);
+        // createPlanPanel(tree);
+        handleFocusPanel(tree.data.id);
+        updateItemList();
+    }
+}
+function handleClosePanel(itemId: string) {
+    const panels: HTMLDivElement[] = Array.from(elements.main.querySelectorAll('div.panel'));
+    const panel = panels.find(p => p.dataset['id'] == itemId);
+    if (panel) {
+        panel.remove();
+        updateItemList();
+    } else {
+        console.log(`what are you sending to handleClosePanel? ${itemId}`);
+    }
+}
+function handleToggleOpen(item: ItemData) {
+    const panels: HTMLDivElement[] = Array.from(elements.main.querySelectorAll('div.panel'));
+    const maxZIndex = panels.reduce((a, p) => Math.max(a, +(p.style.zIndex ?? '0')), 0);
+    const panel = panels.find(p => p.dataset['id'] == item.id);
+    if (panel && panel.style.zIndex == maxZIndex.toString()) {
+        // if have z-index and is max z-index, close
+        handleClosePanel(item.id);
+    } else if (panel) {
+        // if not topmost panel, bring topmost
+        handleFocusPanel(item.id);
+    } else {
+        // if not open, open panel
+        handleOpenPanel(item);
     }
 }
