@@ -209,13 +209,12 @@ div.panel > div.item-node > img {
 div.panel > div.item-node:not(.main-item-node) > img {
     cursor: pointer;
 }
-div.panel > div.item-node:not(.main-item-node) > img:hover {
-    border: 2px solid #eb9f43;
-    padding: 2px;
-}
+div.panel > div.item-node > img:hover,
+div.panel > div.item-node > img.hovering,
 div.panel > div.main-item-node > img {
     border: 2px solid #eb9f43;
     padding: 2px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
 }
 div.panel > div.item-node > div.name {
     grid-area: 2/1/2/4;
@@ -231,7 +230,7 @@ div.panel > div.item-node > div.name > span {
     text-align: center;
     width: 108px;
 }
-div.panel > div.item-node > span.amount-by-recipe {
+div.panel > div.item-node > span.amount {
     grid-area: 1/2/1/2;
     font-size: 12px;
     font-family: sans-serif;
@@ -240,13 +239,6 @@ div.panel > div.item-node > span.amount-by-recipe {
     text-align: right;
     line-height: 14px;
     pointer-events: none;
-}
-div.panel > div.item-node > span.amount-by-speed {
-    grid-area: 1/3/1/3;
-    font-size: 12px;
-    font-family: sans-serif;
-    margin-top: 10px;
-    margin-left: 2px;
 }
 div.panel > div.item-node > div.connect-line {
     width: 12px;
@@ -355,7 +347,7 @@ div.panel > div.recipe-node {
     display: grid;
     grid-template-columns: 12px 72px 12px;
     grid-template-rows: 12px 24px 12px;
-    cursor: default;
+    cursor: pointer;
 }
 div.panel > div.recipe-node > div.machine-name {
     grid-area: 2/2/2/2;
@@ -367,6 +359,14 @@ div.panel > div.recipe-node > div.machine-name {
     border-radius: 4px;
     background-color: #d8d8d8;
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+}
+div.panel > div.recipe-node > div.machine-name:hover {
+    border: 2px solid #eb9f43;
+    padding: 2px 2px 0 2px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+}
+div.panel > div.recipe-node:not(.active) > div.machine-name {
+    color: gray;
 }
 div.panel > div.recipe-node > div.info-container {
     display: flex;
@@ -423,12 +423,31 @@ div.panel > div.recipe-node > div.connect-line2 {
     grid-area: 2/3/2/3;
 }
 
-/* plan panel */
-main > div.plan-panel {
-    border: 1px solid lightgray;
-    border-radius: 8px;
+/* calculation container */
+div.panel > div.calc-container {
     position: absolute;
-    cursor: grab;
-    background-color: #e0e0e0;
-    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2)
+}
+div.calc-container > div.item-line {
+    overflow: hidden;
+    display: flex;
+    /* transition: height 0.2s ease; */
+    border-left: 2px solid #555;
+}
+div.calc-container > div.item-line > span.name {
+    line-height: 32px;
+}
+div.calc-container > div.item-line > span.machine-count,
+div.calc-container > div.item-line > span.belt-count,
+div.calc-container > div.item-line > span.pipe-count {
+    line-height: 32px;
+    margin-left: 12px;
+}
+div.calc-container > div.item-line > span.recipe-line {
+    display: flex;
+}
+div.calc-container > div.item-line > span.recipe-line > span.arrow,
+div.calc-container > div.item-line > span.recipe-line > span.plus,
+div.calc-container > div.item-line > span.recipe-line > span.item-name,
+div.calc-container > div.item-line > span.recipe-line > span.amount {
+    line-height: 32px;
 }

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import chalkNotTemplate from 'chalk';
 import chalk from 'chalk-template';
 import JSONBig from 'json-bigint';
+import { pinyin as getPinyin } from 'pinyin-pro';
 import ts from 'typescript';
 
 // this script
@@ -13,9 +14,10 @@ import ts from 'typescript';
 interface ItemData {
     id: string,
     name: string, // name for human
+    pinyin: string, // pinyin for search
     // special handle seed in some sitations
     // is seed = startsWith('item_plant_') && contains('seed')
-    kind?: 'seed',
+    kind?: 'seed' | 'liquid',
     desc: string[], // main desc and additional desc for human
 }
 function collectItems(raw: string, strings: Record<string, string>): ItemData[] {
@@ -27,6 +29,22 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
             decoDesc: { id: string }, // id in i18n table, additional description
         },
     };
+    
+    // fix filled bottle name and description
+    // no direct relationship with original bottle item name, e.g. original bottle name is glass_enr not glassenr
+    const filledBottleItemIdPrefixes = [
+        'item_fbottle_glass_',
+        'item_fbottle_glassenr_',
+        'item_fbottle_iron_',
+        'item_fbottle_ironenr_',
+    ];
+    const filledBottleLiquidPostfixes = {
+        'water': 'item_liquid_water',
+        'grass_1': 'item_liquid_plant_grass_1',
+        'grass_2': 'item_liquid_plant_grass_2',
+        'xiranite': 'item_liquid_xiranite',
+    };
+
     const items: ItemData[] = [];
     for (const rawItem of Object.values(rawItems)) {
         const name = strings[rawItem.name.id.toString()];
@@ -54,24 +72,12 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
             // console.log(`unexpected item id, not start with item_`, rawItem.id);
             continue;
         }
-        const kind = rawItem.id.startsWith('item_plant_') && rawItem.id.includes('seed') ? 'seed' : undefined;
-        items.push({ id: rawItem.id, name, kind, desc: [desc, decoDesc] });
+        const kind = rawItem.id.startsWith('item_plant_') && rawItem.id.includes('seed') ? 'seed'
+            : Object.values(filledBottleLiquidPostfixes).includes(rawItem.id) ? 'liquid' : undefined;
+        const pinyin = getPinyin(name, { toneType: 'none', type: 'array', v: true }).join('');
+        items.push({ id: rawItem.id, name, pinyin, kind, desc: [desc, decoDesc] });
     }
 
-    // fix filled bottle name and description
-    // no direct relationship with original bottle item name, e.g. original bottle name is glass_enr not glassenr
-    const filledBottleItemIdPrefixes = [
-        'item_fbottle_glass_',
-        'item_fbottle_glassenr_',
-        'item_fbottle_iron_',
-        'item_fbottle_ironenr_',
-    ];
-    const filledBottleLiquidPostfixes = {
-        'water': 'item_liquid_water',
-        'grass_1': 'item_liquid_plant_grass_1',
-        'grass_2': 'item_liquid_plant_grass_2',
-        'xiranite': 'item_liquid_xiranite',
-    };
     for (const item of items) {
         const prefix = filledBottleItemIdPrefixes.find(prefix => item.id.startsWith(prefix));
         if (prefix) {
