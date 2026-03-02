@@ -1,0 +1,10 @@
+{
+  "name": "work",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.ts",
+  "scripts": {},
+  "devDependencies": {
+    "puppeteer-core": "^24.37.5"
+  }
+}
