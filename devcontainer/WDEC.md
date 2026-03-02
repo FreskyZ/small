@@ -130,4 +130,19 @@ Checkpoint-VM -Name $vmname -SnapshotName $snapshotname
 Restore-VMCheckpoint -VMName $vmname -Name $snapshotname
 ```
 
+by the way, expand vhdx
+```powershell
+Resize-VHD -SizeBytes 128GB -Path "$($env:USERPROFILE)/HyperV/$($vmname)/Virtual Hard Disks/$($vmname).vhdx"
+```
+after resize vhdx file, you need to open diskmgmt.msc or use diskpart to setup the partitions
+
 by the way, Hyper-V Manager GUI can start in win+R by virtmgmt.msc
+
+6?. network setup?
+
+```powershell
+Get-NetConnectionProfile
+Set-NetConnectionProfile -InterfaceAlias $interfacealias -NetworkCategory Private
+New-NetFirewallRule -DisplayName "Allow inbound TCP" -Direction Inbound -Protocol TCP -LocalPort 9222 -Action Allow
+Get-NetFirewallRule -DisplayName "Allow inbound TCP" | Remove-NetFirewallRule
+```
