@@ -5,6 +5,7 @@ import http from 'node:http';
 // microsoft-edge --headless --disable-gpu --no-sandbox --window-size=1920,1080 --disable-dev-shm-usage --user-data-dir=/userdata1 --remote-debugging-port=10001
 
 // NOTE this globalThis.fetch is web fetch and forbid overwrite request header host
+// UPDATE not needed to setup header host now, this can be replaced by globalthis.fetch, but the investigation in this file is complete so leave it here
 const response = await new Promise(resolve => {
     http.request({
         hostname: 'localhost',

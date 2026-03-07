@@ -19,7 +19,8 @@ First, webdriver executable according to my browser automation experience
   longer link https://msedgewebdriverstorage.blob.core.windows.net/edgewebdriver/145.0.3800.82/edgedriver_linux64.zip
   the version number is exactly same as version displayed in desktop edge setting page edge://settings/help
 - by the way
-  - official document site https://learn.microsoft.com/en-us/microsoft-edge/webdriver
+  - official document site https://learn.microsoft.com/en-us/microsoft-edge/webdriver/
+    missing the end slash will redirect you to a legacy site?
   - official repository https://github.com/MicrosoftEdge/EdgeWebDriver does not contain source code but
     is only for feedbacks or bug reporting, that's because its source code is in chrome source code, not here
   - there is a "full directory" button which goes to https://msedgewebdriverstorage.z22.web.core.windows.net/
@@ -72,8 +73,11 @@ edge, trying CDP protocol...
   by the /json/version http endpoint but failed to establish websocket connection? pause here
 
 WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https://w3c.github.io/webdriver-bidi,
-TODO
-TODO bidi still need webdriver.exe
+there is no official document about how to directly connect to webdriver, both edge document and chrome document
+https://developer.chrome.com/docs/chromedriver/get-started is using selenium, so try wdio's wrapper package that
+directly called webdriver https://npmjs.com/package/webdriver
+
+- by the way, webdriver also only opens port to localhost, so socat x2
 
 ### Visualization
 
@@ -129,16 +133,13 @@ TODO bidi still need webdriver.exe
 
 ### Current Setup
 
-TODO
-
-timeline
-start edgedriver,
-start nodejs to connect edgedriver
-send capibilities-like object to edgedriver
-edgedriver start edge
-host edge connect to devtoolsfrontendurl
-
-cannot control edge startup in edgedriver
-so, edge and edge driver use same container
-and the long edge startup command line options is specified in node source code
-so seems no need docker compose
+- container startup
+  - start webdriver to listen to 8003
+  - start socat to cat 8003 and 8004 for webdriver
+  - start socat to cat 8001 and 8002 for later browser debugging port
+- in node container
+  - run -keeper, create new session
+  - browser startup, remote debugging port open
+  - run -repl, create page
+  - use page id to open devtools frontend url
+  - interactive load data from the page
