@@ -1,37 +1,46 @@
+import http from 'node:http';
+// import { WebSocket } from 'ws';
 
 // start browser
 // microsoft-edge --headless --disable-gpu --no-sandbox --window-size=1920,1080 --disable-dev-shm-usage --user-data-dir=/userdata1 --remote-debugging-port=10001
-// run this script, see more at README
 
-// docker cp index.ts autobrowser1:/work/index.ts
-
-const remoteDebugPort = 10001;
-
-const versionResponse = await fetch(`http://localhost:${remoteDebugPort}/json/version`);
-const versionResponseBody = await versionResponse.json();
-const websocketURL = versionResponseBody['webSocketDebuggerUrl'];
+// NOTE this globalThis.fetch is web fetch and forbid overwrite request header host
+const response = await new Promise(resolve => {
+    http.request({
+        hostname: 'localhost',
+        port: 9223,
+        path: '/json/version',
+        method: 'GET',
+        // headers: { host: 'localhost' },
+    }, response => {
+        let data = '';
+        response.on('data', chunk => { data += chunk; });
+        response.on('end', () => { resolve(JSON.parse(data)); });
+    }).end();
+});
+const websocketURL = response['webSocketDebuggerUrl'];
 
 const wakers: (() => void)[] = [];
 const buffer: { id: number, [prop: string]: any }[] = [];
 
-const client = new WebSocket(websocketURL);
-await new Promise(resolve => {
+const client = new WebSocket(websocketURL/*, { headers: { host: 'localhost' } }*/);
+await new Promise<void>(resolve => {
     client.addEventListener('open', () => {
         console.log('connection open');
         resolve();
     });
-    client.addEventListener('close', () => {
-        console.log(`connection closed`);
+    client.addEventListener('close', e => {
+        console.log(`connection closed`, e);
         process.exit(0);
     });
     client.addEventListener('error', e => {
         console.log(`connection error`, e);
         process.exit(1);
     });
-    client.addEventListener('message', (messageEvent: MessageEvent<string>) => {
+    client.addEventListener('message', messageEvent => {
         let data: typeof buffer[0];
         try {
-            data = JSON.parse(messageEvent.data);
+            data = JSON.parse(messageEvent.data as string);
         } catch (e) {
             console.log(`failed to parse received data`, messageEvent.data, e);
             return;
@@ -77,7 +86,7 @@ function send(method: string, sessionId?: string, params?: any): Promise<any> {
 }
 
 await send('Browser.getVersion');
-JSON.stringify(await send('Target.getTargets'));
+await send('Target.getTargets');
 
 // close new tab
 // console.log(await send('Target.closeTarget', { targetId: '392C7E818C3CD4A79EF5CA9768321051' }));
@@ -110,8 +119,8 @@ JSON.stringify(await send('Target.getTargets'));
 // if this method does not need sessionId but you pass it, it will also error
 // await send('Target.detachFromTarget', undefined, { targetId: '98ABFE296BB8B8CBA3914058CF4F21B3', sessionId });
 
-console.log('closing browser');
-await send('Browser.close');
+// console.log('closing browser');
+// await send('Browser.close');
 // client.send(JSON.stringify({ id: 2, method: 'Browser.close' }));
 setTimeout(() => { console.log('timeout closing'); client.close(); }, 10000);
 process.on('SIGINT', () => { console.log('interrupt closing'); client.close(); });
