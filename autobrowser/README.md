@@ -72,12 +72,29 @@ edge, trying CDP protocol...
   important later) by setting request header "Host: localhost" and successfully load websocket debugging url
   by the /json/version http endpoint but failed to establish websocket connection? pause here
 
-WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https://w3c.github.io/webdriver-bidi,
-there is no official document about how to directly connect to webdriver, both edge document and chrome document
-https://developer.chrome.com/docs/chromedriver/get-started is using selenium, so try wdio's wrapper package that
-directly called webdriver https://npmjs.com/package/webdriver
+WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https://w3c.github.io/webdriver-bidi
 
+- there is no official document about how to directly connect to webdriver, both edge document and chrome document
+  https://developer.chrome.com/docs/chromedriver/get-started is using selenium, so try wdio's wrapper package that
+  directly called webdriver https://npmjs.com/package/webdriver...
+- successfully connect to webdriver, query nodes, evaluate js and click an element, but wdio and selenium is too
+  unit test oriented, and wdio lacks document, the webdriver package lacks even more document that it only have a
+  readme page in repository, no dedicated page in document at all, so change to manually connect websocket again
 - by the way, webdriver also only opens port to localhost, so socat x2
+- currently bidi session's initial session is created in the same way as classic session,
+  see https://w3c.github.io/webdriver/#new-session, currently there is no way to list pages use bidi command, need to
+  use classic api https://w3c.github.io/webdriver/#get-window-handles
+
+- POST localhost:{driverport}/session with body like this
+  { capabilities: { alwaysMatch: { webSocketUrl: true, 'ms:edgeOptions': { args: ["headless", "no-sandbox"] } } } },
+  get response json, session id is response.value.sessionId, websocket url is response.value.capabilities.webSocketUrl,
+  this url comes from request url so is the docker public port after socat, not the driver command line port
+- bidi currently don't support list available tabs, use https://w3c.github.io/webdriver/#get-window-handles
+  `curl localhost:8004/session/{sessionId}/window/handles`, response.value is a string array of page ids,
+  this page id is same as bidi created browsing context id, and is same as `curl localhost:8002/json/list` page id
+- websocket connection to the websocket url and then close does *not* close the session,
+  so you can first create the session by a small script and then use the session id and page id in later operations
+
 
 ### Visualization
 
