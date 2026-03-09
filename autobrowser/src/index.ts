@@ -303,8 +303,6 @@ class Client {
 // ...
 // await subscription.unsubscribe(); // unsubscribe everything in the subscription
 
-// const sessionId = '';
-// const pageId = '';
 // await createSession();
 
 // after create session, check
