@@ -1,3 +1,4 @@
+import type * as spec from './spec.js';
 
 // create session, display and exit
 async function createSession(): Promise<never> {
@@ -65,13 +66,13 @@ async function createSession(): Promise<never> {
         const responseText = await response.text();
         console.log(responseText);
         try {
-            const result = JSON.parse(responseText)?.value;
+            const result = JSON.parse(responseText)?.value as spec.session.NewResult;
             console.log(`session id`, result?.sessionId);
             // this is localhost:8004, no need to handle localhost:8003
             console.log(`websocket url`, result?.capabilities?.webSocketUrl);
             console.log(`browser name`, result?.capabilities?.browserName);
             console.log(`browser version`, result?.capabilities?.browserVersion);
-            console.log(`driver version`, result?.capabilities?.msedge?.msedgedriverVersion);
+            console.log(`driver version`, result?.capabilities?.['msedge']?.msedgedriverVersion);
             // this is localhost:8001, no need to handle it because it is not used programmingly
             console.log(`debugger address`, result?.capabilities?.['ms:edgeOptions']?.debuggerAddress);
         } catch (e) {
@@ -130,7 +131,7 @@ class RawClient {
                 reject();
             });
             this.connection.addEventListener('message', (event) => {
-                let message: any;
+                let message: spec.Message;
                 try {
                     message = JSON.parse(event.data);
                 } catch (e) {
@@ -166,7 +167,7 @@ class RawClient {
         });
     }
 
-    public async send(method: string, params: any): Promise<CommandResult> {
+    public async send<M extends spec.Method>(method: M, params: spec.MethodMap<M>): Promise<CommandResult<spec.MethodResultMap[M]>> {
         const id = this.nextCommandId++;
         this.connection.send(JSON.stringify({ id, method, params }));
         return new Promise<CommandResult>(resolve => {
@@ -186,62 +187,12 @@ class RawClient {
 // console.log(await connection.send('session.status', {}));
 // connection.close();
 
-// spec type session.StatusResult
-interface DriverStatusResult {
-    ready: boolean,
-    message: string,
-}
-// spec type browsingContext.ReadinessState
-type PageReadiness = 'none' | 'interactive' | 'complete';
-// spec type browsingContext.NavigateResult
-interface NavigateResult {
-    url: string,
-    // spec type is browsingContext.Navigation
-    navigation: string, // what's this string
-}
-
-// spec type script.NodeRemoteValue
-// although it is Node in dom api and spec, but I only use Element so call it element
-interface Element {
-    sharedId: string,
-    value?: ElementProperties,
-}
-// spec type script.NodeProperties
-interface ElementProperties {
-    nodeType: number,
-    childNodeCount: number,
-    attributes: Record<string, string>,
-    children: Element[],
-    mode: 'open' | 'closed',
-    namespaceURI: string,
-    nodeValue: string,
-    shadownRoot: Element,
-}
-
-// spec type script.LocalValue
-type ScriptLocalValue = any; // not very meaningful to write it precisely, any for now
-
 // convert to spec type script.LocalValue
 // this spec type is designed to be programming language neutral,
 // but I'm currently using js so can automatically convert it here
-function convertScriptLocalValue(value: Element): ScriptLocalValue {
+function convertScriptLocalValue(value: spec.script.NodeRemoteValue): spec.script.LocalValue {
     if (value.sharedId) { return value; }
     else { console.log('cannot convert value for now', value); }
-}
-
-type ScriptRemoteValue =
-    string; // TODO not this
-
-
-// spec type script.EvaluateResult
-type EvalResult = EvalResultSuccess | EvalResultException;
-// spec type script.EvaluateResultSuccess
-interface EvalResultSuccess {
-    type: 'success',
-    result: ScriptRemoteValue,
-}
-interface EvalResultException {
-
 }
 
 // this class have protocol type compare to rawclient
@@ -254,7 +205,7 @@ class Client {
     public async connect() { await this.raw.connect(); }
 
     // although this is called session.status, it is not asking session's status but driver's status
-    public async driverStatus(): Promise<CommandResult<DriverStatusResult>> {
+    public async driverStatus(): Promise<CommandResult<spec.session.StatusResult>> {
         return await this.raw.send('session.status', {});
     }
 
@@ -264,10 +215,19 @@ class Client {
         return this;
     }
 
-    public async navigate(url: string, wait?: PageReadiness): Promise<CommandResult<NavigateResult>> {
+    public async navigate(
+        url: string,
+        wait?: spec.browsingContext.ReadinessState,
+    ): Promise<CommandResult<spec.browsingContext.NavigateResult>> {
         return await this.raw.send('browsingContext.navigate', { context: this.pageId, url, wait });
     }
-    public async querySelectorAll(selector: string, parameters?: { origin?: Element[], maxCount?: number }): Promise<CommandResult<Element[]>> {
+    public async querySelectorAll(
+        selector: string,
+        parameters?: {
+            origin?: spec.script.NodeRemoteValue[],
+            maxCount?: number,
+        },
+    ): Promise<CommandResult<spec.script.NodeRemoteValue[]>> {
         const result = await this.raw.send('browsingContext.locateNodes', {
             context: this.pageId,
             locator: { type: 'css', value: selector },
@@ -286,7 +246,7 @@ class Client {
             await?: boolean,
             this?: any,
         },
-    ): Promise<CommandResult<EvalResult>> {
+    ): Promise<CommandResult<spec.script.EvaluateResult>> {
         // for now seems not related to other realm, so fix use page normal top level realm for now
         // TODO for now no need to matter result ownership, but I guess that will be happen soon
 

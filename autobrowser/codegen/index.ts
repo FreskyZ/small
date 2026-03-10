@@ -49,6 +49,7 @@ while (cddlContent.includes('<!--')) {
     cddlContent = cddlContent.substring(0, beginPosition) + cddlContent.substring(endPosition + 3);
 }
 
+// NOTE HARDCODE
 cddlContent = cddlContent
     // meaningless to parse this
     .replace('{*text => text}', 'any')
@@ -80,7 +81,7 @@ cddlContent = cddlContent.substring(0, wtftype2Index) +
     'script.SerializationOptions = { ?maxDomPath: js-uint, ?maxObjectDepth: js-uint, ?includeShadowTree: "none" / "open" / "all" }' +
     cddlContent.substring(wtftype2EndIndex + 1);
 
-await fs.writeFile('codegen/spec.cddl', cddlContent);
+// await fs.writeFile('codegen/spec.cddl', cddlContent);
 
 // stage 2. parse
 // // nodejs package cddl and cddl2ts does not work immediately, so skip for now
@@ -297,7 +298,7 @@ interface EnumBody {
 }
 interface StructField {
     name: string, // null for omit
-    type: TypeRef,
+    type: TaggedTypeRef,
     optional: boolean,
     byteIndex: number,
 }
@@ -323,6 +324,7 @@ interface ParserState {
     tokens: TokenPosition[],
     position: number,
     declarations: NamedDecl[],
+    logs: string[],
 }
 
 function expectName(state: ParserState): string {
@@ -351,7 +353,7 @@ function tryExpectSeparator(state: ParserState, expect: Separator): boolean {
     return false;
 }
 
-function parse(state: ParserState) {
+function parseSpec(state: ParserState) {
     while (state.position < tokens.length) {
         state.declarations.push(parseDecl(state));
     }
@@ -363,7 +365,7 @@ function parseDecl(state: ParserState): NamedDecl {
     }
     const byteIndex = state.tokens[state.position].byteIndex;
     const name = expectName(state);
-    console.log(`parse decl ${name}`);
+    state.logs.push(`parse decl ${name}`);
     expectSeparator(state, '=');
     const body = parseBody(state);
     return { name, body, byteIndex } as any; // ? why is this type error?
@@ -381,7 +383,7 @@ function parseBody(state: ParserState): StructBody | EnumBody {
             // this is a field-def with name, current decl is a struct-decl
             const byteIndex = tokens[state.position].byteIndex;
             const name = expectName(state);
-            console.log(`  first member is optional field ${name}`);
+            state.logs.push(`  first member is optional field ${name}`);
             expectSeparator(state, ':');
             const type = parseTypeRef(state);
             firstFieldDef = { name, type, optional: true, byteIndex };
@@ -391,32 +393,32 @@ function parseBody(state: ParserState): StructBody | EnumBody {
             const name = expectName(state);
             if (tryExpectSeparator(state, ':')) {
                 // this is a normal non optional field def
-                console.log(`  first member is nonoptional field ${name}`);
+                state.logs.push(`  first member is nonoptional field ${name}`);
                 const type = parseTypeRef(state);
                 firstFieldDef = { name, type, optional: false, byteIndex };
                 tryExpectSeparator(state, ','); // ignore trailing colon
             } else if (tokens[state.position].kind == 'tag') {
                 // this is a variant with tag inside paren?
-                console.log(`  first member is a variant with tag inside paren? ${name}`);
+                state.logs.push(`  first member is a variant with tag inside paren? ${name}`);
                 firstVariant = { kind: 'name', value: name, tags: [], byteIndex };
             } else if (tokens[state.position].value == '/') {
                 // this is a nameref in enum
-                console.log(`  first member is a name as a enum variant ${name}`);
+                state.logs.push(`  first member is a name as a enum variant ${name}`);
                 firstVariant = { kind: 'name', value: name, tags: [], byteIndex };
             } else if (tryExpectSeparator(state, expectEndSeparator)) {
                 // this is a { name } // why do you have this syntax?
-                console.log(`  first member is the only spread field ${name}`);
+                state.logs.push(`  first member is the only spread field ${name}`);
                 // NOTE this is the end of this invocation of parsebody
-                return { kind: 'struct', fields: [{ name: null, type: { kind: 'name', value: name, byteIndex }, optional: false, byteIndex }], byteIndex };
+                return { kind: 'struct', fields: [{ name: null, type: { kind: 'name', value: name, tags: [], byteIndex }, optional: false, byteIndex }], byteIndex };
             } else {
                 // this is a spread member
-                console.log(`  first member is a spread field ${name}`);
+                state.logs.push(`  first member is a spread field ${name}`);
                 tryExpectSeparator(state, ',');
-                firstFieldDef = { name: null, type: { kind: 'name', value: name, byteIndex }, optional: false, byteIndex };
+                firstFieldDef = { name: null, type: { kind: 'name', value: name, tags: [], byteIndex }, optional: false, byteIndex };
             }
         } else {
             // this is a typeref in enum
-            console.log(`  first member is a enum variant`);
+            state.logs.push(`  first member is a enum variant`);
             firstVariant = parseTypeRef(state);
         }
         if (firstFieldDef) {
@@ -429,19 +431,18 @@ function parseBody(state: ParserState): StructBody | EnumBody {
                 const byteIndex = tokens[state.position].byteIndex;
                 const optional = tryExpectSeparator(state, '?');
                 const name = expectName(state);
-                // console.log(`  next field name/spread name ${name}`);
                 if (tryExpectSeparator(state, ':')) {
                     const type = parseTypeRef(state);
                     tryExpectSeparator(state, ',');
                     // field may end with semicolon, that is tokenized as comment
                     while (tokens[state.position].kind == 'comment') { state.position += 1; }
-                    console.log(`  normal field ${name}`);
+                    state.logs.push(`  normal field ${name}`);
                     fields.push({ name, type, optional, byteIndex });
                 } else {
                     // this is a spread member
                     tryExpectSeparator(state, ',');
-                    console.log(`  spread field ${name}`);
-                    fields.push({ name: null, optional, type: { kind: 'name', value: name, byteIndex }, byteIndex });
+                    state.logs.push(`  spread field ${name}`);
+                    fields.push({ name: null, optional, type: { kind: 'name', value: name, tags: [], byteIndex }, byteIndex });
                 }
             }
             return { kind: 'struct', fields, byteIndex };
@@ -455,7 +456,7 @@ function parseBody(state: ParserState): StructBody | EnumBody {
                 if (['number', 'string', 'bool'].includes(tokens[state.position].kind)) {
                     value = tokens[state.position];
                     state.position += 1;
-                    console.log(`  tag ${tagName} ${value.value}`);
+                    state.logs.push(`  tag ${tagName} ${value.value}`);
                 } else {
                     throw new Error(`position ${byteIndex} expect literal, meet ${displayToken(tokens[state.position])}`);
                 }
@@ -477,7 +478,6 @@ function parseBody(state: ParserState): StructBody | EnumBody {
                     break;
                 }
             }
-            // console.log(`  have ${variants.length} variants`);
             return { kind: 'enum', variants, byteIndex };
         } else {
             throw new Error('unreachable');
@@ -519,13 +519,15 @@ function parseTypeRef(state: ParserState): TaggedTypeRef {
         }
         expectSeparator(state, ']');
     } else if (tokens[state.position].kind == 'string') {
-        console.log(`  string literal '${tokens[state.position].value}'`);
+        state.logs.push(`  string literal '${tokens[state.position].value}'`);
+        const value = tokens[state.position].value as string;
         state.position += 1;
-        beginTypeRef = { kind: 'string', value: tokens[state.position].value as string, byteIndex };
+        beginTypeRef = { kind: 'string', value, byteIndex };
     } else if (tokens[state.position].kind == 'bool') {
-        console.log(`  bool literal '${tokens[state.position].value}'`);
+        state.logs.push(`  bool literal '${tokens[state.position].value}'`);
+        const value = tokens[state.position].value as boolean;
         state.position += 1;
-        beginTypeRef = { kind: 'bool', value: tokens[state.position].value as boolean, byteIndex };
+        beginTypeRef = { kind: 'bool', value, byteIndex };
     } else if (tokens[state.position].kind == 'number') {
         const left = tokens[state.position].value as number;
         state.position += 1;
@@ -535,7 +537,7 @@ function parseTypeRef(state: ParserState): TaggedTypeRef {
         }
         const right = tokens[state.position].value as number;
         state.position += 1;
-        console.log(`  range ${left}..${right}`);
+        state.logs.push(`  range ${left}..${right}`);
         beginTypeRef = { kind: 'range', left, right, byteIndex };
     } else if (tokens[state.position].value == '{' || tokens[state.position].value == '(') {
         // map is ignored for now, a {} indicates a inline struct
@@ -543,7 +545,7 @@ function parseTypeRef(state: ParserState): TaggedTypeRef {
     } else if (tokens[state.position].kind == 'name') {
         const name = tokens[state.position].value as string;
         state.position += 1;
-        console.log(`  ref name ${name}`);
+        state.logs.push(`  ref name ${name}`);
         beginTypeRef = { kind: 'name', value: name, byteIndex };
     } else {
         throw new Error(`position ${byteIndex} expect typeref, meet ${displayToken(tokens[state.position])}`);
@@ -580,7 +582,7 @@ function parseTypeRef(state: ParserState): TaggedTypeRef {
         if (['number', 'string', 'bool'].includes(tokens[state.position].kind)) {
             value = tokens[state.position];
             state.position += 1;
-            console.log(`  tag ${tagName} ${value.value}`);
+            state.logs.push(`  tag ${tagName} ${value.value}`);
         } else {
             throw new Error(`position ${byteIndex} expect literal, meet ${displayToken(tokens[state.position])}`);
         }
@@ -590,7 +592,414 @@ function parseTypeRef(state: ParserState): TaggedTypeRef {
 }
 
 const tokens = tokenize(cddlContent);
-console.log(tokens.slice(20, 80).map(t => displayToken(t)).join('\n'));
-const parserState: ParserState = { tokens, position: 0, declarations: [] };
-parse(parserState);
-await fs.writeFile('codegen/ast.json', JSON.stringify(parserState.declarations, undefined, 2));
+// console.log(tokens.slice(20, 80).map(t => displayToken(t)).join('\n'));
+const parserState: ParserState = { tokens, position: 0, declarations: [], logs: [] };
+parseSpec(parserState);
+const declarations = parserState.declarations;
+// await fs.writeFile('codegen/ast.json', JSON.stringify(declarations, undefined, 2));
+
+// validate reference
+const declaredNames = declarations.map(d => d.name);
+const builtinNames = ['text', 'bool', 'any', 'float', 'null', 'number'];
+
+function validateTypeRef(node: TypeRef) {
+    if (node.kind == 'name') {
+        if (!builtinNames.includes(node.value) && !declaredNames.includes(node.value)) {
+            console.log(`span ${node.byteIndex} referenced name ${node.value} not found`);
+        }
+    } else if (node.kind == 'array') {
+        validateTypeRef(node.element);
+    } else if (node.kind == 'tuple') {
+        for (const element of node.elements) {
+            validateTypeRef(element);
+        }
+    } else if (node.kind == 'struct') {
+        validateStructBody(node);
+    } else if (node.kind == 'enum') {
+        validateEnumBody(node);
+    }
+}
+function validateStructBody(node: StructBody) {
+    for (const field of node.fields) {
+        validateTypeRef(field.type);
+    }
+}
+function validateEnumBody(node: EnumBody) {
+    for (const variant of node.variants) {
+        validateTypeRef(variant);
+    }
+}
+function validateDeclarations(declarations: NamedDecl[]) {
+    for (const declaration of declarations) {
+        if (declaration.body.kind == 'struct') {
+            validateStructBody(declaration.body);
+        } else {
+            validateEnumBody(declaration.body);
+        }
+    }
+}
+validateDeclarations(declarations);
+
+interface CommandModule {
+    name: string, // this is the camelCase name, e.g. browsingContext
+    methods: string[], // this is the camelCase name, e.g. locateNode
+    events: string[], // this is the camelCase name, e.g. contextCreated
+}
+function validateCommands(declarations: NamedDecl[], info: boolean): CommandModule[] {
+    // event data comes from global type EventData variants
+    // event name comes from EventData variants variants method property
+    // event data should have consistent name with method
+    const moduleNames = declarations
+        .map(d => d.name.split('.')).filter(n => n.length == 2).map(n => n[0])
+        .filter((n, i, a) => a.indexOf(n) == i);
+    const moduleNameUppers = moduleNames.map(m => m.at(0).toUpperCase() + m.substring(1));
+    const modules = moduleNames.map<CommandModule>(m => ({ name: m, methods: [], events: [] }));
+    if (info) { console.log(`${modules.length} modules`); }
+
+    const summaryCommandTypeNames = (declarations.find(d =>
+        d.name  == 'CommandData').body as EnumBody).variants.map(v => (v as NameRef).value);
+    if (info) { console.log(`${summaryCommandTypeNames.length} summary command types`); }
+    // they are in format ${module}Command
+    const invalidSummaryCommandTypeNames = summaryCommandTypeNames
+        .filter(n => !moduleNameUppers.some(m => n == `${m}Command`));
+    if (invalidSummaryCommandTypeNames.length) {
+        console.log(`CommandData variant invalid format: ${invalidSummaryCommandTypeNames.join(', ')}`);
+    }
+    // check all ends with Command type name is CommandData variant
+    const notIncludedEndWithCommandTypeNames = declarations.map(d => d.name)
+        .filter(n => n.endsWith('Command') && n != 'Command' && !summaryCommandTypeNames.includes(n));
+    if (notIncludedEndWithCommandTypeNames.length) {
+        console.log(`end with Command but not included in CommandData: ${notIncludedEndWithCommandTypeNames.join(', ')}`);
+    }
+    // NOTE no check all modules have Command type, because some modules may not have command/event
+
+    const summaryResultTypeNames = (declarations.find(d =>
+        d.name  == 'ResultData').body as EnumBody).variants.map(v => (v as NameRef).value);
+    if (info) { console.log(`${summaryResultTypeNames.length} summary result types`); }
+    // they are in format ${module}Result
+    const invalidSummaryResultTypeNames = summaryResultTypeNames
+        .filter(n => !moduleNameUppers.some(m => n == `${m}Result`));
+    if (invalidSummaryResultTypeNames.length) {
+        console.log(`ResultData variant invalid format: ${invalidSummaryResultTypeNames.join(', ')}`);
+    }
+    // not same with Command, concrete command type does not have postfix, while concrete result types have Result postfix
+    const concreteResultTypeNames = summaryResultTypeNames.map(n => declarations
+        .find(d => d.name == n)).flatMap(t => (t.body as EnumBody).variants.map(v => (v as NameRef).value));
+    // NOTE HARDCODE found 2 their errors, ignore for now
+    concreteResultTypeNames.push('emulation.SetNetworkConditionsResult', 'emulation.SetScreenSettingsOverrideResult');
+    if (info) { console.log(`${concreteResultTypeNames.length} concrete result types`); }
+    // check all ends with Result type name is variants or variants variants
+    const notIncludedEndWithResultTypeNames = declarations.map(d => d.name)
+        .filter(n => n.endsWith('Result') && n != 'Result' && n != 'EmptyResult'
+            && !summaryResultTypeNames.includes(n) && !concreteResultTypeNames.includes(n));
+    if (notIncludedEndWithResultTypeNames.length) {
+        console.log(`end with Result but not included in CommandData: ${notIncludedEndWithResultTypeNames.join(', ')}`);
+    }
+
+    const concreteCommandTypeNames = summaryCommandTypeNames
+        .map(n => declarations.find(d => d.name == n))
+        .flatMap(t => (t.body as EnumBody).variants.map(v => (v as NameRef).value));
+    for (const typename of concreteCommandTypeNames) {
+        const [moduleName, methodName] = typename.split('.');
+        const methodNameLower = methodName.at(0).toLowerCase() + methodName.substring(1);
+        const methodPropertyType = ((declarations.find(d => d.name == typename)
+            .body as StructBody).fields.find(f => f.name == 'method').type as StringLitRef).value;
+        if (`${moduleName}.${methodNameLower}` != methodPropertyType) {
+            console.log(`command type ${typename} name inconsistent with method type ${methodPropertyType}`);
+        }
+        modules.find(m => m.name == moduleName).methods.push(methodNameLower);
+        // have corresponding result type
+        const expectResultTypeName = `${typename}Result`;
+        if (!concreteResultTypeNames.includes(expectResultTypeName)) {
+            console.log(`expected result type ${expectResultTypeName} not found`);
+        }
+    }
+    // method list from concrete result types should be same as method list from concrete command types
+    for (const typename of concreteResultTypeNames) {
+        if (!typename.endsWith('Result')) {
+            console.log(`result type ${typename} invalid format`);
+        }
+        const [moduleName, methodName] = typename.substring(0, typename.length - 6).split('.');
+        const methodNameLower = methodName.at(0).toLowerCase() + methodName.substring(1);
+        if (!modules.some(m => m.name == moduleName && m.methods.some(m => m == methodNameLower))) {
+            console.log(`result type ${typename} cannot find corresponding method`);
+        }
+    }
+    if (info) { console.log(`${modules.flatMap(m => m.methods).length} methods`); }
+
+    const summaryEventTypeNames = (declarations.find(d =>
+        d.name  == 'EventData').body as EnumBody).variants.map(v => (v as NameRef).value);
+    if (info) { console.log(`${summaryEventTypeNames.length} summary event types`); }
+    // they are in format ${module}Event
+    const invalidSummaryEventTypeNames = summaryEventTypeNames
+        .filter(n => !moduleNameUppers.some(m => n == `${m}Event`));
+    if (invalidSummaryEventTypeNames.length) {
+        console.log(`EventData variant invalid format: ${invalidSummaryEventTypeNames.join(', ')}`);
+    }
+    // check all ends with Command type name is EventData variant
+    const notIncludedEndWithEventTypeNames = declarations.map(d => d.name)
+        .filter(n => n.endsWith('Event') && n != 'Event' && !summaryEventTypeNames.includes(n));
+    if (notIncludedEndWithEventTypeNames.length) {
+        console.log(`end with Event but not included in EventData: ${notIncludedEndWithEventTypeNames.join(', ')}`);
+    }
+
+    // NOTE HARDCODE fix for LogEvent = (log.EntryAdded), also InputEvent = (input.FileDialogOpened)
+    // no way to determine this is a variant type but not a struct type with single spread member according to their syntax
+    const logevent = declarations.find(d => d.name == 'LogEvent');
+    logevent.body.kind = 'enum';
+    (logevent.body as EnumBody).variants = [(logevent.body as StructBody).fields[0].type];
+    const inputevent = declarations.find(d => d.name == 'InputEvent');
+    inputevent.body.kind = 'enum';
+    (inputevent.body as EnumBody).variants = [(inputevent.body as StructBody).fields[0].type];
+
+    const concreteEventTypeNames = summaryEventTypeNames.map(n => declarations
+        .find(d => d.name == n)).flatMap(t => (t.body as EnumBody).variants.map(v => (v as NameRef).value));
+    for (const typename of concreteEventTypeNames) {
+        const [moduleName, eventName] = typename.split('.');
+        const eventNameLower = eventName.at(0).toLowerCase() + eventName.substring(1);
+        const methodPropertyType = ((declarations.find(d => d.name == typename)
+            .body as StructBody).fields.find(f => f.name == 'method').type as StringLitRef).value;
+        if (`${moduleName}.${eventNameLower}` != methodPropertyType) {
+            console.log(`event type ${typename} name inconsistent with method type ${methodPropertyType}`);
+        }
+        modules.find(m => m.name == moduleName).events.push(eventNameLower);
+    }
+    if (info) { console.log(`${modules.flatMap(m => m.events).length} events`); }
+    return modules;
+}
+const modules = validateCommands(declarations, false);
+
+// stage 3. generate
+const indents = new Array(10).fill(0).map((_, i) => new Array(i * 4).fill(' ').join(''));
+
+// why does typescript api call everything a host?
+interface EmitHost {
+    b: string,
+    level: number,
+}
+function generateTypeRef(s: EmitHost, node: TypeRef) {
+
+    const taggedNode = node as TaggedTypeRef;
+    if (taggedNode.tags && taggedNode.tags.length) {
+        for (const tag of taggedNode.tags) {
+            if (tag.tag == '.default') {
+                s.b += `/* default ${tag.value.value} */ `;
+            } else if (['.gt', '.ge', '.lt', '.le'].includes(tag.tag)) {
+                const separators = { '.gt': '>', '.ge': '>=', '.lt': '<', '.le': '<=' };
+                s.b += `/* ${separators[tag.tag]} ${tag.value.value} */ `;
+            }
+        }
+    }
+
+    if (node.kind == 'name') {
+        if (node.value == 'js-int') {
+            s.b += `int`;
+        } else if (node.value == 'js-uint') {
+            s.b += `uint`;
+        } else if (node.value == 'bool') {
+            s.b += `boolean`;
+        } else {
+            s.b += `${node.value}`;
+        }
+    } else if (node.kind == 'array') {
+        if (node['>0']) { s.b += '/* >0 */ '; }
+        if (node.element.kind == 'enum') {
+            s.b += '(';
+        }
+        generateTypeRef(s, node.element);
+        if (node.element.kind == 'enum') {
+            s.b += ')';
+        }
+        s.b += '[]';
+    } else if (node.kind == 'tuple') {
+        s.b += `[`;
+        for (const element of node.elements) {
+            generateTypeRef(s, element);
+            s.b += ', ';
+        }
+        s.b = s.b.substring(0, s.b.length - 2);
+        s.b += `]`;
+    } else if (node.kind == 'range') {
+        s.b += `/* ${node.left}..${node.right} */ number`;
+    } else if (node.kind == 'string') {
+        s.b += `'${node.value}'`;
+    } else if (node.kind == 'bool') {
+        s.b += `${node.value ? 'true' : 'false'}`;
+    } else if (node.kind == 'struct') {
+        s.level += 1;
+        generateStructBody(s, node);
+        s.level -= 1;
+    } else if (node.kind == 'enum') {
+        generateEnumBody(s, node);
+    }
+}
+function generateStructBody(s: EmitHost, node: StructBody) {
+    s.b += '{\n';
+    for (const field of node.fields) {
+        if (field.name) {
+            s.b += `${indents[s.level]}${field.name}${field.optional ? '?' : ''}: `;
+            generateTypeRef(s, field.type);
+            s.b += ',\n';
+        }
+    }
+    s.b += `${indents[s.level - 1]}}`;
+}
+function generateEnumBody(s: EmitHost, node: EnumBody) {
+    // try simply choose multiple by variant count >3
+    if (node.variants.length <= 3) {
+        for (const variant of node.variants) {
+            generateTypeRef(s, variant);
+            s.b += ' | ';
+        }
+        s.b = s.b.substring(0, s.b.length - 3);
+    } else {
+        s.b += '\n';
+        s.level += 1;
+        for (const variant of node.variants) {
+            s.b += `${indents[s.level]}| `;
+            generateTypeRef(s, variant);
+            s.b += '\n';
+        }
+        s.b = s.b.substring(0, s.b.length - 1);
+        s.level -= 1;
+    }
+}
+function generateDecl(s: EmitHost, node: NamedDecl) {
+    s.b += '\n';
+    if (node.body.kind == 'struct') {
+        const basetypes: string[] = [];
+        for (const field of node.body.fields) {
+            if (!field.name) {
+                if (field.type.kind != 'name') {
+                    throw new Error('unreachable');
+                }
+                if (field.type.value == 'Extensible') {
+                    s.b += `${indents[s.level]}// implementation defined non exhausitive\n`;
+                } else {
+                    basetypes.push(field.type.value);
+                }
+            }
+        }
+
+        const hasVariant = basetypes.some(n => declarations.find(d => d.name == n).body.kind == 'enum');
+        if (hasVariant || basetypes.length > 1) {
+            if (basetypes.length == 1) {
+                s.b += `${indents[s.level]}export type ${node.name.split('.').at(-1)} = ${basetypes[0]} & `;
+            } else {
+                s.b += `${indents[s.level]}export type ${node.name.split('.').at(-1)} =\n`;
+                for (const typename of basetypes) {
+                    s.b += `${indents[s.level + 1]}& ${typename}\n`;
+                }
+                s.b += `${indents[s.level + 1]}& `;
+            }
+        } else {
+            s.b += `${indents[s.level]}export interface ${node.name.split('.').at(-1)} `;
+            if (basetypes.length) {
+                // multiple basetype is in previous branch
+                s.b += `extends ${basetypes[0]} `;
+            }
+        }
+        s.level += 1;
+        generateStructBody(s, node.body);
+        s.level -= 1;
+        s.b += '\n';
+    } else {
+        s.b += `${indents[s.level]}export type ${node.name.split('.').at(-1)} = `;
+        generateEnumBody(s, node.body);
+        s.b += ';\n';
+    }
+}
+
+function generate(s: EmitHost, declarations: NamedDecl[]) {
+
+    s.b += '\n';
+    s.b += `type int = number; // abs <= max safe int\n`;
+    s.b += `type uint = number; // <= max safe int\n`;
+    s.b += `type float = number;\n`;
+    s.b += `type text = string;\n`;
+    
+    const moduleNameUppers = modules.map(m => m.name.at(0).toUpperCase() + m.name.substring(1));
+    for (const decl of declarations.filter(d => d.name.split('.').length == 1)) {
+        // ignore very special types
+        if (['Extensible', 'js-int', 'js-uint'].includes(decl.name)) {
+            continue;
+        }
+        // skip summary types, they are changed to inside namespace
+        if (moduleNameUppers.some(m => ['Command', 'Result', 'Event'].some(p => `${m}${p}` == decl.name))) {
+            continue;
+        }
+        // change overall summary types variants to inside namespace version
+        if (decl.name == 'CommandData') {
+            for (const variant of (decl.body as EnumBody).variants) {
+                const originalValue = (variant as NameRef).value;
+                (variant as NameRef).value = originalValue.at(0).toLowerCase() +
+                    originalValue.substring(1, originalValue.length - 7) + '.Command';
+            }
+        } else if (decl.name == 'ResultData') {
+            for (const variant of (decl.body as EnumBody).variants) {
+                const originalValue = (variant as NameRef).value;
+                (variant as NameRef).value = originalValue.at(0).toLowerCase() +
+                    originalValue.substring(1, originalValue.length - 6) + '.Result';
+            }
+        } else if (decl.name == 'EventData') {
+            for (const variant of (decl.body as EnumBody).variants) {
+                const originalValue = (variant as NameRef).value;
+                (variant as NameRef).value = originalValue.at(0).toLowerCase() +
+                    originalValue.substring(1, originalValue.length - 5) + '.Event';
+            }
+        }
+        generateDecl(s, decl);
+    }
+
+    s.b += '\n';
+    s.b += `export type Method = Command['method'];\n`;
+    s.b += `export type MethodMap<M extends Method> = Extract<Command, { method: M }>['params'];\n`;
+    // make a result map type
+    s.b += `export type MethodResultMap = {\n`;
+    for (const module of modules) {
+        for (const method of module.methods) {
+            s.b += `    '${module.name}.${method}': ${module.name}.${method.at(0).toUpperCase()}${method.substring(1)}Result,\n`;
+        }
+    }
+    s.b += '}\n';
+
+    s.level = 1;
+    for (const module of modules) {
+        s.b += `\nexport namespace ${module.name} {\n`;
+        // first non command/result/event types, then summary types, then commnd+result for each method, then event
+        
+        const moduleNameUpper = module.name.at(0).toUpperCase() + module.name.substring(1);
+    
+        const commandAndResultTypes = module.methods.map(m => m.at(0).toUpperCase() + m.substring(1)).flatMap(m => [
+            declarations.find(d => d.name == `${module.name}.${m}`),
+            declarations.find(d => d.name == `${module.name}.${m}Result`),
+        ]);
+        const eventTypes = module.events
+            .map(e => e.at(0).toUpperCase() + e.substring(1))
+            .map(e => declarations.find(d => d.name == `${module.name}.${e}`));
+        const otherTypes = declarations
+            .filter(d => d.name.startsWith(`${module.name}.`))
+            .filter(d => !commandAndResultTypes.some(c => c.name == d.name) && !eventTypes.some(e => e.name == d.name));
+    
+        const summaryTypes = ['Command', 'Result', 'Event'].map(postfix => {
+            const decl = declarations.find(d => d.name == `${moduleNameUpper}${postfix}`);
+            if (decl) {
+                // change it to inside namespace
+                decl.name = `${module.name}.${postfix}`;
+                return decl;
+            }
+        }).filter(x => x);
+
+        for (const decl of [otherTypes, summaryTypes, commandAndResultTypes, eventTypes].flat()) {
+            generateDecl(s, decl);
+        }
+        s.b += `}\n`; // end namespace
+    }
+}
+
+const emitHost: EmitHost = {
+    b: '// auto generated\n',
+    level: 0,
+};
+generate(emitHost, declarations);
+await fs.writeFile('src/spec.ts', emitHost.b);
