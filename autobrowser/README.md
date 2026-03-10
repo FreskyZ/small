@@ -94,7 +94,10 @@ WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https:/
   this page id is same as bidi created browsing context id, and is same as `curl localhost:8002/json/list` page id
 - websocket connection to the websocket url and then close does *not* close the session,
   so you can first create the session by a small script and then use the session id and page id in later operations
-
+- need a lot of types to call call javascript functions api, so spend some time to code generate all types in the
+  specification, it looks very cool that I kind of want to publish it in a standalone repo
+- complete basic data crawling for endfield/essence.py use, this library looks very cool and does not use any external
+  library that I kind of want to publish it in a standalone repo
 
 ### Visualization
 

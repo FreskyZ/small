@@ -827,13 +827,22 @@ function generateTypeRef(s: EmitHost, node: TypeRef) {
         s.b += `${node.value ? 'true' : 'false'}`;
     } else if (node.kind == 'struct') {
         s.level += 1;
-        generateStructBody(s, node);
+        generateStructBody(s, node, true);
         s.level -= 1;
     } else if (node.kind == 'enum') {
         generateEnumBody(s, node);
     }
 }
-function generateStructBody(s: EmitHost, node: StructBody) {
+function generateStructBody(s: EmitHost, node: StructBody, inline: boolean) {
+    // handle single spread member situation
+    if (inline && node.fields.filter(f => !f.name).length == node.fields.length) {
+        if (node.fields.length == 1) {
+            generateTypeRef(s, node.fields[0].type);
+        } else {
+            console.log(`what is this multipple member but all member is spread inline struct?`);
+        }
+        return;
+    }
     s.b += '{\n';
     for (const field of node.fields) {
         if (field.name) {
@@ -900,7 +909,7 @@ function generateDecl(s: EmitHost, node: NamedDecl) {
             }
         }
         s.level += 1;
-        generateStructBody(s, node.body);
+        generateStructBody(s, node.body, false);
         s.level -= 1;
         s.b += '\n';
     } else {
@@ -962,6 +971,7 @@ function generate(s: EmitHost, declarations: NamedDecl[]) {
         }
     }
     s.b += '}\n';
+    s.b += `export type EventName = Event['method'];\n`;
 
     s.level = 1;
     for (const module of modules) {

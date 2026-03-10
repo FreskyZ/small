@@ -167,6 +167,7 @@ export type MethodResultMap = {
     'webExtension.install': webExtension.InstallResult,
     'webExtension.uninstall': webExtension.UninstallResult,
 }
+export type EventName = Event['method'];
 
 export namespace session {
 
@@ -1596,12 +1597,10 @@ export namespace script {
         | script.PrimitiveProtocolValue
         | script.ChannelValue
         | script.ArrayLocalValue
-        | {
-        }
+        | script.DateLocalValue
         | script.MapLocalValue
         | script.ObjectLocalValue
-        | {
-        }
+        | script.RegExpLocalValue
         | script.SetLocalValue;
 
     export type ListLocalValue = script.LocalValue[];

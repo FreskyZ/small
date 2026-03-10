@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import type * as spec from './spec.js';
 
 // create session, display and exit
@@ -82,12 +83,6 @@ async function createSession(): Promise<never> {
     }
 }
 
-interface CommandResult<T = any> {
-    ok: boolean,
-    // if ok, value is result object, if not ok, value is the complete response
-    value: T,
-}
-
 class RawClient {
     // note nodejs direct run typescript does not support constructor parameter declared member fields for now
     public readonly sessionId: string;
@@ -104,9 +99,9 @@ class RawClient {
     // this is not generic event handlers, this only handles event message
     // event message is not response of command, does not have id, is only enabled by subscription
     // in this class, all handlers receive all event messages, event dispatch is in higher abstraction level
-    private eventMessageHandlers: ((data: any) => void)[];
+    private readonly eventMessageHandlers: ((event: spec.Event) => void)[];
     // return cleanup
-    public addEventMessageHandler(f: (data: any) => void): () => void {
+    public addEventMessageHandler(f: (event: spec.Event) => void): () => void {
         this.eventMessageHandlers.push(f);
         return () => {
             const index = this.eventMessageHandlers.indexOf(f);
@@ -115,7 +110,7 @@ class RawClient {
     }
 
     private nextCommandId: number = 1;
-    private waits = new Map<number, { resolve: (value: CommandResult) => void, timeout: NodeJS.Timeout }>();
+    private readonly waits = new Map<number, { resolve: (value: spec.CommandResponse | spec.ErrorResponse) => void, timeout: NodeJS.Timeout }>();
     public async connect() {
         if (this.connection) {
             console.log('connection not null, what happened?');
@@ -138,28 +133,30 @@ class RawClient {
                     console.log('received data parse error', e, event.data);
                     return;
                 }
-                if (!message.id || typeof message.id != 'number') {
-                    // TODO this is event, need to check event id and send to subscriptions
-                    console.log('received data unexpected format', message);
-                    return;
-                } else {
+                if (message.type == 'success' || message.type == 'error') {
+                    if (!message.id || typeof message.id != 'number') {
+                        console.log('received data unexpected format', message, JSON.stringify(message));
+                        return;
+                    }
                     const waitingCommand = this.waits.get(message.id);
                     if (waitingCommand) {
                         clearTimeout(waitingCommand.timeout);
                         this.waits.delete(message.id);
-                        if (message.type == 'success') {
-                            waitingCommand.resolve({ ok: true, value: message.result });
-                        } else {
-                            waitingCommand.resolve({ ok: false, value: message });
-                        }
+                        waitingCommand.resolve(message);
                     }
+                } else /* event */ {
+                    if (!message.method || typeof message.method != 'string') {
+                        console.log('received event unexpected format', message, JSON.stringify(message));
+                        return;
+                    }
+                    this.eventMessageHandlers.forEach(h => h(message));
                 }
             });
             this.connection.addEventListener('close', () => {
                 // fail all pending commands
                 for (const [, { resolve, timeout }] of this.waits) {
                     clearTimeout(timeout);
-                    resolve({ ok: false, value: { message: 'client connection closed' } });
+                    resolve({ type: 'error', id: null, error: 'client side error' as spec.ErrorCode, message: 'client connection closed' });
                 }
                 this.waits.clear();
                 this.connection = null;
@@ -167,18 +164,23 @@ class RawClient {
         });
     }
 
-    public async send<M extends spec.Method>(method: M, params: spec.MethodMap<M>): Promise<CommandResult<spec.MethodResultMap[M]>> {
+    public async send<M extends spec.Method>(method: M, params: spec.MethodMap<M>): Promise<spec.MethodResultMap[M]> {
         const id = this.nextCommandId++;
         this.connection.send(JSON.stringify({ id, method, params }));
-        return new Promise<CommandResult>(resolve => {
+        const response = await new Promise<spec.CommandResponse | spec.ErrorResponse>((resolve, reject) => {
             this.waits.set(id, {
                 resolve,
                 timeout: setTimeout(() => {
                     this.waits.delete(id);
-                    resolve({ ok: false, value: { message: 'client side timeout' } });
+                    reject('client side timeout');
                 }, 30000),
             });
         });
+        if (response.type == 'error') {
+            console.log('command response error', response, JSON.stringify(response));
+            throw new Error(response.message);
+        }
+        return response.result as spec.MethodResultMap[M];
     }
 }
 
@@ -190,22 +192,63 @@ class RawClient {
 // convert to spec type script.LocalValue
 // this spec type is designed to be programming language neutral,
 // but I'm currently using js so can automatically convert it here
-function convertScriptLocalValue(value: spec.script.NodeRemoteValue): spec.script.LocalValue {
-    if (value.sharedId) { return value; }
-    else { console.log('cannot convert value for now', value); }
+// function convertScriptLocalValue(value: spec.script.NodeRemoteValue): spec.script.LocalValue {
+//     if (value.sharedId) { return value; }
+//     else { console.log('cannot convert value for now', value); }
+// }
+
+// const unsubscribe = await client
+//     .setPageId(pageId)
+//     .subscribe('browsingContext.contextCreated', () => { ...handle... })
+//     .subscribe('browsingContext.navigationStarted', () => { ...handle... })
+//     .subscribe(['network.responseCompleted', 'network.fetchError'], e => { handle e.name and e.pageId })
+//     .commit(); // this collects all interests and submit a subscription
+// ...
+// await unsubscribe(); // unsubscribe everything in the subscription
+class SubscriptionBuilder {
+    public readonly raw: RawClient;
+    public readonly pageId: string;
+    public constructor(raw: RawClient, pageId: string) {
+        this.raw = raw;
+        this.pageId = pageId;
+    }
+
+    private readonly events: spec.EventName[] = [];
+    private readonly handlers: Partial<Record<spec.EventName, ((e: spec.Event) => void)[]>> = {};
+    public subscribe(events: spec.EventName | spec.EventName[], handler: (e: spec.Event) => void): SubscriptionBuilder {
+        events = Array.isArray(events) ? events : [events];
+        events.forEach(e => this.events.push(e));
+        events.forEach(e => (this.handlers[e] ??= []).push(handler));
+        return this;
+    }
+
+    public async commit() {
+        const { subscription } = await this.raw.send('session.subscribe', { events: this.events, contexts: [this.pageId] });
+        const removeHandler = this.raw.addEventMessageHandler((e: spec.Event) => {
+            (this.handlers[e.method] ?? []).forEach(h => h(e));
+        });
+        return async () => {
+            removeHandler();
+            await this.raw.send('session.unsubscribe', { subscriptions: [subscription] });
+        };
+    }
 }
 
 // this class have protocol type compare to rawclient
 class Client {
-    public raw: RawClient;
+    public readonly raw: RawClient;
     public constructor(sessionId: string) {
         this.raw = new RawClient(sessionId);
     }
     public close() { this.raw.close(); }
     public async connect() { await this.raw.connect(); }
 
+    public subscribe(events: spec.EventName | spec.EventName[], handler: (e: spec.Event) => void): SubscriptionBuilder {
+        return new SubscriptionBuilder(this.raw, this.pageId).subscribe(events, handler);
+    }
+
     // although this is called session.status, it is not asking session's status but driver's status
-    public async driverStatus(): Promise<CommandResult<spec.session.StatusResult>> {
+    public async driverStatus(): Promise<spec.session.StatusResult> {
         return await this.raw.send('session.status', {});
     }
 
@@ -218,50 +261,89 @@ class Client {
     public async navigate(
         url: string,
         wait?: spec.browsingContext.ReadinessState,
-    ): Promise<CommandResult<spec.browsingContext.NavigateResult>> {
+    ): Promise<spec.browsingContext.NavigateResult> {
         return await this.raw.send('browsingContext.navigate', { context: this.pageId, url, wait });
     }
+    public async go(offset: number): Promise<void> {
+        await this.raw.send('browsingContext.traverseHistory', { context: this.pageId, delta: offset });
+    }
+
     public async querySelectorAll(
         selector: string,
         parameters?: {
             origin?: spec.script.NodeRemoteValue[],
             maxCount?: number,
         },
-    ): Promise<CommandResult<spec.script.NodeRemoteValue[]>> {
+    ): Promise<spec.script.NodeRemoteValue[]> {
         const result = await this.raw.send('browsingContext.locateNodes', {
             context: this.pageId,
             locator: { type: 'css', value: selector },
             maxNodeCount: parameters?.maxCount,
-            startNodes: parameters?.origin ? parameters?.origin.map(e => ({ sharedId: e.sharedId })) : undefined,
+            startNodes: parameters?.origin ? parameters.origin.map(e => ({ sharedId: e.sharedId })) : undefined,
         });
-        if (!result.ok) { return result; }
-        return { ok: true, value: result.value.nodes };
+        return result.nodes;
+    }
+    // wait to be locatable
+    public async waitElements(
+        selector: string,
+        timeout: number, // in seconds
+        parameters?: {
+            origin?: spec.script.NodeRemoteValue[],
+            maxCount?: number,
+        },
+    ): Promise<spec.script.NodeRemoteValue[]> {
+        // it may be amazing when you first see AI use Date in wait and timeout operations
+        // but it's actually more simple than Promise.race, and is more precise than assuming delay time is accurate
+        const startTime = Date.now();
+        while (Date.now() - startTime < timeout * 1000) {
+            const result = await this.querySelectorAll(selector, parameters);
+            if (result.length > 0) {
+                return result;
+            }
+            await delay(1);
+        }
+        return [];
     }
 
     // ? every parameter is keyword
-    public async evalWith(
+    public async call(
         $function: string, // function code as string ()
         $arguments: any[],
         parameters?: {
             await?: boolean,
             this?: any,
         },
-    ): Promise<CommandResult<spec.script.EvaluateResult>> {
-        // for now seems not related to other realm, so fix use page normal top level realm for now
+    ): Promise<spec.script.EvaluateResult> {
         // TODO for now no need to matter result ownership, but I guess that will be happen soon
+        const result = await this.raw.send('script.callFunction', {
+            functionDeclaration: $function,
+            awaitPromise: parameters?.await ?? false,
+            // for now seems not related to other realm, so fix use page normal top level realm for now
+            target: { context: this.pageId },
+            arguments: /* TODO this conversion */ $arguments,
+        });
+        return result;
+    }
 
-
+    public async click(element: spec.script.NodeRemoteValue): Promise<void> {
+        await this.raw.send('input.performActions', {
+            context: this.pageId,
+            actions: [{
+                type: 'pointer',
+                id: '?', // ?
+                actions: [
+                    { type: 'pointerMove', x: 0, y: 0, origin: { type: 'element', element: { sharedId: element.sharedId } } },
+                    { type: 'pointerDown', button: 0 },
+                    { type: 'pointerUp', button: 0 },
+                ],
+            }],
+        });
     }
 }
 
-// TODO consider subscription operation like
-// const subscription = await client
-//     .subscribe(pageId, 'browsingContext.contextCreated', () => { ...handle... })
-//     .subscribe(pageId, 'browsingContext.navigationStarted', () => { ...handle... })
-//     .subscribe(pageId, ['network.responseCompleted', 'network.fetchError'], e => { handle e.name and e.pageId })
-//     .commitSubscription(); // this collects all interests and submit a subscription
-// ...
-// await subscription.unsubscribe(); // unsubscribe everything in the subscription
+async function delay(seconds: number) {
+    await new Promise<void>(resolve => setTimeout(() => resolve(), seconds * 1000));
+}
 
 // await createSession();
 
@@ -271,31 +353,98 @@ class Client {
 // - another operation to check browser is started: docker top browser1
 // - manually delete session: curl -X DELETE localhost:8004/session/{sessionId}
 
-const client = new Client('53df82d7318d563bf788f008a6624316');
+const client = new Client('73006405a2395e2dace9b98ff3ea3d6d');
 await client.connect();
 console.log(`connection open attach session ${client.raw.sessionId}`);
 console.log(`driver status ${JSON.stringify(await client.driverStatus())}`);
 
-client.setPageId('BB6BC7338ACB006D705994C4369AF334');
+client.setPageId('E593D0E354BBA3043867F09D0E52BD06');
 console.log(`attach page ${client.pageId}`);
 // main page
 // console.log(await client.navigate('https://wiki.skland.com', 'interactive'));
 // weapons page
-// console.log(await client.navigate('https://wiki.skland.com/endfield/catalog?typeMainId=1&typeSubId=2', 'interactive'));
+// console.log(await client.navigate('https://wiki.skland.com/endfield/catalog?typeMainId=1&typeSubId=2', 'complete'));
 
 // locate cards, this is same as item page card container class name
-const querySelectorResult1 = await client.querySelectorAll('div.CommonCard__CardContainer-fQKpRL');
-// console.log(querySelectorResult1);
-if (!querySelectorResult1.ok || querySelectorResult1.value.length != 1) { console.log('seems not correct (1)'); }
-const cardContainerElement = querySelectorResult1.value[0];
+const selectors = {
+    cardContainer: 'div.CommonCard__CardContainer-fQKpRL',
+    card: 'div.ArmsCard__Border-bHFog', // inside cardcontainer
+    documentWrapper: 'div.Document__Wrapper-eLvDYV',
+};
+const remoteFunctions = {
+    // weapon name from card element
+    getWeaponName: ((e: HTMLDivElement) => (e.childNodes[0].childNodes[3] as HTMLDivElement).innerText).toString(),
+    // scroll into any element
+    scrollIntoView: ((e: HTMLElement) => e.scrollIntoView()).toString(),
+    // weapon attributes in weapon detail page
+    // this site use api data structure and html layout structure that no human and AI can understand
+    getWeaponAttributes: (() => {
+        // ATTENTION this is remote function cannot reference variables here
+        for (const documentWrapperElement of Array.from(document.querySelectorAll('div.Document__Wrapper-eLvDYV'))) {
+            if ((documentWrapperElement?.childNodes[0]?.childNodes[0]?.childNodes[0] as HTMLSpanElement)?.innerText == '属性能力') {
+                return [2, 5, 8].map(i => (documentWrapperElement.childNodes[i]?.childNodes[0]?.childNodes[0] as HTMLSpanElement)?.innerText);
+            }
+        }
+    }).toString(),
+}
 
-const querySelectorResult2 = await client.querySelectorAll('div.ArmsCard__Border-bHFog', [cardContainerElement], 10);
-// console.log(JSON.stringify(querySelectorResult2));
-if (!querySelectorResult2.ok) { console.log('seems not correct (2)'); }
-const cardElements = querySelectorResult2.value;
-console.log(`card count ${cardElements.length}`);
+await client.waitElements(selectors.cardContainer, 10);
 
-// scroll item 1 into view
-await client.evalWith(((e: HTMLElement) => e.scrollIntoView()).toString(), [cardElements[0]]);
+// NOTE these elements are invalidated after navigation
+// actually js in browser also gets invalidated after navigation, this is kind of reasonable
+// so the outside query results are only use for count
+const cardContainerElementForCount = await client.querySelectorAll(selectors.cardContainer);
+const cardElementsForCount = await client.querySelectorAll(selectors.card, { origin: cardContainerElementForCount });
+const cardElementCount = cardElementsForCount.length;
+console.log(`card count ${cardElementCount}`);
 
+const weapons: { weapon: string, attributes: string[] }[] = [];
+for (let cardIndex = 0; cardIndex < cardElementCount; cardIndex += 1) {
+    // if (cardIndex > 10) { break; }
+
+    await client.waitElements(selectors.cardContainer, 10);
+    const cardContainerElement = await client.querySelectorAll(selectors.cardContainer);
+    const cardElements = await client.querySelectorAll(selectors.card, { origin: cardContainerElement });
+    const cardElement = cardElements[cardIndex];
+
+    // weapon name
+    let weaponName: string;
+    const evalResult1 = await client.call(remoteFunctions.getWeaponName, [cardElement]);
+    if (evalResult1.type == 'success' && evalResult1.result.type == 'string') {
+        weaponName = evalResult1.result.value;
+    } else {
+        console.log(`unexpected eval result1`, JSON.stringify(evalResult1));
+    }
+    // TODO incremental run support, if this weapon is known, don't go into it
+    // TODO in that case, you need a element reference valid flag to avoid duplicate query
+
+    // click into weapon detail page
+    console.log(`click into ${weaponName}`);
+    await client.call(remoteFunctions.scrollIntoView, [cardElement]);
+    await client.click(cardElement);
+
+    // TODO rarity
+    // child count of div.CommonDetailCard__RankBox-eMAilu
+
+    // search for attributes
+    const attributes: string[] = [];
+    await client.waitElements(selectors.documentWrapper, 10);
+    const evalResult2 = await client.call(remoteFunctions.getWeaponAttributes, []);
+    // by the way, 3 star weapon only have 2 attributes, making this condition false, and the last element is {type:"undefined"}
+    if (evalResult2.type == 'success' && evalResult2.result.type == 'array'
+        && evalResult2.result.value.length == 3 && !evalResult2.result.value.some(v => v.type != 'string'))
+    {
+        attributes.push(...evalResult2.result.value.map(v => (v as spec.script.StringValue).value));
+    } else {
+        console.log(`unexpected eval result2`, JSON.stringify(evalResult2));
+    }
+    weapons.push({ weapon: weaponName, attributes });
+    console.log({ weapon: weaponName, attributes });
+
+    // go back
+    await delay(3); // wait for my human eye
+    await client.go(-1);
+}
+
+await fs.writeFile('weapon.json', JSON.stringify(weapons, undefined, 2));
 client.close();
