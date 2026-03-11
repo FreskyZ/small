@@ -241,17 +241,17 @@ export namespace session {
     export type Subscription = text;
 
     export interface SubscribeParameters {
-        events: /* >0 */ text[],
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        events: /** >0 */ text[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface UnsubscribeByIDRequest {
-        subscriptions: /* >0 */ session.Subscription[],
+        subscriptions: /** >0 */ session.Subscription[],
     }
 
     export interface UnsubscribeByAttributesRequest {
-        events: /* >0 */ text[],
+        events: /** >0 */ text[],
     }
 
     export interface NewParameters {
@@ -383,7 +383,7 @@ export namespace browser {
 
     export interface SetDownloadBehaviorParameters {
         downloadBehavior: browser.DownloadBehavior | null,
-        userContexts?: /* >0 */ browser.UserContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type DownloadBehavior = browser.DownloadBehaviorAllowed | browser.DownloadBehaviorDenied;
@@ -444,7 +444,7 @@ export namespace browser {
     }
 
     export interface GetUserContextsResult {
-        userContexts: /* >0 */ browser.UserContextInfo[],
+        userContexts: /** >0 */ browser.UserContextInfo[],
     }
 
     export interface RemoveUserContext {
@@ -552,7 +552,7 @@ export namespace browsingContext {
 
     export interface CaptureScreenshotParameters {
         context: browsingContext.BrowsingContext,
-        origin?: /* default viewport */ 'viewport' | 'document',
+        origin?: /** @default 'viewport' */ 'viewport' | 'document',
         format?: browsingContext.ImageFormat,
         clip?: browsingContext.ClipRectangle,
     }
@@ -579,7 +579,7 @@ export namespace browsingContext {
 
     export interface CloseParameters {
         context: browsingContext.BrowsingContext,
-        promptUnload?: /* default false */ boolean,
+        promptUnload?: /** @default false */ boolean,
     }
 
     export type CreateType = 'tab' | 'window';
@@ -587,7 +587,7 @@ export namespace browsingContext {
     export interface CreateParameters {
         type: browsingContext.CreateType,
         referenceContext?: browsingContext.BrowsingContext,
-        background?: /* default false */ boolean,
+        background?: /** @default false */ boolean,
         userContext?: browser.UserContext,
     }
 
@@ -605,9 +605,9 @@ export namespace browsingContext {
     export interface LocateNodesParameters {
         context: browsingContext.BrowsingContext,
         locator: browsingContext.Locator,
-        maxNodeCount?: /* >= 1 */ uint,
+        maxNodeCount?: /** >= 1 */ uint,
         serializationOptions?: script.SerializationOptions,
-        startNodes?: /* >0 */ script.SharedReference[],
+        startNodes?: /** >0 */ script.SharedReference[],
     }
 
     export interface NavigateParameters {
@@ -618,25 +618,25 @@ export namespace browsingContext {
 
     export interface PrintParameters {
         context: browsingContext.BrowsingContext,
-        background?: /* default false */ boolean,
+        background?: /** @default false */ boolean,
         margin?: browsingContext.PrintMarginParameters,
-        orientation?: /* default portrait */ 'portrait' | 'landscape',
+        orientation?: /** @default 'portrait' */ 'portrait' | 'landscape',
         page?: browsingContext.PrintPageParameters,
         pageRanges?: (uint | text)[],
-        scale?: /* default 1 */ /* 0.1..2 */ number,
-        shrinkToFit?: /* default true */ boolean,
+        scale?: /** @default 1 */ /* 0.1..2 */ number,
+        shrinkToFit?: /** @default true */ boolean,
     }
 
     export interface PrintMarginParameters {
-        bottom?: /* default 1 */ /* >= 0 */ float,
-        left?: /* default 1 */ /* >= 0 */ float,
-        right?: /* default 1 */ /* >= 0 */ float,
-        top?: /* default 1 */ /* >= 0 */ float,
+        bottom?: /** @default 1 */ /** >= 0 */ float,
+        left?: /** @default 1 */ /** >= 0 */ float,
+        right?: /** @default 1 */ /** >= 0 */ float,
+        top?: /** @default 1 */ /** >= 0 */ float,
     }
 
     export interface PrintPageParameters {
-        height?: /* default 27.94 */ /* >= 0.0352 */ float,
-        width?: /* default 21.59 */ /* >= 0.0352 */ float,
+        height?: /** @default 27.94 */ /** >= 0.0352 */ float,
+        width?: /** @default 21.59 */ /** >= 0.0352 */ float,
     }
 
     export interface ReloadParameters {
@@ -648,8 +648,8 @@ export namespace browsingContext {
     export interface SetViewportParameters {
         context?: browsingContext.BrowsingContext,
         viewport?: browsingContext.Viewport | null,
-        devicePixelRatio?: /* > 0 */ float | null,
-        userContexts?: /* >0 */ browser.UserContext[],
+        devicePixelRatio?: /** > 0 */ float | null,
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface Viewport {
@@ -918,15 +918,15 @@ export namespace emulation {
 
     export interface SetForcedColorsModeThemeOverrideParameters {
         theme: emulation.ForcedColorsModeTheme | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type ForcedColorsModeTheme = 'light' | 'dark';
 
     export interface SetGeolocationOverrideParameters {
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type GeolocationCoordinates = any;
@@ -937,14 +937,14 @@ export namespace emulation {
 
     export interface SetLocaleOverrideParameters {
         locale: text | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetNetworkConditionsParameters {
         networkConditions: emulation.NetworkConditions | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type NetworkConditions = emulation.NetworkConditionsOffline;
@@ -960,8 +960,8 @@ export namespace emulation {
 
     export interface SetScreenSettingsOverrideParameters {
         screenArea: emulation.ScreenArea | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type ScreenOrientationNatural = 'portrait' | 'landscape';
@@ -979,38 +979,38 @@ export namespace emulation {
 
     export interface SetScreenOrientationOverrideParameters {
         screenOrientation: emulation.ScreenOrientation | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetUserAgentOverrideParameters {
         userAgent: text | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetScriptingEnabledParameters {
         enabled: false | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetScrollbarTypeOverrideParameters {
         scrollbarType: 'classic' | 'overlay' | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetTimezoneOverrideParameters {
         timezone: text | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface SetTouchOverrideParameters {
-        maxTouchPoints: /* >= 1 */ uint | null,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        maxTouchPoints: /** >= 1 */ uint | null,
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export type Command = 
@@ -1136,7 +1136,7 @@ export namespace network {
         request: network.RequestData,
         timestamp: uint,
         userContext?: browser.UserContext | null,
-        intercepts?: /* >0 */ network.Intercept[],
+        intercepts?: /** >0 */ network.Intercept[],
     }
 
     export type BytesValue = network.StringValue | network.Base64Value;
@@ -1279,16 +1279,16 @@ export namespace network {
     }
 
     export interface AddDataCollectorParameters {
-        dataTypes: /* >0 */ network.DataType[],
+        dataTypes: /** >0 */ network.DataType[],
         maxEncodedDataSize: uint,
-        collectorType?: /* default blob */ network.CollectorType,
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        collectorType?: /** @default 'blob' */ network.CollectorType,
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface AddInterceptParameters {
-        phases: /* >0 */ network.InterceptPhase[],
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
+        phases: /** >0 */ network.InterceptPhase[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
         urlPatterns?: network.UrlPattern[],
     }
 
@@ -1341,7 +1341,7 @@ export namespace network {
     export interface GetDataParameters {
         dataType: network.DataType,
         collector?: network.Collector,
-        disown?: /* default false */ boolean,
+        disown?: /** @default false */ boolean,
         request: network.Request,
     }
 
@@ -1364,13 +1364,13 @@ export namespace network {
 
     export interface SetCacheBehaviorParameters {
         cacheBehavior: 'default' | 'bypass',
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
     }
 
     export interface SetExtraHeadersParameters {
         headers: network.Header[],
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
     }
 
     export interface AuthRequiredParameters extends network.BaseParameters {
@@ -1936,7 +1936,7 @@ export namespace script {
     export type ResultOwnership = 'root' | 'none';
 
     export interface SerializationOptions {
-        maxDomPath?: uint,
+        maxDomDepth?: uint,
         maxObjectDepth?: uint,
         includeShadowTree?: 'none' | 'open' | 'all',
     }
@@ -1974,8 +1974,8 @@ export namespace script {
     export interface AddPreloadScriptParameters {
         functionDeclaration: text,
         arguments?: script.ChannelValue[],
-        contexts?: /* >0 */ browsingContext.BrowsingContext[],
-        userContexts?: /* >0 */ browser.UserContext[],
+        contexts?: /** >0 */ browsingContext.BrowsingContext[],
+        userContexts?: /** >0 */ browser.UserContext[],
         sandbox?: text,
     }
 
@@ -1992,7 +1992,7 @@ export namespace script {
         resultOwnership?: script.ResultOwnership,
         serializationOptions?: script.SerializationOptions,
         this?: script.LocalValue,
-        userActivation?: /* default false */ boolean,
+        userActivation?: /** @default false */ boolean,
     }
 
     export interface EvaluateParameters {
@@ -2001,7 +2001,7 @@ export namespace script {
         awaitPromise: boolean,
         resultOwnership?: script.ResultOwnership,
         serializationOptions?: script.SerializationOptions,
-        userActivation?: /* default false */ boolean,
+        userActivation?: /** @default false */ boolean,
     }
 
     export interface GetRealmsParameters {
@@ -2282,7 +2282,7 @@ export namespace input {
     export type PointerType = 'mouse' | 'pen' | 'touch';
 
     export interface PointerParameters {
-        pointerType?: /* default mouse */ input.PointerType,
+        pointerType?: /** @default 'mouse' */ input.PointerType,
     }
 
     export type PointerSourceAction = 
@@ -2339,17 +2339,17 @@ export namespace input {
         deltaX: int,
         deltaY: int,
         duration?: uint,
-        origin?: /* default viewport */ input.Origin,
+        origin?: /** @default 'viewport' */ input.Origin,
     }
 
     export interface PointerCommonProperties {
-        width?: /* default 1 */ uint,
-        height?: /* default 1 */ uint,
-        pressure?: /* default 0 */ float,
-        tangentialPressure?: /* default 0 */ float,
-        twist?: /* default 0 */ /* 0..359 */ number,
-        altitudeAngle?: /* default 0 */ /* 0..1.5707963267948966 */ number,
-        azimuthAngle?: /* default 0 */ /* 0..6.283185307179586 */ number,
+        width?: /** @default 1 */ uint,
+        height?: /** @default 1 */ uint,
+        pressure?: /** @default 0 */ float,
+        tangentialPressure?: /** @default 0 */ float,
+        twist?: /** @default 0 */ /* 0..359 */ number,
+        altitudeAngle?: /** @default 0 */ /* 0..1.5707963267948966 */ number,
+        azimuthAngle?: /** @default 0 */ /* 0..6.283185307179586 */ number,
     }
 
     export type Origin = 'viewport' | 'pointer' | input.ElementOrigin;

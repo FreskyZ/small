@@ -78,7 +78,7 @@ cddlContent = cddlContent.substring(0, wtftypeIndex) +
 const wtftype2Index = cddlContent.indexOf('script.SerializationOptions = {');
 const wtftype2EndIndex = cddlContent.indexOf('}', wtftype2Index + 40);
 cddlContent = cddlContent.substring(0, wtftype2Index) +
-    'script.SerializationOptions = { ?maxDomPath: js-uint, ?maxObjectDepth: js-uint, ?includeShadowTree: "none" / "open" / "all" }' +
+    'script.SerializationOptions = { ?maxDomDepth: js-uint, ?maxObjectDepth: js-uint, ?includeShadowTree: "none" / "open" / "all" }' +
     cddlContent.substring(wtftype2EndIndex + 1);
 
 // await fs.writeFile('codegen/spec.cddl', cddlContent);
@@ -781,14 +781,17 @@ function generateTypeRef(s: EmitHost, node: TypeRef) {
 
     const taggedNode = node as TaggedTypeRef;
     if (taggedNode.tags && taggedNode.tags.length) {
+        s.b += '/** ';
         for (const tag of taggedNode.tags) {
             if (tag.tag == '.default') {
-                s.b += `/* default ${tag.value.value} */ `;
+                const quote = tag.value.kind == 'string' ? "'" : '';
+                s.b += `@default ${quote}${tag.value.value}${quote}`;
             } else if (['.gt', '.ge', '.lt', '.le'].includes(tag.tag)) {
                 const separators = { '.gt': '>', '.ge': '>=', '.lt': '<', '.le': '<=' };
-                s.b += `/* ${separators[tag.tag]} ${tag.value.value} */ `;
+                s.b += `${separators[tag.tag]} ${tag.value.value}`;
             }
         }
+        s.b += ' */ ';
     }
 
     if (node.kind == 'name') {
@@ -802,7 +805,7 @@ function generateTypeRef(s: EmitHost, node: TypeRef) {
             s.b += `${node.value}`;
         }
     } else if (node.kind == 'array') {
-        if (node['>0']) { s.b += '/* >0 */ '; }
+        if (node['>0']) { s.b += '/** >0 */ '; }
         if (node.element.kind == 'enum') {
             s.b += '(';
         }
