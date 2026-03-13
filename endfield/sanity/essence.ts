@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
-import chalk from 'chalk-template';
+import { styleText } from 'node:util';
+import { randomInt } from 'node:crypto';
 
 // 明日方舟：终末地 基质规划
 // weapon and attributes from weapon.json from autobrowser project
@@ -8,7 +9,11 @@ import chalk from 'chalk-template';
 // // do I need to frequently change it?
 // // yes, if you frequently change it, it's better to put it at top,
 // // if you rarely change it, it's better to put it at top to make it easier to find
-const AllProgress: { name: string, progress: [number, number, number] }[] = [
+interface Progress {
+    name: string,
+    progress: [number, number, number],
+}
+const AllProgress: Progress[] = [
     { name: '宏愿', progress: [3, 2, 1] },
     { name: '遗忘', progress: [2, 1, 1] },
     { name: 'J.E.T.', progress: [2, 1, 1] },
@@ -23,8 +28,14 @@ const AllProgress: { name: string, progress: [number, number, number] }[] = [
     { name: 'O.B.J.尖峰', progress: [3, 1, 1] },
     { name: '骁勇', progress: [1, 2, 1] },
     { name: '显赫声名', progress: [1, 1, 1] },
-    // { name: '', progress: [] },
+    { name: 'O.B.J.迅极', progress: [1, 1, 1] },
+    { name: '探骊', progress: [1, 1, 1] },
+    { name: '重点之声', progress: [1, 1, 1] },
+    // { name: '', progress: [1, 1, 1] },
 ];
+// NOTE this progress list precisely represent my overall progress
+// so cut the progress list in the middle effectively creates test cases for the following sort logic
+// AllProgress.splice(15, 100);
 
 // you call a 重度能量淤积点 protocol space? more naming conventions:
 // - 基础属性 is category 1, 附加属性 is category 2, 技能属性 is category 3
@@ -63,6 +74,11 @@ const AllSapces: ProtocolSpace[] = [{
     cat1: ['敏捷提升', '力量提升', '意志提升', '智识提升', '主能力提升'],
     cat2: ['攻击提升', '生命提升', '电磁伤害提升', '寒冷伤害提升', '暴击率提升', '终结技效率提升', '法术伤害提升', '治疗效率提升'],
     cat3: ['强攻', '粉碎', '残暴', '医疗', '切骨', '迸发', '夜幕', '流转'],
+}, {
+    name: '清波寨',
+    cat1: ['敏捷提升', '力量提升', '意志提升', '智识提升', '主能力提升'],
+    cat2: ['生命提升', '物理伤害提升', '电磁伤害提升', '寒冷伤害提升', '源石技艺提升', '终结技效率提升', '法术伤害提升', '治疗效率提升'],
+    cat3: ['压制', '粉碎', '昂扬', '巧技', '医疗', '切骨', '迸发', '夜幕'],
 }];
 
 // ATTENTION HARDCODE fix naming inconsitency
@@ -248,6 +264,7 @@ function validate(log: boolean) {
 }
 validate(false);
 
+
 function getCombinations<T>(sequence: T[], length: number): T[][] {
     const result: T[][] = [];
     function backtrack(start: number, current: T[]) {
@@ -267,78 +284,26 @@ function getCombinations<T>(sequence: T[], length: number): T[][] {
     return result;
 }
 
+// frequently used helper functions
+const dedup = <T>(e: T, i: number, a: T[]) => a.indexOf(e) == i;
+const displayAttribute = (a: string) => {
+    const a1 = a.endsWith('提升') ? a.substring(0, a.length - 2) : a;
+    const a2 = a1.endsWith('伤害') ? a1.substring(0, a1.length - 2) : a1;
+    return a2
+        .replace('主能力', '主能')
+        .replace('源石技艺强度', '精通')
+        .replace('终结技充能效率', '充能')
+        .replace('治疗效率', '治疗')
+        .replace('暴击率', '暴击')
+}
+
 // change weapon attribute to only have attribute, strengh is not used in planning
 for (const weapon of AllWeapons) {
     weapon.attributes = weapon.attributes.map(a => a.split('·')[0]);
 }
 // only interested in 5/6 star weapons
 const notAllWeapons = AllWeapons.filter(w => w.attributes?.length && (w.rarity == 5 || w.rarity == 6));
-
-// display all possible weapons per space, then per cat2, then per cat3
-interface PairResult {
-    spacename: string,
-    attribute: string, // selected attribute in cat2 or cat3
-    weapons: WeaponData[], // all weapons in the pair regardless of progress
-    progress: typeof AllProgress,
-    cat1Set: string[],
-    counts?: number[],
-}
-const pairs: PairResult[] = [];
-for (const space of AllSapces) {
-    // cat2 and cat3 handling only differ in filter weapon part, so can merge them together
-    for (const [cat, weapons] of space.cat2.map<[string, WeaponData[]]>(cat2 => [cat2,
-            notAllWeapons.filter(w => space.cat1.includes(w.attributes[0]) && w.attributes[1] == cat2 && space.cat3.includes(w.attributes[2]))])
-        .concat(space.cat3.map(cat3 => [cat3,
-            notAllWeapons.filter(w => space.cat1.includes(w.attributes[0]) && space.cat2.includes(w.attributes[1]) && w.attributes[2] == cat3)])))
-    {
-        weapons.sort((a, b) => a.rarity == b.rarity ? a.name.localeCompare(b.name) : b.rarity - a.rarity);
-        const progress = AllProgress.filter(p => weapons.some(w => w.name == p.name));
-        const cat1Set = weapons.map(w => w.attributes[0]).filter((e, i, a) => a.indexOf(e) == i);
-        if (cat1Set.length <= 3) {
-            pairs.push({ spacename: space.name, attribute: cat, weapons, progress, cat1Set });
-        } else {
-            // find all length 3 combinations of cat1set
-            for (const combination of getCombinations(cat1Set, 3)) {
-                const thisCombinationWeapons = weapons.filter(w => combination.includes(w.attributes[0]));
-                const thisCombinationProgress = progress.filter(p => thisCombinationWeapons.some(w => w.name == p.name));
-                pairs.push({ spacename: space.name, attribute: cat, weapons: thisCombinationWeapons, progress: thisCombinationProgress, cat1Set: combination });
-            }
-        }
-
-    }
-}
-
-for (const pair of pairs) {
-    const { spacename, attribute, weapons, progress, cat1Set } = pair;
-    if (weapons.length) {
-        const remaining6WeaponCount = weapons.filter(w => w.rarity == 6 && !progress.some(p => p.name == w.name)).length;
-        const remainingWeaponCount = weapons.filter(w => !progress.some(p => p.name == w.name)).length;
-        const acquiredWeaponCount = weapons.filter(w => progress.some(p => p.name == w.name)).length;
-        pair.counts = [remaining6WeaponCount, remainingWeaponCount, acquiredWeaponCount];
-    } else {
-        pair.counts = [0, 0, 0];
-    }
-}
-
-// TODO if search for a weapon in process.argv[2], put it at topmost
-// the core operation of "planning" is set priority of the pairs
-pairs.sort((p1, p2) => { 
-    // return p2-p1 means larger first, p1-p2 means smaller first,
-    // or return negative means p1 before p2, positive means p2 before p1
-
-    // first max not acquired 6 star weapon count
-    if (p1.counts[0] != p2.counts[0]) { return p2.counts[0] - p1.counts[0]; }
-    // then max not acquired weapon count
-    if (p1.counts[1] != p2.counts[1]) { return p2.counts[1] - p1.counts[1]; }
-    // then complete weapon count
-    if (p1.weapons.length != p2.weapons.length) { return p2.weapons.length - p1.weapons.length; }
-    // normally by space name and attribute
-    if (p1.spacename != p2.spacename) { return p1.spacename.localeCompare(p2.spacename); }
-    if (p1.attribute != p2.attribute) { return p1.attribute.localeCompare(p2.attribute); }
-    // last regard as same
-    return 0;
-});
-
+// it seems that sort all weapons and display them in order is a good way to find whether a newly acquired essence is fit
 notAllWeapons.sort((w1, w2) => {
     const p1 = AllProgress.find(p => p.name == w1.name);
     const p2 = AllProgress.find(p => p.name == w2.name);
@@ -349,20 +314,171 @@ notAllWeapons.sort((w1, w2) => {
     if (w1.attributes[2] != w2.attributes[2]) { return w1.attributes[2].localeCompare(w2.attributes[2]); }
     return 0;
 });
-for (const weapon of notAllWeapons) {
-    const progress = AllProgress.find(p => p.name == weapon.name);
-    console.log(`${weapon.attributes.join(', ')}: ${weapon.name}${progress?.progress?.join(',') ?? ''}`);
-}
-
-// TODO add output color, highlight numbers
-// highlight weapon names, if have progress, make it gray, if weapon not acquired yet, make it gray
-for (const pair of pairs) {
-    const { spacename, attribute, weapons, progress, cat1Set, counts } = pair;
-    if (weapons.length) {
-        console.log(chalk`${spacename}:${attribute}:${cat1Set.join(',')}: remain6 {green ${counts[0]}} remain {green ${counts[1]}} acquired ${counts[2]}`);
-        const getDisplayProgress = (w: WeaponData) => { const p = progress.find(p => p.name == w.name); return p ? `[${p.progress.join(',')}]` : ''; };
-        console.log(`    ${weapons.map(w => chalk`{cyan ${w.name}}(${w.rarity})${getDisplayProgress(w)}`).join(', ')}`);
-    } else {
-        console.log(`${spacename}:${attribute}: no`);
+function displayAllWeaponAndProgress() {
+    for (const weapon of notAllWeapons) {
+        const progress = AllProgress.find(p => p.name == weapon.name);
+        const displayProgress = progress ? ` [${progress.progress.join(',')}]` : '';
+        console.log(`${weapon.attributes.map(displayAttribute).join(',')}: ${weapon.name}${displayProgress}`);
     }
 }
+
+// display all strategies organized in space-cat3/cat2-cat1 with specific ordering rule
+interface PairResult {
+    spacename: string,
+    attribute: string, // selected attribute in cat2 or cat3
+    cat1Attributes: string[],
+    weapons: WeaponData[], // all weapons in the pair regardless of progress
+    numbers: number[], // numbers later used in sorting
+}
+function score(allProgress: Progress[]): PairResult[] {
+    const notHaveProgress = (w: WeaponData) => !allProgress.some(p => p.name == w.name);
+    const pairs: PairResult[] = [];
+    for (const space of AllSapces) {
+        // cat2 and cat3 handling only differ in filter weapon part, so can merge them together
+        for (const [cat, weapons] of space.cat2.map<[string, WeaponData[]]>(cat2 => [cat2,
+                notAllWeapons.filter(w => space.cat1.includes(w.attributes[0]) && w.attributes[1] == cat2 && space.cat3.includes(w.attributes[2]))])
+            .concat(space.cat3.map(cat3 => [cat3,
+                notAllWeapons.filter(w => space.cat1.includes(w.attributes[0]) && space.cat2.includes(w.attributes[1]) && w.attributes[2] == cat3)])))
+        {
+            // remain 6 first, then remain 5, then progress 6, then progress 5
+            weapons.sort((w1, w2) => {
+                const p1 = allProgress.find(p => p.name == w1.name);
+                const p2 = allProgress.find(p => p.name == w2.name);
+                if (!p1 && p2) { return -1; }
+                if (p1 && !p2) { return 1; }
+                if (w1.rarity != w2.rarity) { return w2.rarity - w1.rarity; }
+                return w1.name.localeCompare(w2.name);
+            });
+            // if cat1 is larger than 3, need to split them
+            const cat1Attributes = weapons.map(w => w.attributes[0]).filter(dedup);
+            if (cat1Attributes.length <= 3) {
+                pairs.push({ spacename: space.name, attribute: cat, cat1Attributes, weapons, numbers: [] });
+            } else {
+                // find all length 3 combinations of cat1set
+                for (const combination of getCombinations(cat1Attributes, 3)) {
+                    const thisCombinationWeapons = weapons.filter(w => combination.includes(w.attributes[0]));
+                    pairs.push({ spacename: space.name, attribute: cat, cat1Attributes: combination, weapons: thisCombinationWeapons, numbers: [] });
+                }
+            }
+
+        }
+    }
+
+    for (const { weapons, numbers } of pairs) {
+        if (!weapons.length) {
+            numbers.push(0, 0, 0, 0, 0, 0);
+        } else {
+            // probability is number of cat1-2-3 combinations in the weapon set, then devided by 24
+            // e.g. 3 weapons have 3 different cat123 combinations, so they have 3/24 probability,
+            //      if 2 weapons are exactly same, they only have 2 different cat123 combinations, so 2/24
+            // this is more reasonable then the previous weapon count strategy
+
+            // this combination count don't need to care about whether this pair comes from cat2 or cat3
+            // because their cat2/cat3 is same, this does not affect the result combination count
+            const remaining6CombinationCount = weapons.filter(w => w.rarity == 6 && notHaveProgress(w)).map(w => w.attributes.join('-')).filter(dedup).length;
+            const remainingCombinationCount = weapons.filter(notHaveProgress).map(w => w.attributes.join('-')).filter(dedup).length;
+            const totalCombinationCount = weapons.map(w => w.attributes.join('-')).filter(dedup).length;
+            const remaining6Count = weapons.filter(w => w.rarity == 6 && notHaveProgress(w)).length;
+            const remainingCount = weapons.filter(notHaveProgress).length;
+            const totalCount = weapons.length;
+            numbers.push(remaining6CombinationCount, remainingCombinationCount, totalCombinationCount, remaining6Count, remainingCount, totalCount);
+        }
+    }
+
+    // TODO if search for a weapon in process.argv[2], put it at topmost
+    // the core operation of "planning" is set priority of the pairs
+    pairs.sort((p1, p2) => { 
+        // return p2-p1 means larger first, p1-p2 means smaller first,
+        // or return negative means p1 before p2, positive means p2 before p1
+        // max prob
+        if (p1.numbers[0] != p2.numbers[0]) { return p2.numbers[0] - p1.numbers[0]; }
+        // max prob include 5
+        if (p1.numbers[1] != p2.numbers[1]) { return p2.numbers[1] - p1.numbers[1]; }
+        // then complete weapon count
+        if (p1.weapons.length != p2.weapons.length) { return p2.weapons.length - p1.weapons.length; }
+        // normally by space name and attribute
+        if (p1.spacename != p2.spacename) { return p1.spacename.localeCompare(p2.spacename); }
+        if (p1.attribute != p2.attribute) { return p1.attribute.localeCompare(p2.attribute); }
+        // last regard as same
+        return 0;
+    });
+    return pairs;
+}
+
+function displayStategy(pairs: PairResult[], allProgress: Progress[], limit: number = 10) {
+    console.log('------------------------------');
+    for (const [pair, pairIndex] of pairs.map((p, i) => [p, i] as const)) {
+        if (pairIndex >= limit) { break; }
+        const { spacename, attribute, weapons, cat1Attributes, numbers } = pair;
+        if (weapons.length) {
+            const placeDisplay = styleText('white', `${spacename}:${displayAttribute(attribute)}:${cat1Attributes.map(displayAttribute).join(',')}`);
+            const mainNumberDisplay = styleText('yellow', numbers[0].toString());
+            const numbersDisplay = styleText('gray', 'prob ') + mainNumberDisplay + styleText('gray', `/${numbers[1]}/${numbers[2]}/24 count ${numbers[3]}/${numbers[4]}/${numbers[5]}`);
+            console.log(`${placeDisplay}: ${numbersDisplay}`);
+
+            let sb = '  ';
+            for (const weapon of weapons) {
+                // rarity gray, progress gray, normal weapon name white, highlight weapon name green
+                const progress = allProgress.find(p => p.name == weapon.name); 
+                sb += styleText(progress ? 'gray' : 'green', weapon.name);
+                sb += styleText(`gray`, `(${weapon.rarity})`);
+                sb += progress ? styleText(`gray`, `[${progress.progress.join(',')}]`) : '';
+                sb += `, `;
+            }
+            sb = sb.substring(0, sb.length - 2);
+            console.log(sb);
+        } else {
+            // console.log(`${spacename}:${attribute}: no`);
+        }
+    }
+}
+
+// displayAllWeaponAndProgress();
+// displayStategy(score(AllProgress), AllProgress);
+
+// total count estimate, seems only can by monte carlo
+// by always choosing the topmost place, and randomly generate 3 essences, display result game count
+function simulate(initialProgress: Progress[]) {
+    let gameCount = 0;
+    let foodCount = 0;
+    const currentProgress = [...initialProgress];
+    while (currentProgress.length != notAllWeapons.length) {
+        const plan = score(currentProgress)[0];
+        gameCount += 1;
+        // console.log(`#${gameCount}(${currentProgress.length}/${notAllWeapons.length}): ` +
+        //     `goto ${plan.spacename}:${displayAttribute(plan.attribute)}:${plan.cat1Attributes.map(displayAttribute).join(',')}`);
+        const space = AllSapces.find(s => s.name == plan.spacename);
+        // if cat1 does not length 3, filling whatever reamin from remaining cat1s
+        const cat1pool = plan.cat1Attributes.length == 3 ? plan.cat1Attributes
+            : plan.cat1Attributes.concat(...new Array(3 - plan.cat1Attributes.length).fill(0).map(_ => space.cat1.filter(c => !plan.cat1Attributes.includes(c))[0]));
+        const fix2 = space.cat2.includes(plan.attribute);
+        const cat23pool = fix2 ? space.cat3 : space.cat2;
+        // console.log(`  cat1pool ${cat1pool} cat23pool ${cat23pool}`);
+        let sb = '  ';
+        for (const [pullAttribute1, pullAttribute23] of [1, 2, 3].map(_ => [cat1pool[randomInt(3)], cat23pool[randomInt(8)]])) {
+            const ding = notAllWeapons.filter(w => !currentProgress.some(p => p.name == w.name))
+                .find(w => w.attributes[0] == pullAttribute1
+                    && w.attributes[1] == (fix2 ? plan.attribute : pullAttribute23)
+                    && w.attributes[2] == (fix2 ? pullAttribute23 : plan.attribute));
+            if (ding) {
+                currentProgress.push({ name: ding.name, progress: [1, 1, 1] });
+            } else {
+                foodCount += 1;
+            }
+            const displayPull = `${displayAttribute(pullAttribute1)}-${displayAttribute(pullAttribute23)}-${displayAttribute(plan.attribute)}`;
+            const displayDing = ding ? styleText('cyanBright', `!!${ding.name}`) : '';
+            sb += `${displayPull}${displayDing}, `;
+        }
+        sb = sb.substring(0, sb.length - 2);
+        // console.log(sb);
+        if (gameCount > 1000) { console.log('>1000??'); displayStategy(score(currentProgress), currentProgress); break; }
+    }
+    console.log(`game count ${gameCount} food count ${foodCount}`);
+    return gameCount;
+}
+
+let totalGameCount = 0;
+for (const _ of new Array(100).fill(0)) {
+    totalGameCount += simulate(AllProgress);
+}
+console.log(`avg ${totalGameCount / 100}`);
