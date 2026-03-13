@@ -99,6 +99,43 @@ WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https:/
 - complete basic data crawling for endfield/essence.py use, this library looks very cool and does not use any external
   library that I kind of want to publish it in a standalone repo
 
+- by the way, the https://npmjs.com/package/webdriver package readme claims that "There are tons of Selenium and
+  WebDriver binding implementations in the Node.js world", and link to a section in the awesome repository
+  https://github.com/christian-bromann/awesome-selenium#javascript, with the background knowledge that selenium is a
+  very old library, click into the links in the section results in...
+  - selenium-webdriver, but this link lead to a wiki page that talking about async related issues and talking about
+    "the next version of javascript, ES2017", its source code is using js, jsdoc and let/const
+  - https://github.com/admc/wd, is last updated 5 years ago, its source code is using js, var? and prototype?
+  - webdriverio
+  - https://zombie.js.org/, repository is archived in 2023, last updated 6 years ago
+  - https://slimerjs.org/, last updated 5 years ago, its source code is using var? and .jsm file extension?
+  - http://nightwatchjs.org/, official site looks modern and repository last updated only last month
+  - https://github.com/karma-runner/karma/ is last updated 2 years ago and declared deprecated in readme
+  - https://angular.github.io/protractor/ is declared end of life in 2023, repository is archived in 2024
+  - https://codecept.io/ is declaring First AI-powered testing framework 🪄 on its website, looks most up to date
+  so this judgement in the package readme is also deprecated
+- only selenium and webdriver io supports bidi, selenium is js and does not have type definitions, wdio have type
+  definitions but is
+  - merging the module part into type name, result in confusing type names like BrowsingContextBrowsingContext,
+    while mine is using the exactly same browsingContext.BrowsingContext
+  - use JsInt and JsUint, which is very confusing for javascript users that why a type need to start with js,
+    mine is using more natural int and uint
+  - float and text is directly replaced with number and string
+  - concrete command type is extending the Command type, which is very confusing because the Command type is the
+    outmost type to be sent in websocket connection, which is more confusing that their code generation logic is
+    correctly handling normal spread members but special handle the Command type in this way, my Command type is
+    extending all concrete command types, which is a lot more reasonable
+  - support multiple protocols so some of the hinted properties and member functions of the main client/browser object
+    is actually not there in runtime, which is very confusing, mine is the thinest wrapper over the protocol, which
+    will not lie in the type hints
+  they declared "This binding is the most non-opinionated", now I would like to declare mine is the most unopinionated
+- all of the libraries are unit test oriented, by the way, playwright is not included in the list, it is also a unit
+  test library
+- ask ai about no unit test library but data crawling library, beside scrapy there is nodejs
+  crawlee https://crawlee.dev and find that scrapy is an html-era data crawling tool and not suitable for single page
+  applications, and I assume use plugins still does not suit because scrapy is designed to work with static html,
+  investigate that later if needed
+
 ### Visualization
 
 - The browser need to run headless in container, it will be good if the work process can be visualized in gui

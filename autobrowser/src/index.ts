@@ -359,12 +359,12 @@ async function delay(seconds: number) {
 // 3. insert session id and page id in this source code
 // 4. open devtools frontend url
 
-const client = new Client('ecd2967443fd88a251e3d560b8125305');
+const client = new Client('3e1d7b6e1d02dedc13f552695d65c740');
 await client.connect();
 console.log(`connection open attach session ${client.raw.sessionId}`);
 console.log(`driver status ${JSON.stringify(await client.driverStatus())}`);
 
-client.setPageId('26331E23D933DE276760821540BC5D4C');
+client.setPageId('A2EE4528B46AA95FF5404DC856E0533D');
 console.log(`attach page ${client.pageId}`);
 // main page
 // console.log(await client.navigate('https://wiki.skland.com', 'interactive'));
@@ -431,6 +431,7 @@ async function collectWeapons() {
         if (!entry) {
             console.log(`create new entry for previously unknown weapon ${weaponName}`);
             entry = { name: weaponName, rarity: undefined, attributes: undefined };
+            weapondata.push(entry);
         }
 
         // rarity can be found by decoration style
@@ -456,6 +457,7 @@ async function collectWeapons() {
         if (!elementsAreValid) {
             await client.waitElements(selectors.cardContainer, 10);
             cardElements = await client.querySelectorAll(selectors.card, { maxDepth: 3 });
+            elementsAreValid = true;
         }
 
         const cardElement = cardElements[cardIndex];
@@ -477,6 +479,7 @@ async function collectWeapons() {
         console.log(`click into ${weaponName}`);
         await client.call(remoteFunctions.scrollIntoView, [cardElement]);
         await client.click(cardElement);
+        elementsAreValid = false;
 
         // search for attributes
         const attributes: string[] = [];
