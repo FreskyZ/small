@@ -1,11 +1,12 @@
-## My Development Containers
+## My Development Environment
 
-currently contains
+some of my development environment based on docker
 
-- a base image that includes shell and git setup, works as a base interactive environment to run other tools and vscode
+- a base image that includes shell setup, works as a base interactive environment to run other tools and vscode
 - a node image for node
 - a rust image for rust
-- an ssh image that ssh connect
+- a python image for python
+- an llvm image for llvm
 
 ### Setup
 
