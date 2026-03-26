@@ -1,4 +1,3 @@
-
 ## Windows Side Development Environment Containerization
 
 use Hyper-V should be more performance and easier to automate than VMware or VirtualBox
