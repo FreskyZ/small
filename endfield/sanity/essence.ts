@@ -30,7 +30,7 @@ const AllProgress: Progress[] = [
     { name: '显赫声名', progress: [1, 1, 1] },
     { name: 'O.B.J.迅极', progress: [1, 1, 1] },
     { name: '探骊', progress: [1, 1, 1] },
-    { name: '重点之声', progress: [1, 1, 1] },
+    { name: '终点之声', progress: [1, 1, 1] },
     // { name: '', progress: [1, 1, 1] },
 ];
 // NOTE this progress list precisely represent my overall progress
@@ -264,7 +264,6 @@ function validate(log: boolean) {
 }
 validate(false);
 
-
 function getCombinations<T>(sequence: T[], length: number): T[][] {
     const result: T[][] = [];
     function backtrack(start: number, current: T[]) {
@@ -433,8 +432,8 @@ function displayStategy(pairs: PairResult[], allProgress: Progress[], limit: num
     }
 }
 
-// displayAllWeaponAndProgress();
-// displayStategy(score(AllProgress), AllProgress);
+displayAllWeaponAndProgress();
+displayStategy(score(AllProgress), AllProgress, 100);
 
 // total count estimate, seems only can by monte carlo
 // by always choosing the topmost place, and randomly generate 3 essences, display result game count
@@ -477,8 +476,10 @@ function simulate(initialProgress: Progress[]) {
     return gameCount;
 }
 
-let totalGameCount = 0;
-for (const _ of new Array(100).fill(0)) {
-    totalGameCount += simulate(AllProgress);
-}
-console.log(`avg ${totalGameCount / 100}`);
+// TODO node essence.ts weapon(s) w1,w2,w3 space s1 attribute 附术 limit 10 simulate 100
+
+// let totalGameCount = 0;
+// for (const _ of new Array(100).fill(0)) {
+//     totalGameCount += simulate(AllProgress);
+// }
+// console.log(`avg ${totalGameCount / 100}`);

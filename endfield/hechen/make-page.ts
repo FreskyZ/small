@@ -94,6 +94,17 @@ function collectItems(raw: string, strings: Record<string, string>): ItemData[] 
         }
     }
 
+    // ATTENTION TEMP manual input data before reliable data source setup
+    // bottles later, that's not useful for me for now
+    for (const itemName of ['壤晶废液', '惰性壤晶废液', '污水', '赤铜块', '壤晶', '赤铜零件', '赤铜装备原件', '中容武陵电池', '赤铜矿']) {
+        items.push({
+            id: `item_${itemName}`, // 你知道吗，现在的程序其实不反对id是中文（
+            name: itemName,
+            pinyin: 'newitem', // use this to easy search for now
+            desc: ['手抄的，等以后自动了才有描述信息', ''],
+        })
+    }
+
     items.sort((a, b) => a.id.localeCompare(b.id));
     return items;
 }
@@ -169,6 +180,11 @@ function collectMachines(raw: string, strings: Record<string, string>): MachineD
         }
         machines.push({ id: rawMachine.id, name, desc, power: rawMachine.powerConsume, size: [rawMachine.range.depth, rawMachine.range.width] });
     }
+
+    // ATTENTION TEMP manual input data before reliable data source setup
+    // ['壤晶废液', '惰性壤晶废液', '污水', '赤铜块', '壤晶', '赤铜零件', '赤铜装备原件', '中容武陵电池', '赤铜矿']
+    machines.push({ id: `feiyetong_1`, name: '废水处理机', desc: '', power: 50, size: [3, 3] });
+
     return machines;
 }
 
@@ -262,6 +278,50 @@ function collectRecipes(raw: string, strings: Record<string, string>, items: Ite
         sb += ` [${recipe.id}]`;
         // console.log(sb);
     }
+
+    // ATTENTION TEMP manual input data before reliable data source setup
+    // ['壤晶废液', '惰性壤晶废液', '污水', '赤铜块', '壤晶', '赤铜零件', '赤铜装备原件', '中容武陵电池', '赤铜矿']
+    // {"id":"winder_1","name":"装备原件机","desc":"能够将不同材料嵌合加工成装备原件的设备。","power":10,"size":[4,6]},
+    // {"id":"furnance_1","name":"精炼炉","desc":"使用高温熔炼其他材料的设备。","power":5,"size":[3,3]},
+    // {"id":"planter_1","name":"种植机","desc":"能够培育各类普通植物的仓形设备。","power":20,"size":[5,5]},
+    // {"id":"filling_powder_mc_1","name":"灌装机","desc":"能够将原料灌装到容器的设备。","power":20,"size":[4,6]},
+    // {"id":"thickener_1","name":"研磨机","desc":"可以对粉末材料进行细致研磨处理的设备。","power":50,"size":[4,6]},
+    // {"id":"grinder_1","name":"粉碎机","desc":"能粉碎各种材料的重型设备。","power":5,"size":[3,3]},
+    // {"id":"component_mc_1","name":"配件机","desc":"能够加工各式零件的平台。","power":20,"size":[3,3]},
+    // {"id":"dismantler_1","name":"拆解机","desc":"用于进行物理分拆的设备。","power":20,"size":[4,6]},
+    // {"id":"tools_assebling_mc_1","name":"封装机","desc":"用于封装部分能量元件的设备。","power":20,"size":[4,6]},
+    // {"id":"xiranite_oven_1","name":"天有洪炉","desc":"用于息壤相关产物合成的设备。","power":50,"size":[5,5]},
+    // {"id":"shaper_1","name":"塑形机","desc":"能够冲压各种容器的设备。","power":10,"size":[3,3]},
+    // {"id":"seedcollector_1","name":"采种机","desc":"能够采集普通植物种子的设备。","power":10,"size":[5,5]},
+    // {"id":"mix_pool_1","name":"反应池","desc":"进行固液体化学反应的设备。","power":50,"size":[5,5]},
+    // machines.push({ id: `feiyetong_1`, name: '废水处理机', desc: '', power: 50, size: [3, 3] });
+    recipes.push({ id: '污水处理', name: '污水处理', machineId: 'mix_pool_1', time: 2,
+        ingredients: [{ id: 'item_liquid_xiranite', count: 1 }, { id: 'item_污水', count: 1}], 
+        products: [{ id: 'item_壤晶废液', count: 1 }, { id: 'item_惰性壤晶废液', count: 1 }],
+    }, { id: '变废为宝', name: '变废为宝', machineId: 'mix_pool_1', time: 2,
+        ingredients: [{ id: 'item_壤晶废液', count: 2 }, { id: 'item_iron_powder', count: 1 }],
+        products: [{ id: 'item_壤晶', count: 1 }, { id: 'item_污水', count: 1 }],
+    }, { id: '丢掉壤晶废液', name: '丢掉壤晶废液', machineId: 'feiyetong_1', time: 2,
+        ingredients: [{ id: 'item_壤晶废液', count: 1 }],
+        // empty products recipes does not display in normal tree, and is not included in possible products
+        // it is literally hidden in current design
+        // TODO handle this type of empty product
+        // so skip other 2 discard recipes here because I'm using hand to copy that(
+        products: [],
+    }, { id: '赤铜粉末', name: '赤铜粉末', machineId: 'grinder_1', time: 2,
+        ingredients: [{ id: 'item_赤铜矿', count: 1 }],
+        products: [{ id: 'item_赤铜粉末', count: 1 }],
+    }, { id: '赤铜零件', name: '赤铜零件', machineId: 'component_mc_1', time: 2,
+        ingredients: [{ id: 'item_赤铜矿', count: 1 }],
+        products: [{ id: 'item_赤铜零件', count: 1 }],
+    }, { id: '赤铜装备原件', name: '赤铜装备原件', machineId: 'winder_1', time: 10,
+        ingredients: [{ id: 'item_赤铜零件', count: 10 }, { id: 'item_xiranite_powder', count: 10 }],
+        products: [{ id: 'item_赤铜装备原件', count: 1 }],
+    }, { id: '中容武陵电池', name: '中容武陵电池', machineId: 'tools_assebling_mc_1', time: 10,
+        ingredients: [{ id: 'item_壤晶', count: 5 }, { id: 'item_originium_enr_powder', count: 20 }],
+        products: [{ id: 'item_中容武陵电池', count: 1 }],
+    });
+
     return recipes;
 }
 
