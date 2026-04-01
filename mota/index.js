@@ -1,15 +1,16 @@
 import fs from 'node:fs/promises';
-import mysql from 'mysql2/promise';
-import { authenticator } from 'otplib';
+import pg from 'pg';
+import { generate } from 'otplib';
+import { getRemainingTime } from '@otplib/totp';
+import { crypto } from '@otplib/plugin-crypto-node';
 
-// node akari.ts upload yatc/index.pub.html public/yatc.html
-// node akari.ts upload yatc/index.app.html static/yatc.html
-// node akari.ts upload yatc/indx.js servers/yatc.js
+// ATTENTION this code is updated to otplib@13
+// but not tested, need setup and test if need to use in future
 
 // use this to export from google authenticator https://github.com/krissrex/google-authenticator-exporter
 
-// CREATE TABLE `OneTimes` (`Name` VARCHAR(100), `Value` VARCHAR(100));
-const pool = mysql.createPool(JSON.parse(await fs.readFile('config', 'utf-8')).database);
+// CREATE TABLE "secrets" ("name" VARCHAR(100), "value" VARCHAR(100));
+const pool = pg.createPool(JSON.parse(await fs.readFile('/etc/fine/config.json', 'utf-8')).database);
 class MyError extends Error {
     // fine error middleware need this to know this is known error type
     name = 'FineError';
@@ -24,7 +25,7 @@ export async function dispatch(ctx) {
     const [values] = await pool.query("SELECT `Value` FROM `OneTimes` WHERE `Name` = ?", [name]);
     if (!values || values.length == 0) { return { error: new MyError('common', `invalid name`) }; }
 
-    const time = authenticator.timeRemaining();
-    const code = authenticator.generate(values[0].Value);
+    const time = getRemainingTime();
+    const code = generate({ secret: values[0].Value, crypto });
     return { body: { code, time } };
 }

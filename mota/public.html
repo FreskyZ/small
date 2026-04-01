@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MOTA</title>
+</head>
+<body style="background-color:#f3f3f3;font-family:'Segoe UI',Roboto,sans-serif;">
+  <div style="position:fixed;left:8px;top:8px;">
+    <div style="font-family:Georgia,'Times New Roman',Times,serif;font-size:24px;font-style:italic;font-weight:600;text-decoration:none;"><a href='#'>MOTA</a></div>
+    <div style="font-size:10px;color:#666">Mota is my OTp Application.</div>
+  </div>
+  <div style="position:absolute;top:50%;left:50%;transform:translate(-50%, -50%);text-align:center;">
+    <input type="text" id="input">
+    <span id="code" style="margin-left:4px"></span>
+    <span id="time" style="margin-left:4px"></span>
+    <button id="copy" style="border:none;outline:none;cursor:pointer;">COPY</button>
+  </div>
+
+  <script type="module">
+    import { generate } from 'https://esm.sh/otplib@13.4.0';
+    import { createGuardrails } from 'https://esm.sh/@otplib/core@13.4.0';
+    import { getRemainingTime } from 'https://esm.sh/@otplib/totp@13.4.0';
+
+    const inputElement = document.querySelector('input#input');
+    const codeElement = document.querySelector('span#code');
+    const timeElement = document.querySelector('span#time');
+    const buttonElement = document.querySelector('button#copy');
+    const query = new URLSearchParams(window.location.search);
+    if (query.has('k')) { inputElement.value = query.get('k'); }
+
+    inputElement.addEventListener('keydown', async e => {
+      if (e.key == 'Enter') {
+        timeElement.textContent = `${getRemainingTime()}s`;
+        codeElement.textContent = await generate({
+          secret: inputElement.value,
+          // amazingly github is generating 16 char secret in 2026
+          guardrails: createGuardrails({ MIN_SECRET_BYTES: 10 }),
+        });
+      }
+    });
+    buttonElement.addEventListener('click', () => {
+      navigator.clipboard.writeText(codeElement.textContent);
+    });
+  </script>
+</body>
+</html>
