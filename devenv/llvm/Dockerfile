@@ -92,7 +92,7 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm-stage2 --tag my/llvm:stage2 .
+# docker build --target llvm-stage2 --tag my/llvm:1 .
 FROM alpine:3.23.3 AS llvm-stage2
 
 # # why is previous stage unexpectedly cache miss?
@@ -117,6 +117,7 @@ RUN apk add --no-cache libstdc++ libgcc musl-dev libatomic cmake ninja git zlib-
 # - clang-tools-extra: build clangd and clang-tidy by the way
 # - no need CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, there is no gcc but only clang in PATH
 # - LLVM_ENABLE_LIBCXX was investigated, seems not needed
+# - LLVM_BUILD_LLVM_DYLIB dynamic library required in postgres -Dllvm
 # - add more j because clang and llvm use less memory
 RUN <<RUNEOF
 set -ex
@@ -137,6 +138,7 @@ cat <<'CATEOF' > /llvm-src/llvm/CMakePresets.json
         "LLVM_ENABLE_RUNTIMES": "compiler-rt;libcxx;libcxxabi;libunwind",
         "LLVM_TARGETS_TO_BUILD": "X86",
         "LLVM_DEFAULT_TARGET_TRIPLE": "x86_64-alpine-linux-musl",
+        "LLVM_BUILD_LLVM_DYLIB": true,
         "LLVM_INCLUDE_TESTS": false,
         "LLVM_INCLUDE_EXAMPLES": false,
         "CLANG_DEFAULT_CXX_STDLIB": "libc++",
@@ -181,8 +183,8 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm --tag my/llvm:1 .
-FROM my/shell:1 AS llvm
+# docker build --target llvm-shell --tag my/llvm-shell:1 .
+FROM my/shell:1 AS llvm-shell
 
 COPY --from=my/llvm:stage2 /llvm-install /usr/local
 
