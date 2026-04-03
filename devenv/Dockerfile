@@ -1,47 +1,57 @@
 # ?syntax=docker/dockerfile:1
 
-# =================================================
-# basic shell experience
-# docker build --target shell --tag my/shell:1 .
-FROM alpine:3.23.3 AS shell
+# build minimal omz, why do omz repository contains so many not used files?
+#   builtin plugins directory is about 10mb and contains 2 large images files 1mb per file
+#   this is nearly same size as alpine rootfs itself and zsh program itself
+# - this stage build a /omz file remove not used files,
+# - does not contain zsh program, need setup mirror, apk update and apk add zsh
+# - contain my custom .zshrc by the way, when import in other stage, move .zshrc out of the folder
+FROM alpine:3.23.3 AS ohmyzsh-build
 
-# $ git clone git@github.com:ohmyzsh/ohmyzsh --depth 1
-# $ tar -cJf ohmyzsh.tar.xz -C /tmp/ohmyzsh .
-# if git clone have network issue, download the ohmyzsh-master.zip file from webpage
-# while ADD does not extract zip file, so
-# $ unzip ohmyzsh-master.zip -d /tmp/omhyzsh
-# $ tar -cJf ohmyzsh.tar.xz -C /tmp/ohmyzsh/ohmyzsh-master .
-# $ rm -rf /tmp/ohmyzsh
-ADD --chown=0 ohmyzsh.tar.xz /root/.omz
+# git clone git@github.com:ohmyzsh/ohmyzsh
+ADD --chown=0 ohmyzsh.tar.xz /build
 
-# # a simple 2-liner for other environments by the way
-# echo https://mirrors.aliyun.com/alpine/v3.23/main > /etc/apk/repositories
-# echo https://mirrors.aliyun.com/alpine/v3.23/community >> /etc/apk/repositories
-
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
-cat <<'CATEOF' > /etc/apk/repositories
-https://mirrors.aliyun.com/alpine/v3.23/main
-https://mirrors.aliyun.com/alpine/v3.23/community
-CATEOF
-apk update
-apk add zsh --no-cache
-# chsh not available in alpine, have to edit /etc/passwd directly
-sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/zsh#' /etc/passwd
-# note this cd does not affect following layers
-cd /root/.omz
+cd /build
+# clear
+rm -rf .github
+rm -rf .devcontainer
+rm -rf templates
+rm -rf themes
+# recreate themes folder in case some code relies on it exist
+mkdir themes
+rm CODE_OF_CONDUCT.md
+rm CONTRIBUTING.md
+rm LICENSE.txt
+rm README.md
+rm SECURITY.md
+rm .editorconfig
+rm .gitignore
+rm .prettierrc
+rm custom/example.zsh
+rm -rf custom/plugins/example
+rm custom/themes/example.zsh-theme
+# select builtin plugins to use
+mkdir selected-plugins
+mv plugins/z selected-plugins/z
+rm -rf plugins
+mv selected-plugins plugins
+# why do z have this large image file?
+rm -rf plugins/z/img
+rm plugins/z/LICENSE
+rm plugins/z/MANUAL.md
+rm plugins/z/README.md
 # my theme
-cat <<'CATEOF' > custom/themes/mytheme.zsh-theme
+cat <<'EOCAT' > custom/themes/mytheme.zsh-theme
 PROMPT="[%{$fg_bold[black]%}%n@%m%{$reset_color%}:%{$fg_bold[blue]%}%~%{$reset_color%}]%{$fg[green]%}
-%(?,🐋,🐋💔) %# %{$reset_color%}"
+%(?,🐋😘,🐋💔) %# %{$reset_color%}"
 RPROMPT='%(?,,%{$fg[red]%}%?!%{$reset_color%}) %{$fg[green]%}%* %D%{$reset_color%}'
-CATEOF
-# note this cd does not affect following layers
-cd /root
+EOCAT
 # create .zshrc
-# the default template of .zshrc is long, but only contains 4 non comment lines
+# the default template of .zshrc is long, but only contains 4 important lines
 # see minimized version https://github.com/ohmyzsh/ohmyzsh/blob/master/templates/minimal.zshrc
-cat <<'CATEOF' > .zshrc
+cat <<'EOCAT' > .zshrc
 export ZSH="$HOME/.omz"
 ZSH_THEME="mytheme"
 # disable auto update
@@ -50,10 +60,32 @@ plugins=(z)
 source $ZSH/oh-my-zsh.sh
 alias cls="clear"
 alias sl="ls -hlLF --group-directories-first"
-CATEOF
-# clear remaining files
-rm -rf /build
-RUNEOF
+EOCAT
+EORUN
+
+# =================================================
+# basic shell experience
+# docker build --target shell --tag my/shell:1 .
+FROM alpine:3.23.3 AS shell
+
+COPY --from=ohmyzsh-build /build /root/.omz
+
+RUN <<EORUN
+set -ex
+# # or a simple 2-liner for other environments by the way
+# echo https://mirrors.aliyun.com/alpine/v3.23/main > /etc/apk/repositories
+# echo https://mirrors.aliyun.com/alpine/v3.23/community >> /etc/apk/repositories
+cat <<'EOCAT' > /etc/apk/repositories
+https://mirrors.aliyun.com/alpine/v3.23/main
+https://mirrors.aliyun.com/alpine/v3.23/community
+EOCAT
+apk update
+apk add zsh --no-cache
+# chsh not available in alpine, have to edit /etc/passwd directly
+sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/zsh#' /etc/passwd
+# setup .zshrc
+mv /root/.omz/.zshrc /root
+EORUN
 
 WORKDIR /root
 ENTRYPOINT ["/bin/zsh"]
@@ -64,7 +96,7 @@ ENTRYPOINT ["/bin/zsh"]
 # occassionally rerun apt update: docker build --no-cache --target ubuntu --tag my/ubuntu:24.04 .
 FROM ubuntu:24.04 AS ubuntu
 
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
 # you need update-ca-certificates to use https mirror, you need apt update to update-ca-certificates?
 apt-get update
@@ -72,76 +104,70 @@ apt-get install -y ca-certificates --no-install-recommends
 update-ca-certificates
 sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
 apt-get update
-RUNEOF
+EORUN
 
 # ==================================================
 # a debian image with apt source configured
 # docker build --target debian --tag my/debian:13.4 .
 FROM debian:13.4-slim AS debian
 
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
 apt-get update
 apt-get install -y ca-certificates --no-install-recommends
 update-ca-certificates
 sed -i 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources
 apt-get update
-RUNEOF
+EORUN
 
 # ===============================================
 # dev environment node was using stable, but it seems no need to use stable
 # for not-that-require-stable projects, if really need stable in future, add another node:stable for stable
+# TODO why is this a lot larger than node-alpine?
+# see https://github.com/nodejs/docker-node/blob/main/25/alpine3.23/Dockerfile, this is easily build from source, try
 # docker build --target node --tag my/node:1 .
-FROM my/shell:1 AS node
+FROM alpine:3.23.3 AS node-build
 
+ARG NODE_VERSION=25.8.2
 # this is learned from node official image source code,
 # see https://github.com/nodejs/docker-node/blob/main/24/alpine3.22/Dockerfile
 # currently it is simply an extraction of prebuilt archive
 # but the archive's download link is currently very slow on all my environments,
 # so it is manually downloaded from my fastest channel and put here
 # https://unofficial-builds.nodejs.org/download/release/v24.11.0/node-v24.11.0-linux-x64-musl.tar.xz
-ADD node-v25.8.2-linux-x64-musl.tar.xz /build
+ADD node-v${NODE_VERSION}-linux-x64-musl.tar.xz /build
 
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
+mv /build/node-v${NODE_VERSION}-linux-x64-musl /build/node
+cd /build/node
+# according to the official implementation,
+# delete folders in include/node/openssl/archs other than linux-x86_64
+# # by the way, the bin/node is 125m ???, the archs folder is 68m, the total uncompress size is 212m
+mv include/node/openssl/archs/linux-x86_64 /tmp/linux-x86_64
+rm -rf include/node/openssl/archs
+mkdir include/node/openssl/archs
+mv /tmp/linux-x86_64 include/node/openssl/archs/linux-x86_64
+# remove the outside text files by the way
+rm README.md LICENSE CHANGELOG.md
+EORUN
+
+# copy previous stage result, or else the image size will reach 500m
+# currently this image is 308m, kind of a little more similar to official node:alpine 238m
+FROM my/shell:1 AS node
+
+ARG NODE_VERSION=25.8.2
+COPY --from=node-build /build/node /usr/local
+
+RUN <<EORUN
 # libstdc++: nodejs runtime dependency
 apk add --no-cache libstdc++
-# currently in alpine /usr/local is empty so can directly overwrite
-rm -rf /usr/local
-mv /build/node-v25.8.2-linux-x64-musl /usr/local
-# according to the official implementation,
-# delete folders in /usr/local/include/node/openssl/archs other than linux-x86_64
-# # by the way, the /usr/local/bin/node is 125m ???, the archs folder is 68m, the total uncompress size is 212m
-mv /usr/local/include/node/openssl/archs/linux-x86_64 /tmp/linux-x86_64
-rm -rf /usr/local/include/node/openssl/archs
-mkdir /usr/local/include/node/openssl/archs
-mv /tmp/linux-x86_64 /usr/local/include/node/openssl/archs/linux-x86_64
-# remove the outside text files by the way
-rm /usr/local/README.md /usr/local/LICENSE /usr/local/CHANGELOG.md
-rm -rf /build
 # update npm self version if need
 npm install -g npm@latest
 # smoke test
 node --version
 npm --version
-RUNEOF
-
-# NOTE backup a node setup for ubuntu by the way
-
-# https://nodejs.org/dist/latest/node-v25.7.0-linux-x64.tar.xz
-# RUN <<RUNEOF
-# set -ex
-# apt-get install -y --no-install-recommends curl libatomic1
-# cp -rvpf /build/node-v25.7.0-linux-x64/. /usr/local
-# # remove the outside text files by the way
-# rm /usr/local/README.md /usr/local/LICENSE /usr/local/CHANGELOG.md
-# rm -rf /build
-# # update npm self version if need
-# npm install -g npm@latest
-# # smoke test
-# node --version
-# npm --version
-# RUNEOF
+EORUN
 
 # ==============================================
 # docker build --target python --tag my/python:1 .
