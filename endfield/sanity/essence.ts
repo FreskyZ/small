@@ -31,6 +31,10 @@ const AllProgress: Progress[] = [
     { name: 'O.B.J.迅极', progress: [1, 1, 1] },
     { name: '探骊', progress: [1, 1, 1] },
     { name: '终点之声', progress: [1, 1, 1] },
+    { name: '同类相食', progress: [1, 1, 1] },
+    { name: '艺术暴君', progress: [1, 1, 1] },
+    { name: '光荣记忆', progress: [1, 1, 2] },
+    { name: '狼之绯', progress: [1, 1, 1] },
     // { name: '', progress: [1, 1, 1] },
 ];
 // NOTE this progress list precisely represent my overall progress

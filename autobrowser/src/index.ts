@@ -353,18 +353,13 @@ async function delay(seconds: number) {
 // - check webdriver classic api localhost:8004/status and localhost:8004/session/{sessionId}/window/handles
 // - delete session? curl -X DELETE localhost:8004/session/{sessionId}
 
-// 1. createSession
 // await createSession();
-// 2. get page id: curl localhost:8002/json/list
-// 3. insert session id and page id in this source code
-// 4. open devtools frontend url
-
-const client = new Client('3e1d7b6e1d02dedc13f552695d65c740');
+const client = new Client('cf9b2093d6e99510602fc429e09c6eb2');
 await client.connect();
 console.log(`connection open attach session ${client.raw.sessionId}`);
 console.log(`driver status ${JSON.stringify(await client.driverStatus())}`);
 
-client.setPageId('A2EE4528B46AA95FF5404DC856E0533D');
+client.setPageId('72970426ECAC1936F8B69BF1CFDB291E');
 console.log(`attach page ${client.pageId}`);
 // main page
 // console.log(await client.navigate('https://wiki.skland.com', 'interactive'));
@@ -390,7 +385,15 @@ const remoteFunctions = {
         // ATTENTION this is remote function cannot reference variables here
         for (const documentWrapperElement of Array.from(document.querySelectorAll('div.Document__Wrapper-eLvDYV'))) {
             if ((documentWrapperElement?.childNodes[0]?.childNodes[0]?.childNodes[0] as HTMLSpanElement)?.innerText == '属性能力') {
-                return [2, 5, 8].map(i => (documentWrapperElement.childNodes[i]?.childNodes[0]?.childNodes[0] as HTMLSpanElement)?.innerText);
+                return [2, 5, 8].map(i => {
+                    const lastContainer = documentWrapperElement.childNodes[i]?.childNodes[0];
+                    if (i == 8) {
+                        return lastContainer && lastContainer.children.length > 1
+                            ? `${lastContainer.children[0].innerText}${lastContainer.children[1].innerText}` : null;
+                    } else {
+                        return (documentWrapperElement.childNodes[i]?.childNodes[0]?.childNodes[0] as HTMLSpanElement)?.innerText;
+                    }
+                });
             }
         }
     }).toString(),
@@ -417,12 +420,12 @@ async function collectWeapons() {
     // name and rarity is available in returned node infomation
     for (const cardElement of cardElements) {
         const children = cardElement?.value?.children?.[0]?.value?.children;
-        if (!children || children.length != 4) {
+        if (!children || (children.length != 4 && children.length != 5)) {
             console.log(`card element unexpected layout`, JSON.stringify(cardElement, undefined, 2));
             continue;
         }
 
-        const weaponName = children[3]?.value?.children?.[0]?.value?.nodeValue?.trim();
+        const weaponName = children[children.length - 1]?.value?.children?.[0]?.value?.nodeValue?.trim();
         if (!weaponName) {
             console.log(`card element not found name in children[3].innerText`, JSON.stringify(cardElement, undefined, 2));
             continue;
@@ -436,7 +439,7 @@ async function collectWeapons() {
 
         // rarity can be found by decoration style
         if (!entry.rarity) {
-            const classname = children[2]?.value?.attributes?.['class'];
+            const classname = children[children.length - 2]?.value?.attributes?.['class'];
             if (classname && typeof classname == 'string') {
                 const classnames = classname.split(' ');
                 const rarity = selectors.rarityClasses.find(([c]) => classnames.includes(c))?.[1];
@@ -461,7 +464,8 @@ async function collectWeapons() {
         }
 
         const cardElement = cardElements[cardIndex];
-        const weaponName = cardElement?.value?.children?.[0]?.value?.children?.[3]?.value?.children?.[0]?.value?.nodeValue?.trim();
+        const children1 = cardElement?.value?.children?.[0]?.value?.children;
+        const weaponName = children1 ? children1[children1.length - 1]?.value?.children?.[0]?.value?.nodeValue?.trim() : null;
         if (!weaponName) {
             console.log(`weapon index ${cardIndex} not found weapon name?`, JSON.stringify(cardElement, undefined, 2));
             continue;

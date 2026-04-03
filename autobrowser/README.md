@@ -1,5 +1,16 @@
 # Browser Automation
 
+Current workflow:
+
+- copy weapon.json into autobrowser folder if not exist is not same as endfield/sanity/weapon.json
+- start browser: docker run -d -p8002:8002 -p8004:8004 --rm --name browser1 my/browser:1
+- start node shell: docker run -it -v.:/work --rm --name browsernode1 -h BROWSER-NODE -w /work --network host my/node:1
+- uncomment createSession in index.ts, run node index.ts, copy session id into index.ts, comment createSession
+- get page id by curl localhost:8002/json/list, copy page id into index.ts, open devtools frontend url in windows browser
+  http://localhost:8002/devtools/inspector.html?ws=localhost:8002/devtools/page/{pageid}
+- navigate to https://wiki.skland.com/endfield/catalog?typeMainId=1&typeSubId=2
+- run index.ts
+
 ### Motivation
 
 First, I need to develop tools for Arknights: Endfield, see ../endfield
@@ -187,16 +198,3 @@ WebDriver BiDi protocol (bidi), https://github.com/w3c/webdriver-bidi or https:/
 - by the way, remove --remote-debugging-address,
   discussion https://issues.chromium.org/issues/327558594
   commit https://github.com/chromium/chromium/commit/6fee475feb9bc9aaded8f9b6443d18edb22de86b
-
-### Current Setup
-
-- container startup
-  - start webdriver to listen to 8003
-  - start socat to cat 8003 and 8004 for webdriver
-  - start socat to cat 8001 and 8002 for later browser debugging port
-- in node container
-  - run -keeper, create new session
-  - browser startup, remote debugging port open
-  - run -repl, create page
-  - use page id to open devtools frontend url
-  - interactive load data from the page
