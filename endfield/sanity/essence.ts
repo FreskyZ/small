@@ -14,7 +14,7 @@ interface Progress {
     progress: [number, number, number],
 }
 const AllProgress: Progress[] = [
-    { name: '宏愿', progress: [3, 2, 1] },
+    { name: '宏愿', progress: [3, 2, 2] },
     { name: '遗忘', progress: [2, 1, 1] },
     { name: 'J.E.T.', progress: [2, 1, 1] },
     { name: '大雷斑', progress: [1, 1, 2] },
@@ -32,9 +32,19 @@ const AllProgress: Progress[] = [
     { name: '探骊', progress: [1, 1, 1] },
     { name: '终点之声', progress: [1, 1, 1] },
     { name: '同类相食', progress: [1, 1, 1] },
-    { name: '艺术暴君', progress: [1, 1, 1] },
+    { name: '艺术暴君', progress: [1, 1, 2] },
     { name: '光荣记忆', progress: [1, 1, 2] },
     { name: '狼之绯', progress: [1, 1, 1] },
+    { name: '不知归', progress: [2, 1, 1] },
+    { name: '赫拉芬格', progress: [1, 1, 1] },
+    { name: '作品：蚀迹', progress: [1, 1, 1] },
+    { name: '楔子', progress: [2, 1, 1] },
+    { name: '典范', progress: [1, 1, 1] },
+    { name: '扶摇', progress: [1, 3, 2] },
+    { name: '落草', progress: [1, 1, 2] },
+    { name: '望乡', progress: [1, 1, 1] },
+    { name: '昔日精品', progress: [1, 3, 1] },
+    { name: '庄方宜专武', progress: [1, 1, 1] },
     // { name: '', progress: [1, 1, 1] },
 ];
 // NOTE this progress list precisely represent my overall progress
@@ -53,7 +63,7 @@ interface ProtocolSpace {
     cat2: string[],
     cat3: string[],
 }
-const AllSapces: ProtocolSpace[] = [{
+const AllSpaces: ProtocolSpace[] = [{
     name: '枢纽区',
     cat1: ['敏捷提升', '力量提升', '意志提升', '智识提升', '主能力提升'],
     cat2: ['攻击提升', '灼热伤害提升', '电磁伤害提升', '寒冷伤害提升', '自然伤害提升', '源石技艺提升', '终结技效率提升', '法术伤害提升'],
@@ -99,6 +109,7 @@ interface WeaponData {
     attributes?: string[],
 }
 const AllWeapons: WeaponData[] = JSON.parse(await fs.readFile('sanity/weapon.json', 'utf-8'));
+AllWeapons.push({ name: '庄方宜专武', rarity: 6, attributes: ['意志提升·大', '攻击提升·大', '压制·这个忘了'] });
 
 function validate(log: boolean) {
     const info = (content: string) => { if (log) { console.log(content); } };
@@ -177,7 +188,7 @@ function validate(log: boolean) {
     info(JSON.stringify(kindsFromWeapon));
 
     const kindsFromSpace: [string[], string[], string[]] = [[], [], []];
-    for (const space of AllSapces) {
+    for (const space of AllSpaces) {
         if (space.cat1.length != 5) {
             error(`space ${space.name} cat1 length not 5`);
         }
@@ -240,7 +251,7 @@ function validate(log: boolean) {
     // now after confirm no duplicates between categories, you can 
     for (const cat of [1, 2, 3]) {
         const weaponsAllKinds = AllWeapons.flatMap(w => w.attributes ?? []).map(a => a.split('·')[0]);
-        const spaceAllNames = AllSapces.flatMap(s => [s.cat1, s.cat2, s.cat3].flat());
+        const spaceAllNames = AllSpaces.flatMap(s => [s.cat1, s.cat2, s.cat3].flat());
         for (const name of kindsFromSpace[cat - 1]) {
             const count = weaponsAllKinds.filter(n => n == name).length;
             // ATTENTION HARDCODE this indicates a typo, but sometimes really happen in real data, so hardcode to skip
@@ -336,7 +347,7 @@ interface PairResult {
 function score(allProgress: Progress[]): PairResult[] {
     const notHaveProgress = (w: WeaponData) => !allProgress.some(p => p.name == w.name);
     const pairs: PairResult[] = [];
-    for (const space of AllSapces) {
+    for (const space of AllSpaces) {
         // cat2 and cat3 handling only differ in filter weapon part, so can merge them together
         for (const [cat, weapons] of space.cat2.map<[string, WeaponData[]]>(cat2 => [cat2,
                 notAllWeapons.filter(w => space.cat1.includes(w.attributes[0]) && w.attributes[1] == cat2 && space.cat3.includes(w.attributes[2]))])
@@ -414,6 +425,7 @@ function displayStategy(pairs: PairResult[], allProgress: Progress[], limit: num
         if (pairIndex >= limit) { break; }
         const { spacename, attribute, weapons, cat1Attributes, numbers } = pair;
         if (weapons.length) {
+            cat1Attributes.sort((a1, a2) => AllSpaces[0].cat1.indexOf(a1) - AllSpaces[0].cat1.indexOf(a2));
             const placeDisplay = styleText('white', `${spacename}:${displayAttribute(attribute)}:${cat1Attributes.map(displayAttribute).join(',')}`);
             const mainNumberDisplay = styleText('yellow', numbers[0].toString());
             const numbersDisplay = styleText('gray', 'prob ') + mainNumberDisplay + styleText('gray', `/${numbers[1]}/${numbers[2]}/24 count ${numbers[3]}/${numbers[4]}/${numbers[5]}`);
@@ -450,7 +462,7 @@ function simulate(initialProgress: Progress[]) {
         gameCount += 1;
         // console.log(`#${gameCount}(${currentProgress.length}/${notAllWeapons.length}): ` +
         //     `goto ${plan.spacename}:${displayAttribute(plan.attribute)}:${plan.cat1Attributes.map(displayAttribute).join(',')}`);
-        const space = AllSapces.find(s => s.name == plan.spacename);
+        const space = AllSpaces.find(s => s.name == plan.spacename);
         // if cat1 does not length 3, filling whatever reamin from remaining cat1s
         const cat1pool = plan.cat1Attributes.length == 3 ? plan.cat1Attributes
             : plan.cat1Attributes.concat(...new Array(3 - plan.cat1Attributes.length).fill(0).map(_ => space.cat1.filter(c => !plan.cat1Attributes.includes(c))[0]));
@@ -481,6 +493,7 @@ function simulate(initialProgress: Progress[]) {
 }
 
 // TODO node essence.ts weapon(s) w1,w2,w3 space s1 attribute 附术 limit 10 simulate 100
+// TODO 给武器加个权重，默认1，通行证武器复刻遥遥无期0.25，五星武器0.25，过期专武暂无复刻0.5，想要练的干员专武2，正在刷的武器100
 
 // let totalGameCount = 0;
 // for (const _ of new Array(100).fill(0)) {
