@@ -44,7 +44,12 @@ const AllProgress: Progress[] = [
     { name: '落草', progress: [1, 1, 2] },
     { name: '望乡', progress: [1, 1, 1] },
     { name: '昔日精品', progress: [1, 3, 1] },
-    { name: '庄方宜专武', progress: [1, 1, 1] },
+    { name: '孤舟', progress: [1, 1, 1] },
+    { name: '领航者', progress: [1, 1, 1] },
+    { name: '负山', progress: [3, 1, 1] },
+    { name: '莫奈何', progress: [1, 1, 1] },
+    { name: '坚城铸造者', progress: [1, 1, 1] },
+    { name: '使命必达', progress: [2, 2, 3] },
     // { name: '', progress: [1, 1, 1] },
 ];
 // NOTE this progress list precisely represent my overall progress
@@ -93,6 +98,11 @@ const AllSpaces: ProtocolSpace[] = [{
     cat1: ['敏捷提升', '力量提升', '意志提升', '智识提升', '主能力提升'],
     cat2: ['生命提升', '物理伤害提升', '电磁伤害提升', '寒冷伤害提升', '源石技艺提升', '终结技效率提升', '法术伤害提升', '治疗效率提升'],
     cat3: ['压制', '粉碎', '昂扬', '巧技', '医疗', '切骨', '迸发', '夜幕'],
+}, {
+    name: '首墩',
+    cat1: ['敏捷提升', '力量提升', '意志提升', '智识提升', '主能力提升'],
+    cat2: ['攻击提升', '物理伤害提升', '灼热伤害提升', '电磁伤害提升', '自然伤害提升', '暴击率提升', '终结技效率提升', '法术伤害提升'],
+    cat3: ['强攻', '追袭', '昂扬', '残暴', '附术', '夜幕', '流转', '效益'],
 }];
 
 // ATTENTION HARDCODE fix naming inconsitency
@@ -109,7 +119,8 @@ interface WeaponData {
     attributes?: string[],
 }
 const AllWeapons: WeaponData[] = JSON.parse(await fs.readFile('sanity/weapon.json', 'utf-8'));
-AllWeapons.push({ name: '庄方宜专武', rarity: 6, attributes: ['意志提升·大', '攻击提升·大', '压制·这个忘了'] });
+AllWeapons.push({ name: '孤舟', rarity: 6, attributes: ['意志提升·大', '攻击提升·大', '压制·流霆'] });
+AllWeapons.push({ name: '雾中微光', rarity: 6, attributes: ['意志提升·大', '电磁伤害提升·大', '效益·微光层叠'] });
 
 function validate(log: boolean) {
     const info = (content: string) => { if (log) { console.log(content); } };
