@@ -9,6 +9,7 @@
 FROM alpine:3.23.3 AS ohmyzsh-build
 
 # git clone git@github.com:ohmyzsh/ohmyzsh
+# tar cJf ohmyzsh.tar.xz -C ./ohmyzsh .
 ADD --chown=0 ohmyzsh.tar.xz /build
 
 RUN <<EORUN
@@ -66,7 +67,7 @@ EORUN
 # =================================================
 # basic shell experience
 # docker build --target shell --tag my/shell:1 .
-FROM alpine:3.23.3 AS shell
+FROM alpine:3.23.4 AS shell
 
 COPY --from=ohmyzsh-build /build /root/.omz
 
@@ -92,9 +93,9 @@ ENTRYPOINT ["/bin/zsh"]
 
 # ==================================================
 # an ubuntu image with apt source configured
-# docker build --target ubuntu --tag my/ubuntu:24.04 .
-# occassionally rerun apt update: docker build --no-cache --target ubuntu --tag my/ubuntu:24.04 .
-FROM ubuntu:24.04 AS ubuntu
+# docker build --target ubuntu --tag my/ubuntu:26.04 .
+# occassionally rerun apt update: docker build --no-cache --target ubuntu --tag my/ubuntu:26.04 .
+FROM ubuntu:26.04 AS ubuntu
 
 RUN <<EORUN
 set -ex
@@ -109,6 +110,7 @@ EORUN
 # ==================================================
 # a debian image with apt source configured
 # docker build --target debian --tag my/debian:13.4 .
+# occassionally rerun apt update: docker build --no-cache --target debian --tag my/debian:13.4 .
 FROM debian:13.4-slim AS debian
 
 RUN <<EORUN
@@ -126,9 +128,9 @@ EORUN
 # TODO why is this a lot larger than node-alpine?
 # see https://github.com/nodejs/docker-node/blob/main/25/alpine3.23/Dockerfile, this is easily build from source, try
 # docker build --target node --tag my/node:1 .
-FROM alpine:3.23.3 AS node-build
+FROM alpine:3.23.4 AS node-build
 
-ARG NODE_VERSION=25.8.2
+ARG NODE_VERSION=25.9.0
 # this is learned from node official image source code,
 # see https://github.com/nodejs/docker-node/blob/main/24/alpine3.22/Dockerfile
 # currently it is simply an extraction of prebuilt archive
@@ -156,7 +158,7 @@ EORUN
 # currently this image is 308m, kind of a little more similar to official node:alpine 238m
 FROM my/shell:1 AS node
 
-ARG NODE_VERSION=25.8.2
+ARG NODE_VERSION=25.9.0
 COPY --from=node-build /build/node /usr/local
 
 RUN <<EORUN
