@@ -10,6 +10,7 @@ body {
     display: grid;
     grid-template-rows: 36px auto;
     grid-template-columns: 280px auto;
+    --highlight-color: oklch(66.6% 0.18 60)
 }
 header {
     grid-area: 1/1/1/3;
@@ -91,11 +92,11 @@ nav li:not(.active):hover {
 }
 nav li.active {
     /* background-color: lightcoral; */
-    background: linear-gradient(to right, #eb9f43 0, #eb9f43 4px, transparent 8px, transparent 100%);
+    background: linear-gradient(to right, var(--highlight-color) 0, var(--highlight-color) 4px, transparent 8px, transparent 100%);
 }
 nav li.active:hover {
     /* background-color: lightcoral; */
-    background: linear-gradient(to right, #eb9f43 0, #eb9f43 4px, #ddd 8px, #ddd 100%);
+    background: linear-gradient(to right, var(--highlight-color) 0, var(--highlight-color) 4px, #ddd 8px, #ddd 100%);
 }
 nav li > img {
     padding: 4px;
@@ -214,13 +215,11 @@ div.panel > div.item-node > img {
 div.panel > div.item-node:not(.main-item-node) > img {
     cursor: pointer;
 }
-div.panel > div.item-node:not(.main-item-node) > img:hover {
-    border: 2px solid #eb9f43;
-    padding: 2px;
-}
+div.panel > div.item-node > img.highlight,
 div.panel > div.main-item-node > img {
-    border: 2px solid #eb9f43;
+    border: 2px solid var(--highlight-color);
     padding: 2px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
 }
 div.panel > div.item-node > div.name {
     grid-area: 2/1/2/4;
@@ -236,7 +235,7 @@ div.panel > div.item-node > div.name > span {
     text-align: center;
     width: 108px;
 }
-div.panel > div.item-node > span.amount-by-recipe {
+div.panel > div.item-node > span.amount {
     grid-area: 1/2/1/2;
     font-size: 12px;
     font-family: sans-serif;
@@ -246,13 +245,6 @@ div.panel > div.item-node > span.amount-by-recipe {
     line-height: 14px;
     pointer-events: none;
 }
-div.panel > div.item-node > span.amount-by-speed {
-    grid-area: 1/3/1/3;
-    font-size: 12px;
-    font-family: sans-serif;
-    margin-top: 10px;
-    margin-left: 2px;
-}
 div.panel > div.item-node > div.connect-line {
     width: 12px;
     height: 0;
@@ -260,6 +252,9 @@ div.panel > div.item-node > div.connect-line {
     border-width: 0 0 2px 0;
     border-style: solid;
     border-color: #555;
+}
+div.panel > div.item-node > div.connect-line.highlight {
+    border-color: var(--highlight-color);
 }
 div.panel > div.item-node > div.connect-line-virtual {
     border-style: dotted;
@@ -281,6 +276,9 @@ div.panel > div.collect-line {
     width: 8px;
     border-style: solid;
     border-color: #555;
+}
+div.panel > div.collect-line.highlight {
+    border-color: var(--highlight-color);
 }
 div.panel > div.collect-line-down {
     border-width: 2px 2px 0 0;
@@ -329,8 +327,9 @@ div.panel > div.product-node > img {
     cursor: pointer;
 }
 div.panel > div.product-node > img:hover {
-    border: 2px solid #eb9f43;
+    border: 2px solid var(--highlight-color);
     padding: 2px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
 }
 div.panel > div.product-node > div.name {
     grid-area: 2/1/2/4;
@@ -360,7 +359,7 @@ div.panel > div.recipe-node {
     display: grid;
     grid-template-columns: 12px 72px 12px;
     grid-template-rows: 12px 24px 12px;
-    cursor: default;
+    cursor: pointer;
 }
 div.panel > div.recipe-node > div.machine-name {
     grid-area: 2/2/2/2;
@@ -372,6 +371,15 @@ div.panel > div.recipe-node > div.machine-name {
     border-radius: 4px;
     background-color: #d8d8d8;
     box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2);
+}
+div.panel > div.recipe-node > div.machine-name:hover,
+div.panel > div.recipe-node.highlight > div.machine-name  {
+    border: 2px solid var(--highlight-color);
+    padding: 2px 2px 0 2px;
+    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.5);
+}
+div.panel > div.recipe-node:not(.active) > div.machine-name {
+    color: gray;
 }
 div.panel > div.recipe-node > div.info-container {
     display: flex;
@@ -421,6 +429,9 @@ div.panel > div.recipe-node > div.connect-line {
     border-style: solid;
     border-color: #555;
 }
+div.panel > div.recipe-node.highlight > div.connect-line {
+    border-color: var(--highlight-color);
+}
 div.panel > div.recipe-node > div.connect-line1 {
     grid-area: 2/1/2/1;
 }
@@ -428,15 +439,43 @@ div.panel > div.recipe-node > div.connect-line2 {
     grid-area: 2/3/2/3;
 }
 
-/* plan panel */
-main > div.plan-panel {
-    border: 1px solid lightgray;
-    border-radius: 8px;
+/* calculation container */
+div.panel > div.calc-container {
     position: absolute;
-    cursor: grab;
-    background-color: #e0e0e0;
-    box-shadow: 2px 2px 5px rgba(0, 0, 0, 0.2)
-}  </style>
+}
+div.calc-container > div.item-line {
+    overflow: hidden;
+    display: flex;
+    /* transition: height 0.2s ease; */
+    /* border-left: 2px solid #555; */
+    border-radius: 4px;
+    width: fit-content;
+    padding: 0 8px;
+    cursor: pointer;
+}
+div.calc-container > div.item-line:hover,
+div.calc-container > div.item-line.highlight {
+    background: lightgray;
+}
+div.calc-container > div.item-line > span.name {
+    line-height: 32px;
+}
+div.calc-container > div.item-line > span.count,
+div.calc-container > div.item-line > span.count,
+div.calc-container > div.item-line > span.count {
+    line-height: 32px;
+    margin-left: 12px;
+}
+div.calc-container > div.item-line > span.recipe-line {
+    display: flex;
+}
+div.calc-container > div.item-line > span.recipe-line > span.arrow,
+div.calc-container > div.item-line > span.recipe-line > span.plus,
+div.calc-container > div.item-line > span.recipe-line > span.item-name,
+div.calc-container > div.item-line > span.recipe-line > span.amount {
+    line-height: 32px;
+}
+/* TODO consider vanilla cssinjs */  </style>
 </head>
 <body>
     <header>
@@ -447,7 +486,7 @@ main > div.plan-panel {
     <nav>
         <div id="nav-header">
             <span>物品列表</span>
-            <input placeholder="搜索物品">
+            <input placeholder="搜索物品（可以拼音）">
             <button id="sort">
                 <svg viewBox="64 64 896 896" fill="currentColor">
                     <path d="M839.6 433.8L749 150.5a9.24 9.24 0 00-8.9-6.5h-77.4c-4.1 0-7.6 2.6-8.9 6.5l-91.3 283.3c-.3.9-.5 1.9-.5 2.9 0 5.1 4.2 9.3 9.3 9.3h56.4c4.2 0 7.8-2.8 9-6.8l17.5-61.6h89l17.3 61.5c1.1 4 4.8 6.8 9 6.8h61.2c1 0 1.9-.1 2.8-.4 2.4-.8 4.3-2.4 5.5-4.6 1.1-2.2 1.3-4.7.6-7.1zM663.3 325.5l32.8-116.9h6.3l32.1 116.9h-71.2zm143.5 492.9H677.2v-.4l132.6-188.9c1.1-1.6 1.7-3.4 1.7-5.4v-36.4c0-5.1-4.2-9.3-9.3-9.3h-204c-5.1 0-9.3 4.2-9.3 9.3v43c0 5.1 4.2 9.3 9.3 9.3h122.6v.4L587.7 828.9a9.35 9.35 0 00-1.7 5.4v36.4c0 5.1 4.2 9.3 9.3 9.3h211.4c5.1 0 9.3-4.2 9.3-9.3v-43a9.2 9.2 0 00-9.2-9.3zM416 702h-76V172c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v530h-76c-6.7 0-10.5 7.8-6.3 13l112 141.9a8 8 0 0012.6 0l112-141.9c4.1-5.2.4-13-6.3-13z"></path>
@@ -502,7 +541,8 @@ function setupNavigationBar() {
             }
             else {
                 const item = pagedata.items.find(i => i.id == itemElement.dataset['id']);
-                itemElement.style.display = item.name.includes(elements.searchInput.value) ? 'grid' : 'none';
+                const found = item.name.includes(elements.searchInput.value) || item.pinyin.includes(elements.searchInput.value.toLocaleLowerCase());
+                itemElement.style.display = found ? 'grid' : 'none';
             }
         }
     });
@@ -521,7 +561,7 @@ function collectRecipeTree(item, path) {
     if (path.length > 10) {
         throw new Error('unexpected too deep');
     }
-    if (item.kind != 'seed') {
+    if (item.kind != 'seed' || path.length == 0) {
         for (const recipe of pagedata.recipes.filter(r => r.kind != 'pour' && r.products.some(r => r.id == item.id))) {
             itemNode.children.push({
                 data: recipe,
@@ -760,6 +800,11 @@ function createSVGElement(parent, pathdata, className) {
     parent.appendChild(svgElement);
     return svgElement;
 }
+function setupImageElement(element, item, size = 40) {
+    element.src = pagedata.icons[item.id];
+    element.alt = item.name;
+    element.width = element.height = size;
+}
 function setupDragMove(element) {
     let beginX = 0;
     let beginY = 0;
@@ -787,7 +832,33 @@ function setupDragMove(element) {
         }
     });
 }
+function round2(value) {
+    return Math.round(value * 100) / 100;
+}
+class EventEmitter {
+    handlers;
+    constructor() {
+        this.handlers = [];
+    }
+    addEventListener(f) {
+        this.handlers.push(f);
+        return () => {
+            const index = this.handlers.indexOf(f);
+            if (index >= 0) {
+                this.handlers.splice(index, 1);
+            }
+        };
+    }
+    send(data) {
+        this.handlers.forEach(h => h(data));
+    }
+}
+const activeRecipeStorage = [];
+const activeRecipeChangeEvent = new EventEmitter();
+const speedRequirementStorage = {};
+const allCleanupHandlers = {};
 function drawRecipeTree(root) {
+    const cleanupHandlers = allCleanupHandlers[root.data.id] ??= [];
     let maxDepth = 0;
     let maxPosition = -100;
     function collectCoordinates(node) {
@@ -815,36 +886,34 @@ function drawRecipeTree(root) {
     });
     j(panelElement, 'button', { className: 'close', innerText: 'X' }, e => e.addEventListener('click', () => handleClosePanel(root.data.id)));
     j(panelElement, 'span', { className: 'title', innerText: root.data.name });
-    const speedPerMachine0 = root.children.length == 1 ? root.children[0].data.products.find(i => i.id == root.data.id).count / root.children[0].data.time : 1;
-    const speedHandlers = [];
-    let remainingItems = [[root, null]];
+    let remainingItems = [[root, []]];
     while (remainingItems.length > 0) {
         const newRemainingItems = [];
-        for (const [item, parent] of remainingItems) {
-            createNode(item, parent, 1);
+        for (const [item, path] of remainingItems) {
+            createNode(item, path);
             for (const recipe of item.children) {
-                for (const item of recipe.children) {
-                    newRemainingItems.push([item, recipe]);
+                for (const childItem of recipe.children) {
+                    newRemainingItems.push([childItem, [...path, item.data.id, recipe.data.id]]);
                 }
             }
         }
         remainingItems = newRemainingItems;
     }
-    function createNode(item, parent, speed) {
+    function createNode(item, path) {
+        const parentRecipe = path.length == 0 ? null : pagedata.recipes.find(r => r.id == path.at(-1));
         const itemElement = j(panelElement, 'div', {
             className: 'item-node' + (item.data.id == root.data.id ? ' main-item-node' : ''),
-            dataset: { 'id': item.data.id },
+            dataset: { 'id': item.data.id, 'parentrecipe': parentRecipe?.id },
             left: CellWidth * (maxDepth - item.depth) + 20,
             top: CellHeight * item.position + 40,
         });
         j(itemElement, 'img', {}, e => {
-            e.alt = item.data.name;
-            e.src = pagedata.icons[item.data.id];
-            e.width = 40;
-            e.height = 40;
+            setupImageElement(e, item.data);
             if (item.data.id != root.data.id) {
                 e.addEventListener('click', () => handleOpenPanel(item.data));
             }
+            e.addEventListener('mouseenter', () => Array.from(panelElement.querySelectorAll(`div.item-node[data-id="${item.data.id}"]>img`)).forEach(e => e.classList.add('highlight')));
+            e.addEventListener('mouseleave', () => Array.from(panelElement.querySelectorAll(`div.item-node[data-id="${item.data.id}"]>img`)).forEach(e => e.classList.remove('highlight')));
         });
         j(itemElement, 'div', { className: 'name' }, nameContainer => {
             j(nameContainer, 'span', { innerText: item.data.name }, e => e.title = item.data.desc[0]);
@@ -855,14 +924,10 @@ function drawRecipeTree(root) {
         else if (item.duplicate) {
             j(itemElement, 'div', { className: 'connect-line connect-line1 connect-line-virtual' }, e => e.title = '之前在链路上出现过了');
         }
-        if (parent) {
-            const amount = parent.data.ingredients.find(i => i.id == item.data.id).count;
-            j(itemElement, 'span', { className: 'amount-by-recipe', innerText: `×${amount}` });
-            j(itemElement, 'span', { className: 'amount-by-speed', innerText: `` }, e => {
-                e.title = '根据速度需求计算的物品数量';
-                speedHandlers.push(() => { e.innerText = `30/m`; });
-            });
-            j(itemElement, 'div', { className: 'connect-line connect-line2' });
+        if (parentRecipe) {
+            const amount = parentRecipe.ingredients.find(i => i.id == item.data.id).count;
+            j(itemElement, 'span', { className: 'amount', innerText: `×${amount}` });
+            j(itemElement, 'div', { className: 'connect-line connect-line2', dataset: { 'recipe': parentRecipe.id } });
         }
         for (const recipe of item.children) {
             const direction = item.position > recipe.position ? 'down' : item.position == recipe.position ? 'level' : 'up';
@@ -885,12 +950,7 @@ function drawRecipeTree(root) {
                     left: CellWidth * maxDepth + 100,
                     top: CellHeight * productPosition + 40,
                 }, e => e.addEventListener('click', () => handleOpenPanel(product)));
-                j(productElement, 'img', {}, e => {
-                    e.alt = product.name;
-                    e.src = pagedata.icons[product.id];
-                    e.width = 40;
-                    e.height = 40;
-                });
+                j(productElement, 'img', {}, e => setupImageElement(e, product));
                 j(productElement, 'div', { className: 'name' }, nameContainer => {
                     j(nameContainer, 'span', { innerText: product.name }, e => e.title = product.desc[0]);
                 });
@@ -905,14 +965,29 @@ function drawRecipeTree(root) {
                 });
             }
         }
+        let activeRecipeEntry = activeRecipeStorage.find(s => s.length == path.length + 2
+            && !new Array(path.length).fill(0).some((_, i) => s[i] != path[i]) && s.at(-2) == item.data.id);
+        if (!activeRecipeEntry && item.children.length) {
+            activeRecipeEntry = [...path, item.data.id, item.children[0].data.id];
+            activeRecipeStorage.push(activeRecipeEntry);
+        }
         for (const recipe of item.children) {
             const recipeElement = j(panelElement, 'div', {
-                className: 'recipe-node',
+                className: 'recipe-node' + (recipe.data.id == activeRecipeEntry?.at(-1) ? ' active' : ''),
                 dataset: { 'id': recipe.data.id },
                 left: CellWidth * (maxDepth - recipe.depth - 1) + 100,
                 top: CellHeight * recipe.position + 40,
+            }, e => {
+                e.addEventListener('click', () => {
+                    activeRecipeEntry[activeRecipeEntry.length - 1] = activeRecipeEntry.at(-1) == recipe.data.id ? null : recipe.data.id;
+                    activeRecipeChangeEvent.send(activeRecipeEntry);
+                });
             });
-            const machine = pagedata.machines.find(m => m.id == recipe.data.machineId);
+            cleanupHandlers.push(activeRecipeChangeEvent.addEventListener((entry) => {
+                if (entry === activeRecipeEntry) {
+                    entry.at(-1) == recipe.data.id ? recipeElement.classList.add('active') : recipeElement.classList.remove('active');
+                }
+            }));
             const amount = recipe.data.products.find(p => p.id == item.data.id).count;
             const infoElement1 = j(recipeElement, 'div', { className: 'info-container info-container1' });
             createSVGElement(infoElement1, ClockIcon, 'time-icon');
@@ -926,19 +1001,26 @@ function drawRecipeTree(root) {
                 const sideProductIconContainer = j(infoElement1, 'span', { className: 'side-product-icon-container' }, e => e.title = `副产物：${sideProducts}`);
                 createSVGElement(sideProductIconContainer, LinkIcon, 'side-product-icon');
             }
-            j(recipeElement, 'div', { className: 'machine-name', innerText: machine.name });
+            const machine = pagedata.machines.find(m => m.id == recipe.data.machineId);
+            j(recipeElement, 'div', { className: 'machine-name', innerText: machine.name }, e => {
+                e.title = "点击选择配方，点击选择了的配方可以关掉所有配方（把当前物品作为外部输入）";
+                e.addEventListener('mouseenter', () => {
+                    Array.from(panelElement.querySelectorAll(`div.item-line[data-recipe=${recipe.data.id}]`)).forEach(e => e.classList.add('highlight'));
+                });
+                e.addEventListener('mouseleave', () => {
+                    Array.from(panelElement.querySelectorAll(`div.item-line[data-recipe=${recipe.data.id}]`)).forEach(e => e.classList.remove('highlight'));
+                });
+            });
             const infoElement2 = j(recipeElement, 'div', { className: 'info-container info-container2' });
             createSVGElement(infoElement2, ThunderboltIcon, 'power-icon');
             j(infoElement2, 'span', { className: 'power', innerText: `${machine.power}W` }, e => {
                 e.style.fontWeight = machine.power == 50 ? 'bold' : '';
-                e.title = `额定功率${machine.power}W，注意啦注意啦机器摸鱼和卡住的时候也要用这么多电`;
+                e.title = machine.name == '研磨机'
+                    ? `额定功率50W，我的天哪砂叶大人又用了50W的电`
+                    : `额定功率${machine.power}W，注意啦注意啦机器摸鱼和卡住的时候也要用这么多电`;
             });
             createSVGElement(infoElement2, SharpIcon, 'size-icon');
             j(infoElement2, 'span', { className: 'size', innerText: `${machine.size[0]}×${machine.size[1]}` }, e => e.title = `占地面积`);
-            j(recipeElement, 'span', { className: 'machine-count', innerText: `` }, e => {
-                e.title = '机器数量';
-                speedHandlers.push(() => { e.innerText = `×0.33`; });
-            });
             j(recipeElement, 'div', { className: 'connect-line connect-line1' });
             j(recipeElement, 'div', { className: 'connect-line connect-line2' });
             for (const item of recipe.children) {
@@ -953,40 +1035,160 @@ function drawRecipeTree(root) {
             }
         }
     }
-}
-function createPlanPanel(item) {
-    const panelElement = j(elements.main, 'div', { className: 'plan-panel' }, e => setupDragMove(e));
-    const remainingItems = [item];
-    while (remainingItems.length) {
-        const item = remainingItems.shift();
-        if (item.children.length) {
-            createLine(item.children[0].data);
-            remainingItems.unshift(...item.children[0].children);
-        }
+    const calculationContainerElement = j(panelElement, 'div', {
+        className: 'calc-container',
+        left: CellWidth * maxDepth + 112 + (root.possibleProducts.length ? 80 : 0),
+        top: 40,
+        width: 600,
+    });
+    const initialSpeed = speedRequirementStorage[root.data.id] ?? (root.children.length != 1 ? 0.5
+        : root.children[0].data.products.find(p => p.id == root.data.id).count / root.children[0].data.time);
+    let currentRootSpeed = initialSpeed;
+    const speedHandlers = [];
+    speedHandlers.push(newSpeed => speedRequirementStorage[root.data.id] = newSpeed);
+    const speedContainer = j(calculationContainerElement, 'span', { className: 'speed-container' });
+    if (root.children.length) {
+        j(speedContainer, 'input', {}, e => {
+            e.type = 'number';
+            e.name = 'item-count-requirement';
+            e.value = round2(initialSpeed * 60).toString();
+            e.addEventListener('change', () => {
+                const newPerMinute = +e.value;
+                if (newPerMinute) {
+                    currentRootSpeed = newPerMinute / 60;
+                    speedHandlers.forEach(h => h(newPerMinute / 60));
+                }
+            });
+            speedHandlers.push(newSpeed => e.value = round2(newSpeed * 60).toString());
+        });
+        j(speedContainer, 'label', { innerText: '个每分钟' }, e => e.htmlFor = 'item-count-requirement');
+        j(speedContainer, 'button', { className: 'reset' }, button => {
+            createSVGElement(button, ReloadIcon);
+            button.addEventListener('click', () => speedHandlers.forEach(h => h(initialSpeed)));
+        });
     }
-    function createLine(recipe) {
-        const lineElement = j(panelElement, 'div', { className: 'recipe-container' });
-        for (const [{ id: itemId, count }, index] of recipe.ingredients.map((i, index) => [i, index])) {
-            j(lineElement, 'img', {}, e => e.src = pagedata.icons[itemId]);
-            j(lineElement, 'span', { className: 'item-name', innerText: pagedata.items.find(i => i.id == itemId).name });
-            j(lineElement, 'span', { className: 'amount', innerText: `×${count}` });
-            if (index != recipe.ingredients.length - 1) {
-                j(lineElement, 'span', { className: 'plus', innerText: '+' });
+    const remainingItems2 = [[root, [], 1]];
+    while (remainingItems2.length) {
+        const [item, path, speed] = remainingItems2.shift();
+        createLine(item, path, speed);
+        for (const recipe of item.children) {
+            const productAmount = recipe.data.products.find(p => p.id == item.data.id).count;
+            for (const child of recipe.children) {
+                const ingredientAmount = recipe.data.ingredients.find(i => i.id == child.data.id).count;
+                remainingItems2.unshift([child, [...path, item.data.id, recipe.data.id], speed * ingredientAmount / productAmount]);
             }
         }
-        j(lineElement, 'span', { className: 'arrow', innerText: `⇒` });
-        const machineName = pagedata.machines.find(m => m.id == recipe.machineId).name;
-        j(lineElement, 'span', { className: 'machine-name', innerText: machineName });
-        j(lineElement, 'span', { className: 'arrow', innerText: `⇒` });
-        for (const [{ id: itemId, count }, index] of recipe.products.map((i, index) => [i, index])) {
-            j(lineElement, 'img', {}, e => e.src = pagedata.icons[itemId]);
-            j(lineElement, 'span', { className: 'item-name', innerText: pagedata.items.find(i => i.id == itemId).name });
-            j(lineElement, 'span', { className: 'amount', innerText: `×${count}` });
-            if (index != recipe.products.length - 1) {
-                j(lineElement, 'span', { className: 'plus', innerText: '+' });
-            }
-        }
     }
+    function createLine(item, path, relativeSpeed) {
+        const getActive = () => {
+            for (const length of new Array(path.length / 2).fill(0).map((_, i) => i + 1)) {
+                if (!activeRecipeStorage.some(s => s.length == length * 2 && !new Array(length * 2).fill(0).some((_, i) => s[i] != path[i]))) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        let activeRecipeEntry = activeRecipeStorage.find(s => s.length == path.length + 2
+            && !new Array(path.length).fill(0).some((_, i) => s[i] != path[i]) && s.at(-2) == item.data.id);
+        if (!activeRecipeEntry && item.children.length) {
+            activeRecipeEntry = [...path, item.data.id, item.children[0].data.id];
+            activeRecipeStorage.push(activeRecipeEntry);
+        }
+        const getElementsForHightlightRecipe = (recipeId) => {
+            const recipe = pagedata.recipes.find(r => r.id == activeRecipeEntry.at(-1));
+            const recipeNodeElements = Array.from(panelElement.querySelectorAll(`div.recipe-node[data-id=${recipeId}]`));
+            const collectLineElements = Array.from(panelElement.querySelectorAll(`div.collect-line[data-recipe=${recipeId}]`));
+            const itemNodeElements1 = recipe.ingredients.flatMap(item => Array.from(panelElement.querySelectorAll(`div.item-node[data-id=${item.id}][data-parentrecipe=${recipeId}]>img`)));
+            const itemNodeElements2 = recipe.products.length != 1 ? []
+                : Array.from(panelElement.querySelectorAll(`div.item-node[data-id=${recipe.products[0].id}]>img`));
+            const connectLine2Elements = recipe.ingredients.flatMap(item => Array.from(panelElement.querySelectorAll(`div.item-node[data-id=${item.id}]>div.connect-line2[data-recipe=${recipeId}]`)));
+            const connectLine1Elements = recipe.products.length != 1 ? []
+                : Array.from(panelElement.querySelectorAll(`div.item-node[data-id=${recipe.products[0].id}]>div.connect-line1`));
+            return [recipeNodeElements, collectLineElements, itemNodeElements1, itemNodeElements2, connectLine1Elements, connectLine2Elements].flat();
+        };
+        const lineElement = j(calculationContainerElement, 'div', { className: 'item-line', dataset: { 'id': item.data.id } }, e => {
+            e.style.marginLeft = `${24 * item.depth}px`;
+            e.style.height = getActive() ? '32px' : '0px';
+            e.addEventListener('mouseenter', () => {
+                if (!activeRecipeEntry.at(-1)) {
+                    return;
+                }
+                getElementsForHightlightRecipe(activeRecipeEntry.at(-1)).forEach(e => e.classList.add('highlight'));
+            });
+            e.addEventListener('mouseleave', () => {
+                if (!activeRecipeEntry.at(-1)) {
+                    return;
+                }
+                getElementsForHightlightRecipe(activeRecipeEntry.at(-1)).forEach(e => e.classList.remove('highlight'));
+            });
+        });
+        lineElement.dataset['recipe'] = activeRecipeEntry?.at(-1);
+        cleanupHandlers.push(activeRecipeChangeEvent.addEventListener(() => {
+            lineElement.style.height = getActive() ? '32px' : '0px';
+            lineElement.dataset['recipe'] = activeRecipeEntry?.at(-1);
+        }));
+        j(lineElement, 'img', {}, e => setupImageElement(e, item.data, 32));
+        j(lineElement, 'span', { className: 'name', innerText: item.data.name });
+        const recipeLineElement = j(lineElement, 'span', { className: 'recipe-line' });
+        const fillRecipeLine = (recipeId) => {
+            recipeLineElement.innerHTML = '';
+            delete recipeLineElement.dataset['id'];
+            if (!recipeId) {
+                return null;
+            }
+            const recipe = pagedata.recipes.find(r => r.id == recipeId);
+            recipeLineElement.dataset['id'] = recipe.id;
+            j(recipeLineElement, 'span', { className: 'arrow', innerText: `⇐` });
+            for (const [{ id: itemId, count }, index] of recipe.ingredients.map((i, index) => [i, index])) {
+                const item = pagedata.items.find(i => i.id == itemId);
+                j(recipeLineElement, 'img', {}, e => setupImageElement(e, item, 32));
+                j(recipeLineElement, 'span', { className: 'item-name', innerText: pagedata.items.find(i => i.id == itemId).name });
+                j(recipeLineElement, 'span', { className: 'amount', innerText: `×${count}` });
+                if (index != recipe.ingredients.length - 1) {
+                    j(recipeLineElement, 'span', { className: 'plus', innerText: '+' });
+                }
+            }
+            return recipeLineElement;
+        };
+        const activeRecipeId = activeRecipeEntry?.at(-1);
+        if (item.children.length && activeRecipeId) {
+            fillRecipeLine(activeRecipeId);
+        }
+        cleanupHandlers.push(activeRecipeChangeEvent.addEventListener(entry => {
+            if (activeRecipeEntry === entry && recipeLineElement?.dataset['id'] != entry.at(-1)) {
+                fillRecipeLine(entry.at(-1));
+            }
+        }));
+        const getGetCountElementText = (recipeId) => {
+            if (recipeId) {
+                const recipe = pagedata.recipes.find(r => r.id == recipeId);
+                const machineName = pagedata.machines.find(m => m.id == recipe.machineId).name;
+                const productivity = recipe.products.find(p => p.id == item.data.id).count / recipe.time;
+                return (rootSpeed) => `${machineName}×${round2(relativeSpeed * rootSpeed / productivity)}`;
+            }
+            else if (item.data.id != root.data.id) {
+                if (item.data.kind == 'liquid') {
+                    return (rootSpeed) => `${round2(relativeSpeed * rootSpeed / 1)}水泵，${round2(relativeSpeed * rootSpeed / 2)}管道`;
+                }
+                else {
+                    return (rootSpeed) => `${round2(relativeSpeed * rootSpeed / 0.5)}带`;
+                }
+            }
+            else {
+                return (_) => '';
+            }
+        };
+        let getCountElementText = getGetCountElementText(activeRecipeId);
+        let countElement = j(lineElement, 'span', { className: 'count', innerText: getCountElementText(initialSpeed) });
+        speedHandlers.push(newSpeed => countElement.innerText = getCountElementText(newSpeed));
+        cleanupHandlers.push(activeRecipeChangeEvent.addEventListener(entry => {
+            if (activeRecipeEntry === entry && recipeLineElement?.dataset['id'] != entry.at(-1)) {
+                getCountElementText = getGetCountElementText(entry.at(-1));
+                countElement.innerText = getCountElementText(currentRootSpeed);
+            }
+        }));
+    }
+    j(calculationContainerElement, 'div', { innerText: '总计...' });
 }
 let sortMethod = 'normal';
 const sortMethodDescription = {
@@ -996,6 +1198,7 @@ const sortMethodDescription = {
 elements.sortButton.title = sortMethodDescription[sortMethod];
 elements.sortButton.addEventListener('click', () => {
     sortMethod = sortMethod == 'normal' ? 'active' : 'normal';
+    elements.itemList.parentElement.scrollTo({ top: 0, behavior: 'smooth' });
     updateItemList();
 });
 elements.clearButton.addEventListener('click', () => {
@@ -1047,6 +1250,8 @@ function handleClosePanel(itemId) {
     const panels = Array.from(elements.main.querySelectorAll('div.panel'));
     const panel = panels.find(p => p.dataset['id'] == itemId);
     if (panel) {
+        allCleanupHandlers[itemId].forEach(f => f());
+        delete allCleanupHandlers[itemId];
         panel.remove();
         updateItemList();
     }
@@ -1070,104 +1275,112 @@ function handleToggleOpen(item) {
 }
 </script>
     <script>window["EndfieldRecipes"] = {"items":[
-{"id":"item_bottled_food_1","name":"柑实罐头","desc":["使用后可以回复干员生命值的战术物品。","平价的柑实罐头，是居于荒地的人们最易保存的维生素补充品。"]},
-{"id":"item_bottled_food_2","name":"优质柑实罐头","desc":["使用后可以回复干员生命值的战术物品。","革新了包装工艺的柑实罐头，最近因含糖量过高而受到文明环带市场的抵制。"]},
-{"id":"item_bottled_food_3","name":"精选柑实罐头","desc":["使用后可以回复干员生命值的战术物品。","以天然、健康及种植环境为卖点的柑实罐头，内部添加了微量综合维生素，建议零售价格稍显虚高。"]},
-{"id":"item_bottled_food_4","name":"锦草软饮","desc":["使用后可以回复干员生命值的战术物品。","仅含少量锦草提取物的碳酸饮料，因其清香的气味而备受欢迎。"]},
-{"id":"item_bottled_rec_hp_1","name":"荞愈胶囊","desc":["使用后可以回复干员生命值的战术物品。","制作手段简单的胶囊，外出颠簸中或许会撒漏药粉导致药效降低。"]},
-{"id":"item_bottled_rec_hp_2","name":"优质荞愈胶囊","desc":["使用后可以回复干员生命值的战术物品。","标准封装的胶囊，终末地工业曾为它进行过广告宣传，但可惜的是，其销量远不及罗德岛的同类产品。"]},
-{"id":"item_bottled_rec_hp_3","name":"精选荞愈胶囊","desc":["使用后可以回复干员生命值的战术物品。","优化了封装工艺的胶囊，终末地工业兼顾了本产品在各种作战条件下的使用便利性。"]},
-{"id":"item_bottled_rec_hp_4","name":"芽针针剂","desc":["使用后可以回复干员生命值的战术物品。","本针剂仅可使用皮下注射。"]},
-{"id":"item_carbon_enr","name":"稳定碳块","desc":["致密碳粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，碳块在碳元素状态上获得了微妙且稳定的平衡。"]},
-{"id":"item_carbon_enr_powder","name":"致密碳粉末","desc":["碳粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，碳粉已拥有了独特的细腻质地。"]},
-{"id":"item_carbon_mtl","name":"碳块","desc":["植物烧制的碳材料，可用于其他材料合成。","终末地工业在战争时期就已完成了对制碳过程中废气处理的相关技术的优化。"]},
-{"id":"item_carbon_powder","name":"碳粉末","desc":["碳材料的粉末，可用于其他材料合成。","在经过粉碎处理后，碳拥有了更细腻的质地。"]},
-{"id":"item_crystal_enr","name":"密制晶体","desc":["致密晶体粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，密制晶体足以被称为“宝石”。"]},
-{"id":"item_crystal_enr_powder","name":"致密晶体粉末","desc":["晶体外壳粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，致密晶体粉末中的颗粒将通透细腻至几乎不可见的地步。"]},
-{"id":"item_crystal_powder","name":"晶体外壳粉末","desc":["晶体外壳的粉末，可用于其他材料合成。","在经过粉碎处理后，晶体外壳二级加工品的质地更加均匀。"]},
-{"id":"item_crystal_shell","name":"晶体外壳","desc":["源石加工时剥离的外壳部分，可用于其他材料合成。","源石晶体外壳的厚度通常可以作为判断一条矿脉存续时间的重要依据。"]},
-{"id":"item_equip_script_1","name":"紫晶装备原件","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为紫晶。"]},
-{"id":"item_equip_script_2","name":"蓝铁装备原件","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为蓝铁，相较低级版本提高了脱模便利性。"]},
-{"id":"item_equip_script_3","name":"高晶装备原件","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为高晶，操作起来更加便利。"]},
-{"id":"item_equip_script_4","name":"息壤装备原件","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性高透明息壤铸造原件，主体材料为密制晶体及息壤。相较寻常版本，拥有更优良的信息传导性能。"]},
-{"id":"item_fbottle_glass_grass_1","name":"紫晶质瓶 (锦草溶液)","desc":["装有锦草溶液的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glass_grass_2","name":"紫晶质瓶 (芽针溶液)","desc":["装有芽针溶液的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glass_water","name":"紫晶质瓶 (清水)","desc":["装有清水的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glass_xiranite","name":"紫晶质瓶 (液化息壤)","desc":["装有液化息壤的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glassenr_grass_1","name":"高晶质瓶 (锦草溶液)","desc":["装有锦草溶液的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glassenr_grass_2","name":"高晶质瓶 (芽针溶液)","desc":["装有芽针溶液的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glassenr_water","name":"高晶质瓶 (清水)","desc":["装有清水的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_glassenr_xiranite","name":"高晶质瓶 (液化息壤)","desc":["装有液化息壤的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_iron_grass_1","name":"蓝铁瓶 (锦草溶液)","desc":["装有锦草溶液的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_iron_grass_2","name":"蓝铁瓶 (芽针溶液)","desc":["装有芽针溶液的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_iron_water","name":"蓝铁瓶 (清水)","desc":["装有清水的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_iron_xiranite","name":"蓝铁瓶 (液化息壤)","desc":["装有液化息壤的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_ironenr_grass_1","name":"钢质瓶 (锦草溶液)","desc":["装有锦草溶液的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_ironenr_grass_2","name":"钢质瓶 (芽针溶液)","desc":["装有芽针溶液的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_ironenr_water","name":"钢质瓶 (清水)","desc":["装有清水的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_fbottle_ironenr_xiranite","name":"钢质瓶 (液化息壤)","desc":["装有液化息壤的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
-{"id":"item_glass_bottle","name":"紫晶质瓶","desc":["由紫晶纤维加工得来的瓶子，可用于其他材料合成。","出于本身的脆性、重量、侵蚀耐受程度等方面的缺陷，紫晶质瓶在文明环带市场中已逐渐被淘汰。"]},
-{"id":"item_glass_cmpt","name":"紫晶零件","desc":["紫晶纤维经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的紫晶零件。"]},
-{"id":"item_glass_enr_bottle","name":"高晶质瓶","desc":["由高晶纤维加工后得来的金属瓶，可用于其他材料合成。","部分特殊化学试剂仅能以高晶质瓶储存，其中就包括凶名显赫的“蚀水”——域化三氯化铁溶液。"]},
-{"id":"item_glass_enr_cmpt","name":"高晶零件","desc":["高晶纤维经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的高晶零件。"]},
-{"id":"item_iron_bottle","name":"蓝铁瓶","desc":["由蓝铁块加工后得来的金属瓶，可用于其他材料合成。","市面上较为少见的铁瓶，即便与异铁极度近似的蓝铁具备较强的抗氧化性，但人们依旧喜爱使用钢制容器。"]},
-{"id":"item_iron_cmpt","name":"铁制零件","desc":["蓝铁经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的铁制零件。"]},
-{"id":"item_iron_enr","name":"钢块","desc":["致密蓝铁粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，终末地工业生产的钢材已被列为《塔卫二工业金属侵蚀耐受标准》二级标准参考物。"]},
-{"id":"item_iron_enr_bottle","name":"钢质瓶","desc":["由钢块加工后得来的金属瓶，可用于其他材料合成。","市面上最为常见的钢瓶。"]},
-{"id":"item_iron_enr_cmpt","name":"钢制零件","desc":["钢块经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的钢制零件。"]},
-{"id":"item_iron_enr_powder","name":"致密蓝铁粉末","desc":["蓝铁粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，致密蓝铁粉末广受绘画爱好者欢迎。"]},
-{"id":"item_iron_nugget","name":"蓝铁块","desc":["由蓝铁矿石精炼得来的金属块，可用于其他材料合成。","在塔卫二为什么会存在与异铁如此近似的金属，这仍是未解之谜。"]},
-{"id":"item_iron_ore","name":"蓝铁矿","desc":["一种天然存在的蓝色合金，可在工业系统中进行加工。","蓝铁的形成原因众说纷纭，在工业金属尚未出现的时代，它是人们最为依赖的金属。"]},
-{"id":"item_iron_powder","name":"蓝铁粉末","desc":["蓝铁块粉碎后的粉末，可用于其他材料合成。","在经过粉碎处理后，蓝铁二级加工品的质地更加均匀。"]},
-{"id":"item_liquid_plant_grass_1","name":"锦草溶液","desc":["锦草的溶液，经过后续加工合成后，可制成药剂以供使用。","为完美发挥锦草提取物药物作用而特殊配制的溶液。"]},
-{"id":"item_liquid_plant_grass_2","name":"芽针溶液","desc":["芽针的溶液，经过后续加工合成后，可制成药剂以供使用。","为完美发挥芽针提取物药物作用而特殊配制的溶液。"]},
-{"id":"item_liquid_water","name":"清水","desc":["干净的清水，在工业系统中有丰富的使用场景。","它是永远的生命之源。"]},
-{"id":"item_liquid_xiranite","name":"液化息壤","desc":["溶解在清水中的息壤，可用于其他材料合成。常用于灌装后通过射流无人机消除武陵地区的动态侵蚀。","将息壤溶于清水，许多人第一次听到这件事时，会认为它无比简单，但实际上，如果没有恰当的设备与技术，操作者仅能获得毫无意义的产物——如同泡在水中的砂砾。"]},
-{"id":"item_muck_feces_1","name":"驮兽粪便","desc":["驮兽的粪便，可以在生长期的田块施肥时作为肥料，有缩短田块生长期时间的效果。","驮兽粪便，可以为土壤提供丰富养分。\n在野外遇见驮兽时，只要拍一拍，就能收获……一个惊喜。"]},
-{"id":"item_muck_xiranite_1","name":"膨地啪","desc":["驮兽粪便与液化息壤合成的肥料，可以在生长期的田块施肥时作为肥料，有增加田块收获时产物数量的效果。","驮兽粪便加工后产出的肥料，可以对田块进行施肥。\n“一块膨地啪，亩产八万八。”"]},
-{"id":"item_originium_enr_powder","name":"致密源石粉末","desc":["源矿粉末研磨后的细粉，状态稳定，可用于其他材料合成。","工团在源石培植项目初期尝试过“粉末培植法”，然而由此培育出的晶簇会快速失去活性。"]},
-{"id":"item_originium_ore","name":"源矿","desc":["以最粗粝的状态被挖掘出来的源石，可在工业系统中进行加工。","工业生产活动所必需的基础型矿物。"]},
-{"id":"item_originium_powder","name":"源石粉末","desc":["稳定的源石粉末，可用于其他材料合成。","终末地利用协议技术对源石粉末进行了特殊的稳定化处理。"]},
-{"id":"item_plant_bbflower_1","name":"酮化灌木","desc":["可在野外采集或在工厂培育出的植物，内含易燃易爆成分，常用于制造工业爆炸物。","酮化灌木是塔卫二的本土植物，它往往生长于土壤成分较为特殊的环境中。"]},
-{"id":"item_plant_bbflower_powder_1","name":"酮化灌木粉末","desc":["酮化灌木粉末，可用于其他材料合成。","在经过粉碎处理后，酮化灌木的成分提取过程将更加便利。"]},
-{"id":"item_plant_bbflower_seed_1","name":"酮化树种","kind":"seed","desc":["酮化灌木的种子，可用于培育酮化灌木。","大部分学者认为，酮化灌木中之所以能提取到硝化物，是因为它吸收了过量含有侵蚀物质的雨水。"]},
-{"id":"item_plant_grass_1","name":"锦草","desc":["可在野外采集或在工厂培育出的植物，粉碎后可用于食品或其他材料合成。","锦草又称锦星草，因其春夏之际星星点点长于山阴处而获此名。\n"]},
-{"id":"item_plant_grass_2","name":"芽针","desc":["可在野外采集或在工厂培育出的花朵，粉碎后可用于药品或其他材料合成。","芽针是武陵生存能力最强的草本植物，会在盛夏时节开放出极其绚丽的花朵。"]},
-{"id":"item_plant_grass_powder_1","name":"锦草粉末","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，锦草粉末需要溶解并灌装后才能使用。"]},
-{"id":"item_plant_grass_powder_2","name":"芽针粉末","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，芽针粉末需要溶解并灌装后才能使用。"]},
-{"id":"item_plant_grass_seed_1","name":"锦草种子","kind":"seed","desc":["锦草的种子，通过采种获得，可辅以大量清水培育锦草。","开拓区的幼童们大多喜欢将锦草的叶片折叠起来放在唇边，不起眼的草叶能演奏出兽吼般的声响。"]},
-{"id":"item_plant_grass_seed_2","name":"芽针种子","kind":"seed","desc":["芽针的种子，通过采种获得，可辅以大量清水培育芽针。","芽针会利用自己的“尖刺”，将种子挂在周边小型动物身上传播到远处。"]},
-{"id":"item_plant_moss_1","name":"荞花","desc":["可在野外采集或在工厂培育出的艳丽花朵，粉碎后可用于药品或其他材料合成。","战争初期，一支宏山侦察队首先发现了这种色彩艳丽的植物，并在紧急状况下将其作为止血药物使用。"]},
-{"id":"item_plant_moss_2","name":"柑实","desc":["可在野外采集或在工厂培育出的果实，粉碎后可用于食品或其他材料合成。","塔卫二的柑橘属植物主要起源于大陆中部地区，传播至文明环带的品种大多具有果实大，果肉韧性高等特点。"]},
-{"id":"item_plant_moss_3","name":"砂叶","desc":["可在野外采集或在工厂培育出的叶片粗粝的植物，粉碎后可用于精细研磨。","众生长地是“荒地手工业”领域中的翘楚，他们善于使用各种天然材料在艰苦环境中生存。"]},
-{"id":"item_plant_moss_enr_powder_1","name":"细磨荞花粉末","desc":["荞花粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，荞花提取物表现出了“异常”活性。"]},
-{"id":"item_plant_moss_enr_powder_2","name":"细磨柑实粉末","desc":["柑实粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，细磨柑实粉末的味道极度苦涩。"]},
-{"id":"item_plant_moss_powder_1","name":"荞花粉末","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，荞花的药性得到了充分释放。"]},
-{"id":"item_plant_moss_powder_2","name":"柑实粉末","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，柑实的风味得到了充分展现。"]},
-{"id":"item_plant_moss_powder_3","name":"砂叶粉末","desc":["砂叶粉末，可用于其他材料合成。","在经过粉碎处理后，砂叶中粗粝的部分得到了充分利用。"]},
-{"id":"item_plant_moss_seed_1","name":"荞花种子","kind":"seed","desc":["荞花的种子，可用于培育荞花。","荞花最初被发现于一处天然石拱下，因此也曾被称作“桥花”。"]},
-{"id":"item_plant_moss_seed_2","name":"柑实种子","kind":"seed","desc":["柑实的种子，可用于培育柑实。","文明环带的植物爱好者曾评选出“荒野上最常见的植物”，荞花、柑实位处排行榜前十。"]},
-{"id":"item_plant_moss_seed_3","name":"砂叶种子","kind":"seed","desc":["砂叶的种子，可用于培育砂叶。","“荒地手工业”的发展历史最早可以追溯到近百年前。为了活下来，流落在荒地上的人类必须用尽一切手段。"]},
-{"id":"item_plant_sp_1","name":"灰芦麦","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","灰芦麦易于种植，产量较足，是开拓区民众的主粮。"]},
-{"id":"item_plant_sp_2","name":"苦叶椒","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","这种植物的叶片被评为“开拓区味道最苦的药物”。\n"]},
-{"id":"item_plant_sp_3","name":"琼叶参","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","琼叶参药性温良平和，常被宏山人当作温补自身的药材使用。"]},
-{"id":"item_plant_sp_4","name":"金石稻","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","金石稻因其圆润的种实、玉石般的质地又被称作“金石晶珠”。"]},
-{"id":"item_plant_sp_seed_1","name":"灰芦麦种子","kind":"seed","desc":["野生灰芦麦的种子，通过调制成田块并进行精细化培育，可产出灰芦麦。","经严格筛选的灰芦麦，其种子饱满完整，活力较高。"]},
-{"id":"item_plant_sp_seed_2","name":"苦叶椒种子","kind":"seed","desc":["野生苦叶椒的种子，通过调制成田块并进行精细化培育，可产出苦叶椒。","经严格筛选的苦叶椒，其种子饱满完整，活力较高。"]},
-{"id":"item_plant_sp_seed_3","name":"琼叶参种子","kind":"seed","desc":["野生琼叶参的种子，通过调制成田块并进行精细化培育，可产出琼叶参。","经严格筛选的琼叶参，其种子饱满完整，活力较高。"]},
-{"id":"item_plant_sp_seed_4","name":"金石稻种子","kind":"seed","desc":["野生金石稻的种子，通过调制成田块并进行精细化培育，可产出金石稻。","经严格筛选的金石稻，其种子饱满完整，活力较高。"]},
-{"id":"item_plant_tundra_wood","name":"原木","desc":["在野外可采集的普通木材，可用于其他材料合成。","总之，先砍树吧。"]},
-{"id":"item_proc_battery_1","name":"低容谷地电池","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","该产品外壳破碎导致内容物泄露会威胁到人体健康，请谨慎使用。"]},
-{"id":"item_proc_battery_2","name":"中容谷地电池","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","“能工巧匠”在必要时能够将中容电池改造为爆破性武器。"]},
-{"id":"item_proc_battery_3","name":"高容谷地电池","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","回收废弃电池是许多荒地居民的主业。"]},
-{"id":"item_proc_battery_4","name":"低容武陵电池","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","“息壤供能”是武陵与终末地工业重要的合作项目之一。"]},
-{"id":"item_proc_bomb_1","name":"工业爆炸物","desc":["组装出的爆炸物。\n可直接使用进行攻击，爆炸时对周围所有敌人造成伤害。","该物品爆炸风险较高，请谨慎携带及使用。"]},
-{"id":"item_quartz_enr","name":"高晶纤维","desc":["高晶粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，高晶纤维已经能够应用于多种信号传输场景。"]},
-{"id":"item_quartz_enr_powder","name":"高晶粉末","desc":["紫晶粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，未妥善保存的高晶粉末会在非密封容器中“流动”。"]},
-{"id":"item_quartz_glass","name":"紫晶纤维","desc":["由紫晶矿精炼得来的纤维，可用于其他材料合成。","将紫晶加工成纤维后，其拉伸度获得了极大的增强。\n"]},
-{"id":"item_quartz_powder","name":"紫晶粉末","desc":["紫晶纤维粉碎后的粉末，可用于其他材料合成。","在经过粉碎处理后，紫晶二级加工品的质地更加均匀。"]},
-{"id":"item_quartz_sand","name":"紫晶矿","desc":["内蕴紫色晶体的岩石，可在工业系统中进行加工。","紫晶在精密工业等领域的使用较为广泛，是塔卫二电子工业的基础材料之一。"]},
-{"id":"item_xiranite_powder","name":"息壤","desc":["通过特殊设备获得的材料，可用于特殊设施修复或与据点进行交易。","将源石与巨兽力量结合于一处后诞生出的新型源石材料。它撑起了武陵的万家灯火。"]},
+{"id":"item_bottled_food_1","name":"柑实罐头","pinyin":"ganshiguantou","desc":["使用后可以回复干员生命值的战术物品。","平价的柑实罐头，是居于荒地的人们最易保存的维生素补充品。"]},
+{"id":"item_bottled_food_2","name":"优质柑实罐头","pinyin":"youzhiganshiguantou","desc":["使用后可以回复干员生命值的战术物品。","革新了包装工艺的柑实罐头，最近因含糖量过高而受到文明环带市场的抵制。"]},
+{"id":"item_bottled_food_3","name":"精选柑实罐头","pinyin":"jingxuanganshiguantou","desc":["使用后可以回复干员生命值的战术物品。","以天然、健康及种植环境为卖点的柑实罐头，内部添加了微量综合维生素，建议零售价格稍显虚高。"]},
+{"id":"item_bottled_food_4","name":"锦草软饮","pinyin":"jincaoruanyin","desc":["使用后可以回复干员生命值的战术物品。","仅含少量锦草提取物的碳酸饮料，因其清香的气味而备受欢迎。"]},
+{"id":"item_bottled_rec_hp_1","name":"荞愈胶囊","pinyin":"qiaoyujiaonang","desc":["使用后可以回复干员生命值的战术物品。","制作手段简单的胶囊，外出颠簸中或许会撒漏药粉导致药效降低。"]},
+{"id":"item_bottled_rec_hp_2","name":"优质荞愈胶囊","pinyin":"youzhiqiaoyujiaonang","desc":["使用后可以回复干员生命值的战术物品。","标准封装的胶囊，终末地工业曾为它进行过广告宣传，但可惜的是，其销量远不及罗德岛的同类产品。"]},
+{"id":"item_bottled_rec_hp_3","name":"精选荞愈胶囊","pinyin":"jingxuanqiaoyujiaonang","desc":["使用后可以回复干员生命值的战术物品。","优化了封装工艺的胶囊，终末地工业兼顾了本产品在各种作战条件下的使用便利性。"]},
+{"id":"item_bottled_rec_hp_4","name":"芽针针剂","pinyin":"yazhenzhenji","desc":["使用后可以回复干员生命值的战术物品。","本针剂仅可使用皮下注射。"]},
+{"id":"item_carbon_enr","name":"稳定碳块","pinyin":"wendingtankuai","desc":["致密碳粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，碳块在碳元素状态上获得了微妙且稳定的平衡。"]},
+{"id":"item_carbon_enr_powder","name":"致密碳粉末","pinyin":"zhimitanfenmo","desc":["碳粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，碳粉已拥有了独特的细腻质地。"]},
+{"id":"item_carbon_mtl","name":"碳块","pinyin":"tankuai","desc":["植物烧制的碳材料，可用于其他材料合成。","终末地工业在战争时期就已完成了对制碳过程中废气处理的相关技术的优化。"]},
+{"id":"item_carbon_powder","name":"碳粉末","pinyin":"tanfenmo","desc":["碳材料的粉末，可用于其他材料合成。","在经过粉碎处理后，碳拥有了更细腻的质地。"]},
+{"id":"item_crystal_enr","name":"密制晶体","pinyin":"mizhijingti","desc":["致密晶体粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，密制晶体足以被称为“宝石”。"]},
+{"id":"item_crystal_enr_powder","name":"致密晶体粉末","pinyin":"zhimijingtifenmo","desc":["晶体外壳粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，致密晶体粉末中的颗粒将通透细腻至几乎不可见的地步。"]},
+{"id":"item_crystal_powder","name":"晶体外壳粉末","pinyin":"jingtiwaikefenmo","desc":["晶体外壳的粉末，可用于其他材料合成。","在经过粉碎处理后，晶体外壳二级加工品的质地更加均匀。"]},
+{"id":"item_crystal_shell","name":"晶体外壳","pinyin":"jingtiwaike","desc":["源石加工时剥离的外壳部分，可用于其他材料合成。","源石晶体外壳的厚度通常可以作为判断一条矿脉存续时间的重要依据。"]},
+{"id":"item_equip_script_1","name":"紫晶装备原件","pinyin":"zijingzhuangbeiyuanjian","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为紫晶。"]},
+{"id":"item_equip_script_2","name":"蓝铁装备原件","pinyin":"lantiezhuangbeiyuanjian","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为蓝铁，相较低级版本提高了脱模便利性。"]},
+{"id":"item_equip_script_3","name":"高晶装备原件","pinyin":"gaojingzhuangbeiyuanjian","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性协议铸造原件，主体材料为高晶，操作起来更加便利。"]},
+{"id":"item_equip_script_4","name":"息壤装备原件","pinyin":"xirangzhuangbeiyuanjian","desc":["通过多种材料加工获得的装备原件，可用于装备制造。","该原件全称为生物式核心适应型一次性高透明息壤铸造原件，主体材料为密制晶体及息壤。相较寻常版本，拥有更优良的信息传导性能。"]},
+{"id":"item_fbottle_glass_grass_1","name":"紫晶质瓶 (锦草溶液)","pinyin":"zijingzhiping","desc":["装有锦草溶液的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glass_grass_2","name":"紫晶质瓶 (芽针溶液)","pinyin":"zijingzhiping","desc":["装有芽针溶液的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glass_water","name":"紫晶质瓶 (清水)","pinyin":"zijingzhiping","desc":["装有清水的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glass_xiranite","name":"紫晶质瓶 (液化息壤)","pinyin":"zijingzhiping","desc":["装有液化息壤的紫晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glassenr_grass_1","name":"高晶质瓶 (锦草溶液)","pinyin":"gaojingzhiping","desc":["装有锦草溶液的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glassenr_grass_2","name":"高晶质瓶 (芽针溶液)","pinyin":"gaojingzhiping","desc":["装有芽针溶液的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glassenr_water","name":"高晶质瓶 (清水)","pinyin":"gaojingzhiping","desc":["装有清水的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_glassenr_xiranite","name":"高晶质瓶 (液化息壤)","pinyin":"gaojingzhiping","desc":["装有液化息壤的高晶质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_iron_grass_1","name":"蓝铁瓶 (锦草溶液)","pinyin":"lantieping","desc":["装有锦草溶液的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_iron_grass_2","name":"蓝铁瓶 (芽针溶液)","pinyin":"lantieping","desc":["装有芽针溶液的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_iron_water","name":"蓝铁瓶 (清水)","pinyin":"lantieping","desc":["装有清水的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_iron_xiranite","name":"蓝铁瓶 (液化息壤)","pinyin":"lantieping","desc":["装有液化息壤的蓝铁瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_ironenr_grass_1","name":"钢质瓶 (锦草溶液)","pinyin":"gangzhiping","desc":["装有锦草溶液的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_ironenr_grass_2","name":"钢质瓶 (芽针溶液)","pinyin":"gangzhiping","desc":["装有芽针溶液的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_ironenr_water","name":"钢质瓶 (清水)","pinyin":"gangzhiping","desc":["装有清水的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_fbottle_ironenr_xiranite","name":"钢质瓶 (液化息壤)","pinyin":"gangzhiping","desc":["装有液化息壤的钢质瓶。","我问你为什么装有液体的瓶子和原来的瓶子是一个名字，他妈的连描述信息也是一样的？"]},
+{"id":"item_glass_bottle","name":"紫晶质瓶","pinyin":"zijingzhiping","desc":["由紫晶纤维加工得来的瓶子，可用于其他材料合成。","出于本身的脆性、重量、侵蚀耐受程度等方面的缺陷，紫晶质瓶在文明环带市场中已逐渐被淘汰。"]},
+{"id":"item_glass_cmpt","name":"紫晶零件","pinyin":"zijinglingjian","desc":["紫晶纤维经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的紫晶零件。"]},
+{"id":"item_glass_enr_bottle","name":"高晶质瓶","pinyin":"gaojingzhiping","desc":["由高晶纤维加工后得来的金属瓶，可用于其他材料合成。","部分特殊化学试剂仅能以高晶质瓶储存，其中就包括凶名显赫的“蚀水”——域化三氯化铁溶液。"]},
+{"id":"item_glass_enr_cmpt","name":"高晶零件","pinyin":"gaojinglingjian","desc":["高晶纤维经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的高晶零件。"]},
+{"id":"item_iron_bottle","name":"蓝铁瓶","pinyin":"lantieping","desc":["由蓝铁块加工后得来的金属瓶，可用于其他材料合成。","市面上较为少见的铁瓶，即便与异铁极度近似的蓝铁具备较强的抗氧化性，但人们依旧喜爱使用钢制容器。"]},
+{"id":"item_iron_cmpt","name":"铁制零件","pinyin":"tiezhilingjian","desc":["蓝铁经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的铁制零件。"]},
+{"id":"item_iron_enr","name":"钢块","pinyin":"gangkuai","desc":["致密蓝铁粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，终末地工业生产的钢材已被列为《塔卫二工业金属侵蚀耐受标准》二级标准参考物。"]},
+{"id":"item_iron_enr_bottle","name":"钢质瓶","pinyin":"gangzhiping","desc":["由钢块加工后得来的金属瓶，可用于其他材料合成。","市面上最为常见的钢瓶。"]},
+{"id":"item_iron_enr_cmpt","name":"钢制零件","pinyin":"gangzhilingjian","desc":["钢块经加工后成型的零件，可用于其他材料合成或设备制造。","具备一定通用性的钢制零件。"]},
+{"id":"item_iron_enr_powder","name":"致密蓝铁粉末","pinyin":"zhimilantiefenmo","desc":["蓝铁粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，致密蓝铁粉末广受绘画爱好者欢迎。"]},
+{"id":"item_iron_nugget","name":"蓝铁块","pinyin":"lantiekuai","desc":["由蓝铁矿石精炼得来的金属块，可用于其他材料合成。","在塔卫二为什么会存在与异铁如此近似的金属，这仍是未解之谜。"]},
+{"id":"item_iron_ore","name":"蓝铁矿","pinyin":"lantiekuang","desc":["一种天然存在的蓝色合金，可在工业系统中进行加工。","蓝铁的形成原因众说纷纭，在工业金属尚未出现的时代，它是人们最为依赖的金属。"]},
+{"id":"item_iron_powder","name":"蓝铁粉末","pinyin":"lantiefenmo","desc":["蓝铁块粉碎后的粉末，可用于其他材料合成。","在经过粉碎处理后，蓝铁二级加工品的质地更加均匀。"]},
+{"id":"item_liquid_plant_grass_1","name":"锦草溶液","pinyin":"jincaorongye","kind":"liquid","desc":["锦草的溶液，经过后续加工合成后，可制成药剂以供使用。","为完美发挥锦草提取物药物作用而特殊配制的溶液。"]},
+{"id":"item_liquid_plant_grass_2","name":"芽针溶液","pinyin":"yazhenrongye","kind":"liquid","desc":["芽针的溶液，经过后续加工合成后，可制成药剂以供使用。","为完美发挥芽针提取物药物作用而特殊配制的溶液。"]},
+{"id":"item_liquid_water","name":"清水","pinyin":"qingshui","kind":"liquid","desc":["干净的清水，在工业系统中有丰富的使用场景。","它是永远的生命之源。"]},
+{"id":"item_liquid_xiranite","name":"液化息壤","pinyin":"yehuaxirang","kind":"liquid","desc":["溶解在清水中的息壤，可用于其他材料合成。常用于灌装后通过射流无人机消除武陵地区的动态侵蚀。","将息壤溶于清水，许多人第一次听到这件事时，会认为它无比简单，但实际上，如果没有恰当的设备与技术，操作者仅能获得毫无意义的产物——如同泡在水中的砂砾。"]},
+{"id":"item_muck_feces_1","name":"驮兽粪便","pinyin":"tuoshoufenbian","desc":["驮兽的粪便，可以在生长期的田块施肥时作为肥料，有缩短田块生长期时间的效果。","驮兽粪便，可以为土壤提供丰富养分。\n在野外遇见驮兽时，只要拍一拍，就能收获……一个惊喜。"]},
+{"id":"item_muck_xiranite_1","name":"膨地啪","pinyin":"pengdipa","desc":["驮兽粪便与液化息壤合成的肥料，可以在生长期的田块施肥时作为肥料，有增加田块收获时产物数量的效果。","驮兽粪便加工后产出的肥料，可以对田块进行施肥。\n“一块膨地啪，亩产八万八。”"]},
+{"id":"item_originium_enr_powder","name":"致密源石粉末","pinyin":"zhimiyuanshifenmo","desc":["源矿粉末研磨后的细粉，状态稳定，可用于其他材料合成。","工团在源石培植项目初期尝试过“粉末培植法”，然而由此培育出的晶簇会快速失去活性。"]},
+{"id":"item_originium_ore","name":"源矿","pinyin":"yuankuang","desc":["以最粗粝的状态被挖掘出来的源石，可在工业系统中进行加工。","工业生产活动所必需的基础型矿物。"]},
+{"id":"item_originium_powder","name":"源石粉末","pinyin":"yuanshifenmo","desc":["稳定的源石粉末，可用于其他材料合成。","终末地利用协议技术对源石粉末进行了特殊的稳定化处理。"]},
+{"id":"item_plant_bbflower_1","name":"酮化灌木","pinyin":"tonghuaguanmu","desc":["可在野外采集或在工厂培育出的植物，内含易燃易爆成分，常用于制造工业爆炸物。","酮化灌木是塔卫二的本土植物，它往往生长于土壤成分较为特殊的环境中。"]},
+{"id":"item_plant_bbflower_powder_1","name":"酮化灌木粉末","pinyin":"tonghuaguanmufenmo","desc":["酮化灌木粉末，可用于其他材料合成。","在经过粉碎处理后，酮化灌木的成分提取过程将更加便利。"]},
+{"id":"item_plant_bbflower_seed_1","name":"酮化树种","pinyin":"tonghuashuzhong","kind":"seed","desc":["酮化灌木的种子，可用于培育酮化灌木。","大部分学者认为，酮化灌木中之所以能提取到硝化物，是因为它吸收了过量含有侵蚀物质的雨水。"]},
+{"id":"item_plant_grass_1","name":"锦草","pinyin":"jincao","desc":["可在野外采集或在工厂培育出的植物，粉碎后可用于食品或其他材料合成。","锦草又称锦星草，因其春夏之际星星点点长于山阴处而获此名。\n"]},
+{"id":"item_plant_grass_2","name":"芽针","pinyin":"yazhen","desc":["可在野外采集或在工厂培育出的花朵，粉碎后可用于药品或其他材料合成。","芽针是武陵生存能力最强的草本植物，会在盛夏时节开放出极其绚丽的花朵。"]},
+{"id":"item_plant_grass_powder_1","name":"锦草粉末","pinyin":"jincaofenmo","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，锦草粉末需要溶解并灌装后才能使用。"]},
+{"id":"item_plant_grass_powder_2","name":"芽针粉末","pinyin":"yazhenfenmo","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，芽针粉末需要溶解并灌装后才能使用。"]},
+{"id":"item_plant_grass_seed_1","name":"锦草种子","pinyin":"jincaozhongzi","kind":"seed","desc":["锦草的种子，通过采种获得，可辅以大量清水培育锦草。","开拓区的幼童们大多喜欢将锦草的叶片折叠起来放在唇边，不起眼的草叶能演奏出兽吼般的声响。"]},
+{"id":"item_plant_grass_seed_2","name":"芽针种子","pinyin":"yazhenzhongzi","kind":"seed","desc":["芽针的种子，通过采种获得，可辅以大量清水培育芽针。","芽针会利用自己的“尖刺”，将种子挂在周边小型动物身上传播到远处。"]},
+{"id":"item_plant_moss_1","name":"荞花","pinyin":"qiaohua","desc":["可在野外采集或在工厂培育出的艳丽花朵，粉碎后可用于药品或其他材料合成。","战争初期，一支宏山侦察队首先发现了这种色彩艳丽的植物，并在紧急状况下将其作为止血药物使用。"]},
+{"id":"item_plant_moss_2","name":"柑实","pinyin":"ganshi","desc":["可在野外采集或在工厂培育出的果实，粉碎后可用于食品或其他材料合成。","塔卫二的柑橘属植物主要起源于大陆中部地区，传播至文明环带的品种大多具有果实大，果肉韧性高等特点。"]},
+{"id":"item_plant_moss_3","name":"砂叶","pinyin":"shaye","desc":["可在野外采集或在工厂培育出的叶片粗粝的植物，粉碎后可用于精细研磨。","众生长地是“荒地手工业”领域中的翘楚，他们善于使用各种天然材料在艰苦环境中生存。"]},
+{"id":"item_plant_moss_enr_powder_1","name":"细磨荞花粉末","pinyin":"ximoqiaohuafenmo","desc":["荞花粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，荞花提取物表现出了“异常”活性。"]},
+{"id":"item_plant_moss_enr_powder_2","name":"细磨柑实粉末","pinyin":"ximoganshifenmo","desc":["柑实粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，细磨柑实粉末的味道极度苦涩。"]},
+{"id":"item_plant_moss_powder_1","name":"荞花粉末","pinyin":"qiaohuafenmo","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，荞花的药性得到了充分释放。"]},
+{"id":"item_plant_moss_powder_2","name":"柑实粉末","pinyin":"ganshifenmo","desc":["使用后可以回复干员生命值的战术物品。","在经过粉碎处理后，柑实的风味得到了充分展现。"]},
+{"id":"item_plant_moss_powder_3","name":"砂叶粉末","pinyin":"shayefenmo","desc":["砂叶粉末，可用于其他材料合成。","在经过粉碎处理后，砂叶中粗粝的部分得到了充分利用。"]},
+{"id":"item_plant_moss_seed_1","name":"荞花种子","pinyin":"qiaohuazhongzi","kind":"seed","desc":["荞花的种子，可用于培育荞花。","荞花最初被发现于一处天然石拱下，因此也曾被称作“桥花”。"]},
+{"id":"item_plant_moss_seed_2","name":"柑实种子","pinyin":"ganshizhongzi","kind":"seed","desc":["柑实的种子，可用于培育柑实。","文明环带的植物爱好者曾评选出“荒野上最常见的植物”，荞花、柑实位处排行榜前十。"]},
+{"id":"item_plant_moss_seed_3","name":"砂叶种子","pinyin":"shayezhongzi","kind":"seed","desc":["砂叶的种子，可用于培育砂叶。","“荒地手工业”的发展历史最早可以追溯到近百年前。为了活下来，流落在荒地上的人类必须用尽一切手段。"]},
+{"id":"item_plant_sp_1","name":"灰芦麦","pinyin":"huilumai","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","灰芦麦易于种植，产量较足，是开拓区民众的主粮。"]},
+{"id":"item_plant_sp_2","name":"苦叶椒","pinyin":"kuyejiao","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","这种植物的叶片被评为“开拓区味道最苦的药物”。\n"]},
+{"id":"item_plant_sp_3","name":"琼叶参","pinyin":"qiongyecan","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","琼叶参药性温良平和，常被宏山人当作温补自身的药材使用。"]},
+{"id":"item_plant_sp_4","name":"金石稻","pinyin":"jinshidao","desc":["通过精细种植才能培育的作物，可直接用于珍贵食药的制作。","金石稻因其圆润的种实、玉石般的质地又被称作“金石晶珠”。"]},
+{"id":"item_plant_sp_seed_1","name":"灰芦麦种子","pinyin":"huilumaizhongzi","kind":"seed","desc":["野生灰芦麦的种子，通过调制成田块并进行精细化培育，可产出灰芦麦。","经严格筛选的灰芦麦，其种子饱满完整，活力较高。"]},
+{"id":"item_plant_sp_seed_2","name":"苦叶椒种子","pinyin":"kuyejiaozhongzi","kind":"seed","desc":["野生苦叶椒的种子，通过调制成田块并进行精细化培育，可产出苦叶椒。","经严格筛选的苦叶椒，其种子饱满完整，活力较高。"]},
+{"id":"item_plant_sp_seed_3","name":"琼叶参种子","pinyin":"qiongyecanzhongzi","kind":"seed","desc":["野生琼叶参的种子，通过调制成田块并进行精细化培育，可产出琼叶参。","经严格筛选的琼叶参，其种子饱满完整，活力较高。"]},
+{"id":"item_plant_sp_seed_4","name":"金石稻种子","pinyin":"jinshidaozhongzi","kind":"seed","desc":["野生金石稻的种子，通过调制成田块并进行精细化培育，可产出金石稻。","经严格筛选的金石稻，其种子饱满完整，活力较高。"]},
+{"id":"item_plant_tundra_wood","name":"原木","pinyin":"yuanmu","desc":["在野外可采集的普通木材，可用于其他材料合成。","总之，先砍树吧。"]},
+{"id":"item_proc_battery_1","name":"低容谷地电池","pinyin":"dironggudidianchi","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","该产品外壳破碎导致内容物泄露会威胁到人体健康，请谨慎使用。"]},
+{"id":"item_proc_battery_2","name":"中容谷地电池","pinyin":"zhongronggudidianchi","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","“能工巧匠”在必要时能够将中容电池改造为爆破性武器。"]},
+{"id":"item_proc_battery_3","name":"高容谷地电池","pinyin":"gaoronggudidianchi","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","回收废弃电池是许多荒地居民的主业。"]},
+{"id":"item_proc_battery_4","name":"低容武陵电池","pinyin":"dirongwulingdianchi","desc":["通过设备封装获得的电池，可用于发电、设备充能或与据点进行交易。","“息壤供能”是武陵与终末地工业重要的合作项目之一。"]},
+{"id":"item_proc_bomb_1","name":"工业爆炸物","pinyin":"gongyebaozhawu","desc":["组装出的爆炸物。\n可直接使用进行攻击，爆炸时对周围所有敌人造成伤害。","该物品爆炸风险较高，请谨慎携带及使用。"]},
+{"id":"item_quartz_enr","name":"高晶纤维","pinyin":"gaojingxianwei","desc":["高晶粉末精炼融合后的高级材料，可用于其他材料合成。","多级加工后，高晶纤维已经能够应用于多种信号传输场景。"]},
+{"id":"item_quartz_enr_powder","name":"高晶粉末","pinyin":"gaojingfenmo","desc":["紫晶粉末研磨后的细粉，可用于其他材料合成。","在协议技术介入下，经过精细研磨后，未妥善保存的高晶粉末会在非密封容器中“流动”。"]},
+{"id":"item_quartz_glass","name":"紫晶纤维","pinyin":"zijingxianwei","desc":["由紫晶矿精炼得来的纤维，可用于其他材料合成。","将紫晶加工成纤维后，其拉伸度获得了极大的增强。\n"]},
+{"id":"item_quartz_powder","name":"紫晶粉末","pinyin":"zijingfenmo","desc":["紫晶纤维粉碎后的粉末，可用于其他材料合成。","在经过粉碎处理后，紫晶二级加工品的质地更加均匀。"]},
+{"id":"item_quartz_sand","name":"紫晶矿","pinyin":"zijingkuang","desc":["内蕴紫色晶体的岩石，可在工业系统中进行加工。","紫晶在精密工业等领域的使用较为广泛，是塔卫二电子工业的基础材料之一。"]},
+{"id":"item_xiranite_powder","name":"息壤","pinyin":"xirang","desc":["通过特殊设备获得的材料，可用于特殊设施修复或与据点进行交易。","将源石与巨兽力量结合于一处后诞生出的新型源石材料。它撑起了武陵的万家灯火。"]},
+{"id":"item_中容武陵电池","name":"中容武陵电池","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_壤晶","name":"壤晶","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_壤晶废液","name":"壤晶废液","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_惰性壤晶废液","name":"惰性壤晶废液","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_污水","name":"污水","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_赤铜矿","name":"赤铜矿","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_赤铜装备原件","name":"赤铜装备原件","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
+{"id":"item_赤铜零件","name":"赤铜零件","pinyin":"newitem","desc":["手抄的，等以后自动了才有描述信息",""]},
 ],"machines":[
 {"id":"winder_1","name":"装备原件机","desc":"能够将不同材料嵌合加工成装备原件的设备。","power":10,"size":[4,6]},
 {"id":"furnance_1","name":"精炼炉","desc":"使用高温熔炼其他材料的设备。","power":5,"size":[3,3]},
@@ -1182,6 +1395,7 @@ function handleToggleOpen(item) {
 {"id":"shaper_1","name":"塑形机","desc":"能够冲压各种容器的设备。","power":10,"size":[3,3]},
 {"id":"seedcollector_1","name":"采种机","desc":"能够采集普通植物种子的设备。","power":10,"size":[5,5]},
 {"id":"mix_pool_1","name":"反应池","desc":"进行固液体化学反应的设备。","power":50,"size":[5,5]},
+{"id":"feiyetong_1","name":"废水处理机","desc":"","power":50,"size":[3,3]},
 ],"recipes":[
 {"id":"thickener_originium_enr_powder_1","name":"致密源石粉末生产","machineId":"thickener_1","ingredients":[{"count":2,"id":"item_originium_powder"},{"count":1,"id":"item_plant_moss_powder_3"}],"products":[{"count":1,"id":"item_originium_enr_powder"}],"time":2},
 {"id":"furnance_carbon_enr_powder_1","name":"致密碳粉末生产","machineId":"furnance_1","ingredients":[{"count":1,"id":"item_plant_moss_enr_powder_1"}],"products":[{"count":1,"id":"item_carbon_enr_powder"}],"time":2},
@@ -1304,6 +1518,13 @@ function handleToggleOpen(item) {
 {"id":"dismantler_ironenr_grass_2_1","name":"钢质瓶生产","kind":"pour","machineId":"dismantler_1","ingredients":[{"count":1,"id":"item_fbottle_ironenr_grass_2"}],"products":[{"count":1,"id":"item_iron_enr_bottle"},{"count":1,"id":"item_liquid_plant_grass_2"}],"time":2},
 {"id":"furnance_crystal_enr_1","name":"密制晶体生产","machineId":"furnance_1","ingredients":[{"count":1,"id":"item_crystal_enr_powder"}],"products":[{"count":1,"id":"item_crystal_enr"}],"time":2},
 {"id":"seedcollector_plant_moss_3_1","name":"砂叶种子生产","machineId":"seedcollector_1","ingredients":[{"count":1,"id":"item_plant_moss_3"}],"products":[{"count":2,"id":"item_plant_moss_seed_3"}],"time":2},
+{"id":"污水处理","name":"污水处理","machineId":"mix_pool_1","time":2,"ingredients":[{"id":"item_liquid_xiranite","count":1},{"id":"item_污水","count":1}],"products":[{"id":"item_壤晶废液","count":1},{"id":"item_惰性壤晶废液","count":1}]},
+{"id":"变废为宝","name":"变废为宝","machineId":"mix_pool_1","time":2,"ingredients":[{"id":"item_壤晶废液","count":2},{"id":"item_iron_powder","count":1}],"products":[{"id":"item_壤晶","count":1},{"id":"item_污水","count":1}]},
+{"id":"丢掉壤晶废液","name":"丢掉壤晶废液","machineId":"feiyetong_1","time":2,"ingredients":[{"id":"item_壤晶废液","count":1}],"products":[]},
+{"id":"赤铜粉末","name":"赤铜粉末","machineId":"grinder_1","time":2,"ingredients":[{"id":"item_赤铜矿","count":1}],"products":[{"id":"item_赤铜粉末","count":1}]},
+{"id":"赤铜零件","name":"赤铜零件","machineId":"component_mc_1","time":2,"ingredients":[{"id":"item_赤铜矿","count":1}],"products":[{"id":"item_赤铜零件","count":1}]},
+{"id":"赤铜装备原件","name":"赤铜装备原件","machineId":"winder_1","time":10,"ingredients":[{"id":"item_赤铜零件","count":10},{"id":"item_xiranite_powder","count":10}],"products":[{"id":"item_赤铜装备原件","count":1}]},
+{"id":"中容武陵电池","name":"中容武陵电池","machineId":"tools_assebling_mc_1","time":10,"ingredients":[{"id":"item_壤晶","count":5},{"id":"item_originium_enr_powder","count":20}],"products":[{"id":"item_中容武陵电池","count":1}]},
 ]};
     </script>
     <script>window['EndfieldImages'] = {
