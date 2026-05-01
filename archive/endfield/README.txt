@@ -1,5 +1,14 @@
 Arknights: Endfield related scripts or tools
 
+# Project Status
+
+This project is moved to https://github.com/FreskyZ/akef/tree/161fcbad8d32bc187a29a5cbc7e892fe1b8c791f
+
+The old development history is archived here
+
+Some completed or discontinued subprojects are archived here, include tree drawing algorithms,
+in game finance rule investigation, old data source backup, and old workflow for recipe visualization web page
+
 run python script:
 
 ```sh

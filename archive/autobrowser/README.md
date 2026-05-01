@@ -1,15 +1,10 @@
 # Browser Automation
 
-Current workflow:
+# Project Status
 
-- copy weapon.json into autobrowser folder if not exist is not same as endfield/sanity/weapon.json
-- start browser: docker run -d -p8002:8002 -p8004:8004 --rm --name browser1 my/browser:1
-- start node shell: docker run -it -v.:/work --rm --name browsernode1 -h BROWSER-NODE -w /work --network host my/node:1
-- uncomment createSession in index.ts, run node index.ts, copy session id into index.ts, comment createSession
-- get page id by curl localhost:8002/json/list, copy page id into index.ts, open devtools frontend url in windows browser
-  http://localhost:8002/devtools/inspector.html?ws=localhost:8002/devtools/page/{pageid}
-- navigate to https://wiki.skland.com/endfield/catalog?typeMainId=1&typeSubId=2
-- run index.ts
+This project is moved to https://github.com/FreskyZ/akef/tree/161fcbad8d32bc187a29a5cbc7e892fe1b8c791f/browser
+
+The old development history is archived here, the old investigation records are archived here
 
 ### Motivation
 
