@@ -1,12 +1,9 @@
 # ?syntax=docker/dockerfile:1
 
-# build minimal omz, why do omz repository contains so many not used files?
-#   builtin plugins directory is about 10mb and contains 2 large images files 1mb per file
-#   this is nearly same size as alpine rootfs itself and zsh program itself
-# - this stage build a /omz file remove not used files,
-# - does not contain zsh program, need setup mirror, apk update and apk add zsh
-# - contain my custom .zshrc by the way, when import in other stage, move .zshrc out of the folder
-FROM alpine:3.23.3 AS ohmyzsh-build
+# build minimal omz, why does omz repository contains so many not used files?
+# - this stage build a /build directory without unnecessary files and with necessary files
+# - does not contain the zsh program, need package manager and install
+FROM alpine:3.24.1 AS ohmyzsh-build
 
 # git clone git@github.com:ohmyzsh/ohmyzsh
 # tar cJf ohmyzsh.tar.xz -C ./ohmyzsh .
@@ -16,6 +13,7 @@ RUN <<EORUN
 set -ex
 cd /build
 # clear
+rm -rf .git
 rm -rf .github
 rm -rf .devcontainer
 rm -rf templates
@@ -49,6 +47,17 @@ PROMPT="[%{$fg_bold[black]%}%n@%m%{$reset_color%}:%{$fg_bold[blue]%}%~%{$reset_c
 %(?,🐋😘,🐋💔) %# %{$reset_color%}"
 RPROMPT='%(?,,%{$fg[red]%}%?!%{$reset_color%}) %{$fg[green]%}%* %D%{$reset_color%}'
 EOCAT
+# my direnv plugin
+mkdir custom/plugins/mydirenv
+cat <<'EOCAT' > custom/plugins/mydirenv/mydirenv.plugin.zsh
+load_envrc() {
+    if [[ -f "./.envrc" ]]; then
+        source ./.envrc
+    fi
+}
+autoload -U add-zsh-hook
+add-zsh-hook chpwd load_envrc
+EOCAT
 # create .zshrc
 # the default template of .zshrc is long, but only contains 4 important lines
 # see minimized version https://github.com/ohmyzsh/ohmyzsh/blob/master/templates/minimal.zshrc
@@ -57,149 +66,115 @@ export ZSH="$HOME/.omz"
 ZSH_THEME="mytheme"
 # disable auto update
 zstyle :omz:update mode disabled
-plugins=(z)
+plugins=(z mydirenv)
 source $ZSH/oh-my-zsh.sh
 alias cls="clear"
 alias sl="ls -hlLF --group-directories-first"
 EOCAT
 EORUN
 
-# =================================================
+# ============================================
 # basic shell experience
-# docker build --target shell --tag my/shell:1 .
-FROM alpine:3.23.4 AS shell
+# docker build --target shell --tag my/shell .
+# occassionally update packages: docker build --no-cache --target shell --tag my/shell .
+FROM debian:13.5-slim AS shell
+# base image https://hub.docker.com/_/debian
+# source code https://github.com/debuerreotype/docker-debian-artifacts/blob/dist-amd64/trixie/Dockerfile
+# if you can't notice difference for slim image, it shrinks many docs and mans, their bin and packages are same
 
 COPY --from=ohmyzsh-build /build /root/.omz
 
 RUN <<EORUN
 set -ex
-# # or a simple 2-liner for other environments by the way
-# echo https://mirrors.aliyun.com/alpine/v3.23/main > /etc/apk/repositories
-# echo https://mirrors.aliyun.com/alpine/v3.23/community >> /etc/apk/repositories
-cat <<'EOCAT' > /etc/apk/repositories
-https://mirrors.aliyun.com/alpine/v3.23/main
-https://mirrors.aliyun.com/alpine/v3.23/community
-EOCAT
-apk update
-apk add zsh --no-cache
-# chsh not available in alpine, have to edit /etc/passwd directly
-sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/zsh#' /etc/passwd
-# setup .zshrc
+# you need apt update to install ca-certificates package
+apt-get update
+apt-get install -y --no-install-recommends ca-certificates
+# you need update-ca-certificates to use https mirror
+update-ca-certificates
+# you need mirror to smoothly run apt update and apt install commands
+sed -i 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources
+apt-get update
+# install zsh
+apt-get install -y --no-install-recommends zsh
+chsh -s /bin/zsh
+# deploy .zshrc
 mv /root/.omz/.zshrc /root
 EORUN
 
 WORKDIR /root
 ENTRYPOINT ["/bin/zsh"]
+# alternative operations
+# - in case you need ubuntu, when do you need ubuntu?
+#   sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
+# - apk mirror in case you need
+#   cat <<'EOCAT' > /etc/apk/repositories
+#   https://mirrors.aliyun.com/alpine/v3.23/main
+#   https://mirrors.aliyun.com/alpine/v3.23/community
+#   EOCAT
+# - apk mirror in convenient 2 one liners in case you need
+#   echo https://mirrors.aliyun.com/alpine/v3.23/main > /etc/apk/repositories
+#   echo https://mirrors.aliyun.com/alpine/v3.23/community >> /etc/apk/repositories
+# - edit passwd file in case you don't have chsh
+#   sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/zsh#' /etc/passwd
 
-# ==================================================
-# an ubuntu image with apt source configured
-# docker build --target ubuntu --tag my/ubuntu:26.04 .
-# occassionally rerun apt update: docker build --no-cache --target ubuntu --tag my/ubuntu:26.04 .
-FROM ubuntu:26.04 AS ubuntu
+# ==========================================
+# docker build --target node --tag my/node .
+FROM my/shell AS node
+# according to node official image https://hub.docker.com/_/node
+# source code https://github.com/nodejs/docker-node/blob/main/26/trixie-slim/Dockerfile
+# the build process simply download and decompress and remove some unnecessary large files
 
+ARG NODE_VERSION=26.4.0
 RUN <<EORUN
 set -ex
-# you need update-ca-certificates to use https mirror, you need apt update to update-ca-certificates?
-apt-get update
-apt-get install -y ca-certificates --no-install-recommends
-update-ca-certificates
-sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
-apt-get update
-EORUN
-
-# ==================================================
-# a debian image with apt source configured
-# docker build --target debian --tag my/debian:13.4 .
-# occassionally rerun apt update: docker build --no-cache --target debian --tag my/debian:13.4 .
-FROM debian:13.4-slim AS debian
-
-RUN <<EORUN
-set -ex
-apt-get update
-apt-get install -y ca-certificates --no-install-recommends
-update-ca-certificates
-sed -i 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources
-apt-get update
-EORUN
-
-# ===============================================
-# dev environment node was using stable, but it seems no need to use stable
-# for not-that-require-stable projects, if really need stable in future, add another node:stable for stable
-# TODO why is this a lot larger than node-alpine?
-# see https://github.com/nodejs/docker-node/blob/main/25/alpine3.23/Dockerfile, this is easily build from source, try
-# docker build --target node --tag my/node:1 .
-FROM alpine:3.23.4 AS node-build
-
-ARG NODE_VERSION=25.9.0
-# this is learned from node official image source code,
-# see https://github.com/nodejs/docker-node/blob/main/24/alpine3.22/Dockerfile
-# currently it is simply an extraction of prebuilt archive
-# but the archive's download link is currently very slow on all my environments,
-# so it is manually downloaded from my fastest channel and put here
-# https://unofficial-builds.nodejs.org/download/release/v24.11.0/node-v24.11.0-linux-x64-musl.tar.xz
-ADD node-v${NODE_VERSION}-linux-x64-musl.tar.xz /build
-
-RUN <<EORUN
-set -ex
-mv /build/node-v${NODE_VERSION}-linux-x64-musl /build/node
-cd /build/node
-# according to the official implementation,
-# delete folders in include/node/openssl/archs other than linux-x86_64
-# # by the way, the bin/node is 125m ???, the archs folder is 68m, the total uncompress size is 212m
-mv include/node/openssl/archs/linux-x86_64 /tmp/linux-x86_64
-rm -rf include/node/openssl/archs
-mkdir include/node/openssl/archs
-mv /tmp/linux-x86_64 include/node/openssl/archs/linux-x86_64
-# remove the outside text files by the way
-rm README.md LICENSE CHANGELOG.md
-EORUN
-
-# copy previous stage result, or else the image size will reach 500m
-# currently this image is 308m, kind of a little more similar to official node:alpine 238m
-FROM my/shell:1 AS node
-
-ARG NODE_VERSION=25.9.0
-COPY --from=node-build /build/node /usr/local
-
-RUN <<EORUN
-# libstdc++: nodejs runtime dependency
-apk add --no-cache libstdc++
-# update npm self version if need
+# wget seems to be about 4mb, xz-utils seems to be about 1.5mb,
+# they are too small comparing to the single executable file /usr/local/bin/node 144m size at the
+# time of writing, libatomic is runtime dependency, takes no space compare to 144m
+apt-get install -y wget xz-utils libatomic1
+wget https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz
+tar xJf node-v${NODE_VERSION}-linux-x64.tar.xz -C /tmp
+cp -r /tmp/node-v${NODE_VERSION}-linux-x64/bin/. /usr/local/bin
+cp -r /tmp/node-v${NODE_VERSION}-linux-x64/lib/. /usr/local/lib
+cp -r /tmp/node-v${NODE_VERSION}-linux-x64/include/. /usr/local/include
+# remove not used different arch include files, reduce 10m image size, 70m disk size in container
+for dir in /usr/local/include/node/openssl/archs/*/
+do
+  if [ $dir != '/usr/local/include/node/openssl/archs/linux-x86_64/' ]; then
+    echo remove $dir
+    rm -rf $dir
+  fi
+done
+rm node-v${NODE_VERSION}-linux-x64.tar.xz
+rm -rf /tmp/node-v${NODE_VERSION}-linux-x64
+# update self to avoid duplicate npm self outdated warning message in every container
 npm install -g npm@latest
-# smoke test
-node --version
-npm --version
 EORUN
 
 # ==============================================
-# docker build --target python --tag my/python:1 .
-FROM my/shell:1 AS python
+# docker build --target python --tag my/python .
+FROM my/shell AS python
+# uv and install latest python by uv
+
+# https://docs.astral.sh/uv/guides/integration/docker/#available-images
+# for this copy usage, 0.11.26 is enough, others will come with distro and python
+COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
 
 RUN <<RUNEOF
 set -ex
-apk add python3
+uv python install 3.14.6
+echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.zshrc
 RUNEOF
 
-# https://docs.astral.sh/uv/guides/integration/docker/#available-images
-# for this copy usage, :0.11.1 is enough, others will come with distro and python
-COPY --from=ghcr.io/astral-sh/uv:0.11.1 /uv /uvx /bin/
-
 # ==========================================
-# docker build --target rust --tag my/rust:1 .
-FROM my/shell:1 AS rust
+# docker build --target rust --tag my/rust .
+FROM my/shell AS rust
+# compare to vscode builtin support of typescript and my personal rejection
+# of python language server equivalent service, rust need lsp related features
 
-# rust download is slow,
-# according to https://forge.rust-lang.org/infra/other-installation-methods.html
-# there is prebuilt package, but this does not contain rustup and rust-analyzer,
-# and seems no related document for that, so still use normal rustup installer approach
-# see https://github.com/rust-lang/docker-rust/blob/master/stable/alpine3.22/Dockerfile
-# # by the way, the prebuilt package uncompress size is 2.15gb
-# # for comparison, a basic apk add gcc + rustup-init execution result in 1.02gb
-# ADD rust-1.89.0-x86_64-unknown-linux-musl.tar.xz /
-
-# https://rust-lang.github.io/rustup/installation/other.html#manual-installation
-# https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-musl/rustup-init
-ADD rustup-init /
+# the standalone installers are large and not include rustup and rust-analyzer
+# https://forge.rust-lang.org/infra/other-installation-methods.html#standalone-installers
+# TODO build from source will be very cool
+# https://rustc-dev-guide.rust-lang.org/building/how-to-build-and-run.html
 
 # these environment variables will be read by rustup to determine install location
 # https://rust-lang.github.io/rustup/environment-variables.html
@@ -210,30 +185,25 @@ ENV PATH=/usr/local/cargo/bin:$PATH
 
 RUN <<RUNEOF
 set -ex
-# gcc: similar to you need msvc toolchain on windows
-apk add --no-cache gcc
-chmod +x /rustup-init
-/rustup-init -y --no-modify-path --profile minimal
-rm /rustup-init
+# wget is too small compare to rust installed size
+apt-get install -y wget
+# https://rust-lang.github.io/rustup/installation/other.html#manual-installation
+wget https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
+chmod +x rustup-init
+./rustup-init -y --no-modify-path --profile minimal
+rm rustup-init
 rustup --version
 rustc --version
 cargo --version
 RUNEOF
 
-# basic check
-# $ rustup --version
-# $ rustc --version
-# $ cargo --version
-# $ cargo new hello && cd hello
-# $ cargo run
-
-# ==============================================
+# ========================================
 # extract zip, 7z and rar
-# docker build --target zip --tag my/zip:1 .
+# docker build --target zip --tag my/zip .
 # usage:
 # mkdir ~/zipwork
-# docker run -it --rm --name zip1 -v ~/zipwork:/work my/zip:1
+# docker run -it --rm --name zip1 -v ~/zipwork:/work my/zip
 # run `7z x filename.7z` or `unrar x filename.rar`
-FROM my/ubuntu:24.04 AS zip
+FROM my/shell AS zip
 RUN apt-get install -y --no-install-recommends unrar p7zip-full
 WORKDIR /work

@@ -1,18 +1,18 @@
-## My Development Environment
+## Development Environment Automation
 
-some of my development environment based on docker
+some of my development environment
 
-- a base image that includes shell setup, works as a base interactive environment to run other tools and vscode
-- a node image for node
-- a rust image for rust
-- a python image for python
-- an llvm image for llvm
-
-### Setup
-
-- install docker
-- download the Dockerfile from github web page and build the images
-- download the .devcontainer.json file from github web page and setup volumes
-- open .devcontainer.json parent directory in vscode, click Reopen in Container
-
-also see [DEC.md](./DEC.md)
+- base images
+  - Dockerfile: node, rust, python, and a generic shell
+  - llvm/Dockerfile: build llvm from source
+  - llvm/CDE.md: details and stories about build llvm from source
+- dev containers
+  - fine/.devcontainer.json: fine dev container (https://github.com/FreskyZ/fine), but not used for long time?
+  - llvm/.devcontainer.json: c++ dev container, but not actually used yet?
+  - DEC.md: details and some stories about vscode dev container
+- docker host (the machine to run docker)
+  - host/make-shell-setup.py: prepare for setup shell for docker host
+  - host/docker-setup.py: manually install docker
+  - host/docker-setup.md: details and some stories about docker setup
+- dev virtual machines
+  - windows/DEC.md: details about windows virtual machine for development or other purpose

@@ -1,6 +1,6 @@
 
 # docker build --target llvm-stage1 --tag my/llvm:stage1 .
-FROM alpine:3.23.3 AS llvm-stage1
+FROM alpine:3.24.1 AS llvm-stage1
 
 # in the same directory that calls git clone (outside of repository)
 # tar cJf llvm-project.tar.xz -C ./llvm-project .
@@ -11,7 +11,7 @@ FROM alpine:3.23.3 AS llvm-stage1
 #   uncompress size is estimated 2.6GB with .git folder
 ADD --chown=0 llvm-project.tar.xz /llvm-src
 
-COPY --from=my/shell:1 /etc/apk/repositories /etc/apk/repositories
+COPY --from=my/shell /etc/apk/repositories /etc/apk/repositories
 # build-base: include gcc, g++, ar, ld, make
 # python3: this is python3.12 for now
 # linux-headers: some source file is using gnu linux specific headers,
@@ -92,8 +92,8 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm-stage2 --tag my/llvm:1 .
-FROM alpine:3.23.3 AS llvm-stage2
+# docker build --target llvm-stage2 --tag my/llvm:latest .
+FROM alpine:3.24.1 AS llvm-stage2
 
 # # why is previous stage unexpectedly cache miss?
 # ADD --chown=0 llvm-project.tar.xz /llvm-src
@@ -106,7 +106,7 @@ FROM alpine:3.23.3 AS llvm-stage2
 ADD --chown=0 llvm-project.tar.xz /llvm-src
 COPY --from=my/llvm:stage1 /llvm-install /usr/local
 
-COPY --from=my/shell:1 /etc/apk/repositories /etc/apk/repositories
+COPY --from=my/shell /etc/apk/repositories /etc/apk/repositories
 # libstdc++, libgcc: gcc built clang itself still need libgcc and libstdc++ to run
 # musl-dev: this is the libc/posix headers, you need them in hello world and all c/c++ programs
 # libatomic: c++ helloworld with include <print> need this lib to run
@@ -183,8 +183,8 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm-shell --tag my/llvm-shell:1 .
-FROM my/shell:1 AS llvm-shell
+# docker build --target llvm-shell --tag my/llvm:shell .
+FROM my/shell AS llvm-shell
 
 COPY --from=my/llvm:stage2 /llvm-install /usr/local
 

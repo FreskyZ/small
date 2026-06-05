@@ -112,3 +112,20 @@ so the docker-setup.py is implemented to install and upgrade docker binaries, ot
   to noninteractive only skips some of the interactive part
 - by the way, windows + wsl + docker desktop also don't works if you map the socket file into an image with docker cli
   command, yet another reason to avoid docker desktop TODO confirm this after migrate to non docker desktop
+
+UPDATE migrate from docker desktop to docker ce in wsl
+
+- /etc/containerd not exist, /usr/bin/containerd and other containerd binaries not exist
+- /usr/bin/docker exist, and there is a /usr/bin/docker-compose? and there is a /usr/bin/docker-credential-desktop.exe? remove
+- /usr/lib/systemd/system/containerd.service and docker.service not exist
+- /usr/libexec/docker not exist
+- docker group exist
+- there is a /Docker? remove
+- docker desktop cli plugins is at /usr/local/lib/docker, remove
+- disable firewall rules in daemon.json iptables: false, ip6tables: false
+- install libnftables.so or else docker binary cannot load: apt install nftables
+- wsl default don't use root, you need to keep docker.sock's docker group to avoid sudo
+- dev machine need build plugin
+- oh, dev machine is still using ubuntu 24, and install debian packages amazingly works, change to ubuntu packages and use a
+  temporary copy of the script for now
+- export docker desktop images, check data in volumes (you should not save meaningful data in dev machine volumes) and uninstall docker desktop
