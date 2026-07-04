@@ -1,0 +1,9 @@
+{
+  "name": "work",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {},
+  "devDependencies": {
+    "@types/node": "^26.0.1"
+  }
+}
