@@ -14,6 +14,17 @@ console.log(`autotrack.ts: data directory ${config.dataDirectory}`);
 // console.log(`autotrack.ts: provider base uri ${config.providerBaseUri}`);
 // console.log(`autotrack.ts: provider api base uri ${config.providerApiBaseUri}`);
 
+// urls are too long to help readablity
+const LOGURL = !!process.env['AT_LOGURL'];
+
+// they are simple console.log for now
+function logInfo(content: string) {
+    console.log(`autotrack.ts: ${content}`);
+}
+function logError(content: string) {
+    console.log(`autotrack.ts: ${styleText('red', 'error')}: ${content}`);
+}
+
 // temporal api is very confusing, for now, wrap them inside these functions
 function now() {
     const v = Temporal.Now.zonedDateTimeISO();
@@ -50,6 +61,60 @@ function getDisplayDuration(duration: number | undefined) {
     return displayDuration;
 }
 
+function createProgressPipe(totalSize: number): stream.Duplex {
+    const startTime = Temporal.Now.plainDateTimeISO();
+    let transferredBytes = 0;
+    // samples of transferred bytes for speed estimation, order by time asc
+    let samples: { time: Temporal.PlainDateTime, value: number }[] = [];
+    // throttle updating
+    let lastUpdateTime = Temporal.Now.plainDateTimeISO();
+
+    const update = (newLength: number, completed: boolean) => {
+        transferredBytes += newLength;
+        const now = Temporal.Now.plainDateTimeISO();
+        // note that can flush befor eexpected totalsize
+        if (Temporal.Duration.compare(now.since(lastUpdateTime), { seconds: 1 }) >= 0 || completed) {
+            let message = '  ';
+            message += getDisplayTemporalDuration(now.since(startTime));
+            message += ' ';
+            message += getDisplaySize(transferredBytes);
+            message += '/'
+            message += getDisplaySize(totalSize);
+
+            const sample = samples.find(s => Temporal.Duration.compare(now.since(s.time), { minutes: 1 }) < 0);
+            if (completed) {
+                const speed = transferredBytes / now.since(startTime).total('seconds');
+                message += ' ';
+                message += getDisplaySize(speed); // display overall speed by the way
+                message += '/s'
+                // nothing to display in last message eta part
+            } else if (!sample || Temporal.Duration.compare(now.since(sample.time), { seconds: 5 }) < 0) {
+                // don't use duration < 5s
+                message += ' ETA unknown';
+            } else {
+                const speed = (transferredBytes - sample.value) / now.since(sample.time).total('seconds');
+                message += ' ';
+                message += getDisplaySize(speed);
+                message += '/s'
+                const estimateRemainingTime = (totalSize - transferredBytes) / speed;
+                message += ' ETA ';
+                message += getDisplayDuration(estimateRemainingTime);
+            }
+
+            process.stderr.write('\r\x1b[K');
+            process.stdout.write(message);
+            if (completed) { console.log(); }
+            samples.push({ time: now, value: transferredBytes });
+            samples = samples.filter(s => Temporal.Duration.compare(now.since(s.time), { minutes: 1 }) < 0);
+            lastUpdateTime = now;
+        }
+    };
+    return new stream.Transform({
+        flush(callback) { update(0, true); callback(); },
+        transform(chunk, _encoding, callback) { update(chunk.length, false); callback(null, chunk); },
+    });
+}
+
 // return null for already printed error
 async function getWorkId(inputValue: string) {
 
@@ -61,15 +126,15 @@ async function getWorkId(inputValue: string) {
         const directoryNames = await fs.readdir(config.dataDirectory);
         const matches = directoryNames.filter(d => d.startsWith('RJ') && d.endsWith(inputValue));
         if (matches.length == 0) {
-            console.error(`autotrack.ts: short work id ${inputValue} not found`);
+            logError(`autotrack.ts: short work id ${inputValue} not found`);
         } else if (matches.length > 1) {
-            console.error(`autotrack.ts: short work id ${inputValue} ambiguous`);
+            logError(`autotrack.ts: short work id ${inputValue} ambiguous`);
         } else {
             workId = matches[0];
-            console.log(`autotrack.ts: work id ${workId}`);
+            logInfo(`work id ${workId}`);
         }
     } else {
-        console.error(`USAGE: autotrack.ts work WORKID`);
+        logError(`USAGE: autotrack.ts work WORKID`);
     }
     
     // check subwork id
@@ -81,7 +146,7 @@ async function getWorkId(inputValue: string) {
             if (npfs.existsSync(metadataPath)) {
                 const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
                 if (existingMetadata.subworkIds.includes(workId)) {
-                    console.error(`autotrack.ts: cannot use subworkid, use main work id ${existingWorkId} instead`);
+                    logError(`autotrack.ts: cannot use subworkid, use main work id ${existingWorkId} instead`);
                     subworkIdOk = false;
                 }
             }
@@ -131,14 +196,14 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
     } else {
         url.pathname = `/api/workInfo/${workId.substring(2)}`;
-        console.log(`autotrack.ts: downloading raw work info ${workId} main work id ${mainWorkId}`);
-        console.log(`autotrack.ts: downloading url ${url}`);
+        logInfo(`downloading raw work info ${workId} main work id ${mainWorkId}`);
+        if (LOGURL) { logInfo(`downloading url ${url}`); }
         // ATTENTION because of similar reason, don't parallel these web requests
         const response = await fetch(url);
         // no need to precisely and gracefully handle network error in this small script
         metadata = await response.json();
         await fs.writeFile(metadataPath, JSON.stringify(metadata, undefined, 2));
-        console.log(`autotrack.ts: downloaded raw work info ${workId} main work id ${mainWorkId}`);
+        logInfo(`downloaded raw work info ${workId} main work id ${mainWorkId}`);
     }
 
     let records: RawTrackRecord[];
@@ -148,12 +213,12 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
     } else {
         url.pathname = `/api/tracks/${workId.substring(2)}`;
         url.searchParams.append('v', '2');
-        console.log(`autotrack.ts: downloading raw track info ${workId} main work id ${mainWorkId}`);
-        console.log(`autotrack.ts: downloading url ${url}`);
+        logInfo(`downloading raw track info ${workId} main work id ${mainWorkId}`);
+        if (LOGURL) { logInfo(`downloading url ${url}`); }
         const response = await fetch(url);
         records = await response.json();
         await fs.writeFile(recordsPath, JSON.stringify(records, undefined, 2));
-        console.log(`autotrack.ts: downloaded raw track info ${workId} main work id ${mainWorkId}`);
+        logInfo(`downloaded raw track info ${workId} main work id ${mainWorkId}`);
     }
     const rootRecord: RawTrackRecord = { type: 'folder', title: 'root', children: records };
 
@@ -163,14 +228,14 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         if (!npfs.existsSync(coverImagePath)) {
             const url = new URL(metadata.thumbnailCoverUrl);
             if (!url.pathname.endsWith('.jpg')) {
-                console.error('autotrack.ts: cover image url not a jpg? skip');
+                logError('autotrack.ts: cover image url not a jpg? skip');
             } else {
-                console.log(`autotrack.ts: downloading cover image ${workId}`);
-                console.log(`autotrack.ts: downloading url ${url}`);
+                logInfo(`downloading cover image ${workId}`);
+                if (LOGURL) { logInfo(`downloading url ${url}`); }
                 const response = await fetch(url);
                 // no need to precisely and gracefully handle network and fs error in this small script
                 await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(coverImagePath)));
-                console.log(`autotrack.ts: downloaded cover image ${workId}`);
+                logInfo(`downloaded cover image ${workId}`);
             }
         }
     }
@@ -194,6 +259,9 @@ interface WorkMetadata {
     lastAccessTime: string,
     tags: string[],
     comment?: string,
+    // comment for backend management operations, not displayed at client
+    // e.g. video record is 404 at the time of writing
+    managementComment?: string,
     // score generally works as one access time +1,
     // but if you feel very good can +2, and feel not good -1
     score: number,
@@ -241,7 +309,7 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
             legacyWorks.push({ id: fields[0]!, tags: fields[6]!, addTime: fields[7]! });
         }
         const legacyMetadata = legacyWorks.find(w => w.id == workId);
-        if (legacyMetadata) { console.log('autotrack.ts: read legacy metadata'); }
+        if (legacyMetadata) { logInfo('read legacy metadata'); }
 
         const providerLink = new URL(config.providerBaseUri);
         providerLink.pathname = `/work/${workId}`;
@@ -285,6 +353,7 @@ async function writeMetadata(metadata: WorkMetadata) {
         tags: metadata.tags,
         score: metadata.score,
         comment: metadata.comment,
+        managementComment: metadata.managementComment,
         audioFormat: metadata.audioFormat,
         subtitleFormat: metadata.subtitleFormat,
         subtitleWorkId: metadata.subtitleWorkId,
@@ -371,7 +440,7 @@ function handleDisplayMetadata(ctx: CommandContext, raw: boolean) {
             }
         }
     } else {
-        console.log(`autotrack.ts: use "meta raw" for all raw tracks`);
+        logInfo(`use "meta raw" for all raw tracks`);
     }
 }
 
@@ -380,27 +449,27 @@ function handleAddTrack(ctx: CommandContext, parameters: string[]) {
     const rawIndex = +parameters[0];
     const trackIndex = +parameters[1];
     if (isNaN(rawIndex) || isNaN(trackIndex)) {
-        return console.error('USAGE: autotrack.ts work WORKID track add RAWINDEX INDEX');
+        return logError('USAGE: autotrack.ts work WORKID track add RAWINDEX INDEX');
     }
     if (rawIndex <= 0 || rawIndex > ctx.rawTracksPerWork[ctx.id].length) {
-        return console.error('autotrack.ts: work add: raw index out of range');
+        return logError('autotrack.ts: work add: raw index out of range');
     } else if (trackIndex <= 0) {
-        return console.error('autotrack.ts: work add: invalid track index');
+        return logError('autotrack.ts: work add: invalid track index');
     } else if (ctx.meta.tracks.some(t => t.index == trackIndex)) {
-        return console.error('autotrack.ts: work add: track index already exist');
+        return logError('autotrack.ts: work add: track index already exist');
     }
     const rawRecord = ctx.rawTracksPerWork[ctx.id][rawIndex - 1];
     if (rawRecord.type != 'audio') {
-        return console.error('autotrack.ts: work add: record type should be audio');
+        return logError('autotrack.ts: work add: record type should be audio');
     }
 
     const providerPath = rawRecord.path;
-    console.log(`autotrack.ts: work add: provider path ${providerPath}`);
+    logInfo(`work add: provider path ${providerPath}`);
     const audioFormat = path.extname(providerPath).substring(1);
     if (audioFormat != 'mp3' && audioFormat != 'wav') {
-        return console.error('autotrack.ts: work add: can only add mp3 or wav file');
+        return logError('autotrack.ts: work add: can only add mp3 or wav file');
     } else if (ctx.meta.audioFormat && ctx.meta.audioFormat != audioFormat) {
-        return console.error(`autotrack.ts: work add: new audio format ${audioFormat} not same as existing value ${ctx.meta.audioFormat}`);
+        return logError(`autotrack.ts: work add: new audio format ${audioFormat} not same as existing value ${ctx.meta.audioFormat}`);
     }
     ctx.meta.audioFormat = audioFormat;
 
@@ -417,14 +486,14 @@ function handleAddTrack(ctx: CommandContext, parameters: string[]) {
 // parameters: after "subtitle" not include "subtitle"
 function handleAddTrackSubtitle(ctx: CommandContext, track: TrackRecord, parameters: string[]) {
     if (!parameters[0]) {
-        return console.error('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
+        return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
     }
     let subworkId: string; // subwork id or work id
     let rawIndex: number;
     if (parameters[0].includes('/')) {
         const splitted = parameters[0].split('/');
         if (splitted.length != 2) {
-            return console.error('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
+            return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
         }
         subworkId = splitted[0];
         rawIndex = +splitted[1];
@@ -434,19 +503,19 @@ function handleAddTrackSubtitle(ctx: CommandContext, track: TrackRecord, paramet
     }
 
     if (subworkId != ctx.id && !ctx.meta.subworkIds.includes(subworkId)) {
-        return console.error(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
+        return logError(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
     } else if (ctx.meta.subtitleWorkId && ctx.meta.subtitleWorkId != subworkId) {
-        return console.error(`autotrack.ts: work track subtitle: subtitle work id ${subworkId} is not same as existing value ${ctx.meta.subtitleWorkId}`);
+        return logError(`autotrack.ts: work track subtitle: subtitle work id ${subworkId} is not same as existing value ${ctx.meta.subtitleWorkId}`);
     } else if (!rawIndex) {
-        return console.error('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
+        return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
     } else if (rawIndex < 0 || rawIndex > ctx.rawTracksPerWork[subworkId].length) {
-        return console.error('autotrack.ts: work track subtitle: raw index out of range');
+        return logError('autotrack.ts: work track subtitle: raw index out of range');
     }
     ctx.meta.subtitleWorkId = subworkId;
 
     const rawRecord = ctx.rawTracksPerWork[subworkId][rawIndex - 1];
     if (rawRecord.type != 'text') {
-        return console.error('autotrack.ts: work track subtitle: subtitle should be text file');
+        return logError('autotrack.ts: work track subtitle: subtitle should be text file');
     }
     let subtitleFormat: string;
     if (rawRecord.path.endsWith(`.vtt`)) {
@@ -454,38 +523,38 @@ function handleAddTrackSubtitle(ctx: CommandContext, track: TrackRecord, paramet
     } else if (rawRecord.path.endsWith(`.lrc`)) {
         subtitleFormat = 'lrc';
     } else {
-        return console.error('autotrack.ts: work track subtitle: unrecognized subtitle format, expect .vtt, .lrc');
+        return logError('autotrack.ts: work track subtitle: unrecognized subtitle format, expect .vtt, .lrc');
     }
     if (ctx.meta.subtitleFormat && ctx.meta.subtitleFormat != subtitleFormat) {
-        return console.error(`autotrack.ts: work track subtitle: subtitle format ${subtitleFormat} is not same from existing value ${ctx.meta.subtitleFormat}`);
+        return logError(`autotrack.ts: work track subtitle: subtitle format ${subtitleFormat} is not same from existing value ${ctx.meta.subtitleFormat}`);
     }
     ctx.meta.subtitleFormat = subtitleFormat;
-    console.log(`autotrack.ts: work track subtitle: track ${track.index} subtitle ${rawRecord.path}`);
+    logInfo(`work track subtitle: track ${track.index} subtitle ${rawRecord.path}`);
     track.subtitleProviderPath = rawRecord.path;
 }
 
 // parameters: after "move" not include "move"
 async function handleMoveTrack(ctx: CommandContext, track: TrackRecord, parameters: string[]) {
     if (!parameters[0]) {
-        return console.error('USAGE: autotrack.ts work WORKID track INDEX move NEWINDEX');
+        return logError('USAGE: autotrack.ts work WORKID track INDEX move NEWINDEX');
     }
     const newIndex = +parameters[0];
     if (!newIndex || newIndex <= 0) {
-        return console.error('autotrack.ts: work track move: invalid new index');
+        return logError('autotrack.ts: work track move: invalid new index');
     } else if (ctx.meta.tracks.some(t => t.index != track.index && t.index == newIndex)) {
-        return console.error('autotrack.ts: work track move: new index already exist');
+        return logError('autotrack.ts: work track move: new index already exist');
     }
-    console.log(`autotrack.ts: ATTENTION will try to move actual file, but no transaction and rollback for that`);
-    console.log(`autotrack.ts: that is if audio file move ok but subtitle file move not ok, audio file will not rollback while metadata will not update`);
+    logInfo(`ATTENTION will try to move actual file, but no transaction and rollback for that`);
+    logInfo(`that is if audio file move ok but subtitle file move not ok, audio file will not rollback while metadata will not update`);
     if (ctx.meta.audioFormat) {
         const oldAudioPath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
         const newAudioPath = path.join(config.dataDirectory, ctx.id, `track${newIndex}.${ctx.meta.audioFormat}`);
         if (npfs.existsSync(oldAudioPath)) {
             if (npfs.existsSync(newAudioPath)) {
                 // not regard as error
-                console.log(`autotrack.ts: work track move: skip move audio file because target path exists`);
+                logInfo(`work track move: skip move audio file because target path exists`);
             } else {
-                console.log(`autotrack.ts: move ${oldAudioPath} to ${newAudioPath}`);
+                logInfo(`move ${oldAudioPath} to ${newAudioPath}`);
                 await fs.rename(oldAudioPath, newAudioPath);
             }
         }
@@ -494,28 +563,28 @@ async function handleMoveTrack(ctx: CommandContext, track: TrackRecord, paramete
             const newSubtitlePath = `${newAudioPath}.${ctx.meta.subtitleFormat}`;
             if (npfs.existsSync(newSubtitlePath)) {
                 // not regard as error
-                console.log(`autotrack.ts: work track move: skip move subtitle file because target path exists`);
+                logInfo(`work track move: skip move subtitle file because target path exists`);
             } else {
-                console.log(`autotrack.ts: move ${oldSubtitlePath} to ${newSubtitlePath}`);
+                logInfo(`move ${oldSubtitlePath} to ${newSubtitlePath}`);
                 await fs.rename(oldSubtitlePath, newSubtitlePath);
             }
         }
     }
-    console.log(`autotrack.ts: work track move: from ${track.index} to ${newIndex}`);
+    logInfo(`work track move: from ${track.index} to ${newIndex}`);
     track.index = newIndex;
 }
 
 // parameters: after "file" not include "file"
 async function handleDownloadArbitraryFile(ctx: CommandContext, parameters: string[]) {
     if (!parameters[0]) {
-        return console.error('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
+        return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
     }
     let subworkId: string; // subwork id or work id
     let rawIndex: number;
     if (parameters[0].includes('/')) {
         const splitted = parameters[0].split('/');
         if (splitted.length != 2) {
-            return console.error('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
+            return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
         }
         subworkId = splitted[0];
         rawIndex = +splitted[1];
@@ -525,30 +594,33 @@ async function handleDownloadArbitraryFile(ctx: CommandContext, parameters: stri
     }
 
     if (subworkId != ctx.id && !ctx.meta.subworkIds.includes(subworkId)) {
-        return console.error(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
+        return logError(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
     } else if (!rawIndex) {
-        return console.error('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
+        return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
     } else if (rawIndex < 0 || rawIndex > ctx.rawTracksPerWork[subworkId].length) {
-        return console.error('autotrack.ts: work track subtitle: raw index out of range');
+        return logError('autotrack.ts: work track subtitle: raw index out of range');
     }
     const rawRecord = ctx.rawTracksPerWork[subworkId][rawIndex - 1];
     const filePath = path.join(config.dataDirectory, ctx.id, path.basename(rawRecord.path));
     if (npfs.existsSync(filePath)) {
-        return console.log(`autotrack.ts: file path ${filePath} already exists, skip`);
+        return logInfo(`file path ${filePath} already exists, skip`);
     }
-    console.log(`autotrack.ts: downloading file ${subworkId} ${rawRecord.path}`);
-    console.log(`autotrack.ts: downloading url ${rawRecord.mediaDownloadUrl}`);
-    const startTime = Temporal.Now.plainDateTimeISO();
+    logInfo(`downloading file ${subworkId} ${rawRecord.path}`);
+    if (LOGURL) { logInfo(`downloading url ${rawRecord.mediaDownloadUrl}`); }
     const response = await fetch(rawRecord.mediaDownloadUrl);
     // this can happen at abitrary file
     if (!response.ok) {
-        return console.error(`autotrack.ts: download file response not ok ${response.status}`);
+        return logError(`autotrack.ts: download file response not ok ${response.status}`);
     }
-    // no need to precisely and gracefully handle network and fs error in this small script
-    await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(filePath)));
-    const elapsedTime = Temporal.Now.plainDateTimeISO().since(startTime);
-    console.log(`autotrack.ts: downloaded file complete elapsed ${getDisplayTemporalDuration(elapsedTime)}`);
-
+    if (rawRecord.size > 1048576) {
+        // no need to precisely and gracefully handle network and fs error in this small script
+        await finished(stream.Readable.fromWeb(response.body)
+            .pipe(createProgressPipe(rawRecord.size)).pipe(npfs.createWriteStream(filePath)));
+    } else {
+        // don't display progress and elapsed time for small files
+        await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(filePath)));
+    }
+    logInfo(`downloaded file complete`);
 }
 // parameters: after "fetch" not include "fetch"
 async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
@@ -559,7 +631,7 @@ async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
         const desc = `track ${track.index} provider path ${track.providerPath}`;
         const rawRecord = ctx.rawTracksPerWork[ctx.id].find(r => r.path == track.providerPath);
         if (!rawRecord) {
-            return console.error(`autotrack.ts: track ${track.index} provider path ${track.providerPath} not found, check metadata`);
+            return logError(`autotrack.ts: track ${track.index} provider path ${track.providerPath} not found, check metadata`);
         }
         const url = rawRecord.mediaDownloadUrl;
         const filesize = rawRecord.size;
@@ -569,7 +641,7 @@ async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
             const desc = `track ${track.index} subtitle work ${ctx.meta.subtitleWorkId} provider path ${track.subtitleProviderPath}`;
             const rawRecord = ctx.rawTracksPerWork[ctx.meta.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
             if (!rawRecord) {
-                return console.error(`autotrack.ts: track ${track.index} subtitle work ${ctx.meta.subtitleWorkId} provider path ${track.subtitleProviderPath} not found, check metadata`);
+                return logError(`autotrack.ts: track ${track.index} subtitle work ${ctx.meta.subtitleWorkId} provider path ${track.subtitleProviderPath} not found, check metadata`);
             }
             const url = rawRecord.mediaDownloadUrl;
             const filesize = rawRecord.size;
@@ -581,9 +653,9 @@ async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
     // dry run
     if (dry) {
         for (const task of tasks) {
-            console.log(`autotrack.ts: will download ${task.desc}`);
-            console.log(`autotrack.ts: will use url ${task.url}`);
-            console.log(`autotrack.ts: will use file path ${task.filepath}`);
+            logInfo(`will download ${task.desc}`);
+            logInfo(`will use url ${task.url}`);
+            logInfo(`will use file path ${task.filepath}`);
         }
         return;
     }
@@ -594,28 +666,31 @@ async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
         if (npfs.existsSync(task.filepath)) {
             const stat = await fs.stat(task.filepath);
             if (stat.size != task.filesize) {
-                console.error(`autotrack.ts: task ${task.desc} file path ${task.filepath} expect file size ${task.filesize} actual size ${stat.size}`);
-                console.error(`autotrack.ts: no pause and continue functionality implemented for now, you have to delete and retry`);
+                logError(`autotrack.ts: task ${task.desc} file path ${task.filepath} expect file size ${task.filesize} actual size ${stat.size}`);
+                logError(`autotrack.ts: no pause and continue functionality implemented for now, you have to delete and retry`);
                 continue;
             } else {
-                console.log(`autotrack.ts: task ${task.desc} file path ${task.filepath} already exists, skip`);
+                logInfo(`task ${task.desc} file path ${task.filepath} already exists, skip`);
                 continue;
             }
         }
-        console.log(`autotrack.ts: downloading ${task.desc}`);
-        console.log(`autotrack.ts: downloading url ${task.url}`);
-        const startTime = Temporal.Now.plainDateTimeISO();
+        logInfo(`downloading ${task.desc}`);
+        if (LOGURL) { logInfo(`downloading url ${task.url}`); }
         const response = await fetch(task.url);
         if (!response.ok) {
-            return console.error(`autotrack.ts: download file response not ok ${response.status}`);
+            return logError(`autotrack.ts: download file response not ok ${response.status}`);
         }
-        await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(task.filepath)));
-        const elapsedTime = Temporal.Now.plainDateTimeISO().since(startTime);
+        if (task.filesize < 1048576) {
+            await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(task.filepath)));
+        } else {
+            await finished(stream.Readable.fromWeb(response.body)
+                .pipe(createProgressPipe(task.filesize)).pipe(npfs.createWriteStream(task.filepath)));
+        }
         networkTaskCount += 1;
-        console.log(`autotrack.ts: download complete elapsed ${getDisplayTemporalDuration(elapsedTime)}`);
+        logInfo(`task complete`);
     }
     const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(totalStartTime);
-    console.log(`autotrack.ts: download ${networkTaskCount} files elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
+    logInfo(`download ${networkTaskCount} files elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
 }
 
 // parameters: after "work" not include "work"
@@ -639,44 +714,44 @@ async function handleWorkCommand(parameters: string[]) {
         handleDisplayMetadata(ctx, parameters[2] == 'raw');
     } else if (parameters[1] == 'title') {
         if (parameters.length <= 2) {
-            console.error('USAGE: autotrack.ts work WORKID title NEWTITLE');
+            logError('USAGE: autotrack.ts work WORKID title NEWTITLE');
         } else {
-            console.log(`autotrack.ts: work title: rename ${ctx.meta.title} to ${parameters[2]}`);
+            logInfo(`work title: rename ${ctx.meta.title} to ${parameters[2]}`);
             ctx.meta.title = parameters[2];
         }
     } else if (parameters[1] == 'add-tag') {
         if (parameters.length <= 2) {
-            console.error('USAGE: autotrack.ts work WORKID add-tag TAG');
+            logError('USAGE: autotrack.ts work WORKID add-tag TAG');
         } else if (ctx.meta.tags.includes(parameters[2])) {
-            console.log(`autotrack.ts: work tag: tag ${parameters[2]} already exists`);
+            logInfo(`work tag: tag ${parameters[2]} already exists`);
         } else {
-            console.log(`autotrack.ts: work tag: add tag ${parameters[2]}`);
+            logInfo(`work tag: add tag ${parameters[2]}`);
             ctx.meta.tags.push(parameters[2]);
         }
     } else if (parameters[1] == 'del-tag') {
         if (parameters.length <= 2) {
-            console.error('USAGE: autotrack.ts work WORKID del-tag TAG');
+            logError('USAGE: autotrack.ts work WORKID del-tag TAG');
         } else if (!ctx.meta.tags.includes(parameters[2])) {
-            console.log(`autotrack.ts: work tag: tag ${parameters[2]} not exist?`);
+            logInfo(`work tag: tag ${parameters[2]} not exist?`);
         } else {
-            console.log(`autotrack.ts: work tag: del tag ${parameters[2]}`);
+            logInfo(`work tag: del tag ${parameters[2]}`);
             ctx.meta.tags.splice(ctx.meta.tags.indexOf(parameters[2]), 1);
         }
     } else if (parameters[1] == 'comment') {
         if (parameters.length <= 2) {
-            console.error('USAGE: autotrack.ts work WORKID comment COMMENT');
+            logError('USAGE: autotrack.ts work WORKID comment COMMENT');
         } else {
-            console.log(`autotrack.ts: work track comment: set from ${ctx.meta.comment ?? "(empty)"} to ${parameters[2]}`);
+            logInfo(`work track comment: set from ${ctx.meta.comment ?? "(empty)"} to ${parameters[2]}`);
             ctx.meta.comment = parameters[2];
         }
     } else if (parameters[1] == '+1') {
-        console.log(`autotrack.ts: work track score: +1 = ${ctx.meta.score + 1}`);
+        logInfo(`work track score: +1 = ${ctx.meta.score + 1}`);
         ctx.meta.score += 1;
     } else if (parameters[1] == '+2') {
-        console.log(`autotrack.ts: work track score: +2 = ${ctx.meta.score + 2}`);
+        logInfo(`work track score: +2 = ${ctx.meta.score + 2}`);
         ctx.meta.score += 2;
     } else if (parameters[1] == '-1') {
-        console.log(`autotrack.ts: work track score: +1 = ${metadata.score - 1}`);
+        logInfo(`work track score: +1 = ${metadata.score - 1}`);
         ctx.meta.score -= 1;
     } else if (parameters[1] == 'file') {
         await handleDownloadArbitraryFile(ctx, parameters.slice(2));
@@ -684,24 +759,24 @@ async function handleWorkCommand(parameters: string[]) {
         await handleDownloadTracks(ctx, parameters.slice(2));
     } else if (parameters[1] == 'track') {
         if (parameters.length <= 2) {
-            console.error('USAGE: autotrack.ts work WORKID track SUBCOMMAND');
-            console.error('  add      add track virtually');
-            console.error('  INDEX    manage track by index');
+            logError('USAGE: autotrack.ts work WORKID track SUBCOMMAND');
+            logError('  add      add track virtually');
+            logError('  INDEX    manage track by index');
         } else if (parameters[2] == 'add') {
             handleAddTrack(ctx, parameters.slice(3));
         } else {
             const trackIndex = +parameters[2];
             const track = metadata.tracks.find(t => t.index == trackIndex);
             if (isNaN(trackIndex)) {
-                console.error('USAGE: autotrack.ts work WORKID track INDEX');
+                logError('USAGE: autotrack.ts work WORKID track INDEX');
             } else if (!track) {
-                console.error('autotrack.ts: track index out of range');
+                logError('autotrack.ts: track index out of range');
             } else {
                 if (parameters[3] == 'name') {
                     if (parameters.length <= 4) {
-                        console.error('USAGE: autotrack.ts work WORKID track INDEX name NAME');
+                        logError('USAGE: autotrack.ts work WORKID track INDEX name NAME');
                     } else {
-                        console.log(`autotrack.ts: work track name: rename from ${track.name} to ${parameters[4]}`);
+                        logInfo(`work track name: rename from ${track.name} to ${parameters[4]}`);
                         track.name = parameters[4];
                     }
                 } else if (parameters[3] == 'move') {
@@ -710,38 +785,61 @@ async function handleWorkCommand(parameters: string[]) {
                     handleAddTrackSubtitle(ctx, track, parameters.slice(4));
                 } else if (parameters[3] == 'comment') {
                     if (parameters.length <= 4) {
-                        console.error('USAGE: autotrack.ts work WORKID track INDEX comment COMMENT');
+                        logError('USAGE: autotrack.ts work WORKID track INDEX comment COMMENT');
                     } else {
-                        console.log(`autotrack.ts: work track comment: set from ${track.comment ?? "(empty)"} to ${parameters[4]}`);
+                        logInfo(`work track comment: set from ${track.comment ?? "(empty)"} to ${parameters[4]}`);
                         track.comment = parameters[4];
                     }
                 } else {
-                    console.error('USAGE: autotrack.ts work WORKID track INDEX SUBCOMMANDS');
-                    console.error('  name        set track name');
-                    console.error('  move        set track index');
-                    console.error('  subtitle    associate subtitle file');
-                    console.error('  comment     set comment');
+                    logInfo('USAGE: autotrack.ts work WORKID track INDEX SUBCOMMANDS');
+                    logInfo('  name        set track name');
+                    logInfo('  move        set track index');
+                    logInfo('  subtitle    associate subtitle file');
+                    logInfo('  comment     set comment');
                 }
             }
         }
     } else {
-        console.error('USAGE: autotrack.ts work WORKID SUBCOMMAND');
-        console.error('  meta       display metadata');
-        console.error('  title      set work title');
-        console.error('  add-tag    add tag');
-        console.error('  del-tag    remove tag');
-        console.error('  comment    set comment');
-        console.error('  +1/+2/-1   set score');
-        console.error('  file       download arbitrary file');
-        console.error('  fetch      commit virtually setup tracks');
-        console.error('  track      manage tracks');
+        logInfo('USAGE: autotrack.ts work WORKID SUBCOMMAND');
+        logInfo('  meta       display metadata');
+        logInfo('  title      set work title');
+        logInfo('  add-tag    add tag');
+        logInfo('  del-tag    remove tag');
+        logInfo('  comment    set comment');
+        logInfo('  +1/+2/-1   set score');
+        logInfo('  file       download arbitrary file');
+        logInfo('  fetch      commit virtually setup tracks');
+        logInfo('  track      manage tracks');
     }
 
     await writeMetadata(metadata);
 }
 
-async function makePage() {
+function minifycss(originalContent: string) {
+    // as my simple css is very regular that only contain plain rules .*\s\{attribute*\} and plain attributes .*:\s.*;
+    // so can use simple string manipulation operation to minify
 
+    let b = '';
+    let previousRightBracePosition = 0;
+    let leftBracePosition = originalContent.indexOf('{');
+    while (leftBracePosition >= 0) {
+        const rightBracePosition = originalContent.indexOf('}', leftBracePosition);
+        // selector
+        b += originalContent.substring(previousRightBracePosition + 1, leftBracePosition).trim();
+        b += '{';
+        const ruleContent = originalContent.substring(leftBracePosition + 1, rightBracePosition).trim();
+        // every unwanted whitespace characters are around colon and semicolon, so...
+        const trimmed1 = ruleContent.split(':').map(p => p.trim()).join(':');
+        const trimmed2 = trimmed1.split(';').map(p => p.trim()).join(';');
+        b += trimmed2;
+        b += '}\n';
+
+        previousRightBracePosition = rightBracePosition;
+        leftBracePosition = originalContent.indexOf('{', rightBracePosition);
+    }
+    return b.trim();
+}
+async function handleMakePage() {
     let template = `<!DOCTYPE html>
 <html>
 <head>
@@ -756,7 +854,7 @@ async function makePage() {
   <div id="items-container"></div>
   <div id="work-detail-container"></div>
   <div class="audio-container"></div>
-  <script defer type="module" src="/index.js"></script>
+  <script></script>
 </body>
 </html>`;
 
@@ -766,14 +864,13 @@ async function makePage() {
         if (directoryName.startsWith('RJ')) {
             const metadataPath = path.join(config.dataDirectory, directoryName, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
-                metadatas.push(JSON.parse(await fs.readFile(metadataPath, 'utf-8')));
+                const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+                if (metadata.tracks.length) {
+                    metadatas.push(metadata);
+                }
             }
         }
     }));
-    
-    const styles = await fs.readFile('index.css', 'utf-8');
-    template = template.replace('<style></style>', `<style>\n${styles}\n  </style>`);
-    
     let itemsContainerElement = '<div id="items-container">\n';
     for (const metadata of metadatas) { 
         itemsContainerElement +=
@@ -782,29 +879,40 @@ async function makePage() {
     }
     itemsContainerElement += '  </div>';
     template = template.replace('<div id="items-container"></div>', itemsContainerElement);
-    console.log(`make-page.ts: write index.html`);
-    await fs.writeFile(path.join(config.dataDirectory, 'index.html'), template);
 
-    console.log(`make-page.ts: deploy index.js`);
-    await fs.copyFile('index.js', path.join(config.dataDirectory, 'index.js'));
+    const styles = await fs.readFile('index.css', 'utf-8');
+    template = template.replace('<style></style>', `<style>\n${minifycss(styles)}\n  </style>`);
+    const scripts = await fs.readFile('index.js', 'utf-8');
+    template = template.replace('<script></script>', `<script type="module">\n${scripts.trim()}\n  </script>`);
+
+    logInfo(`write index.html`);
+    await fs.writeFile(path.join(config.dataDirectory, 'index.html'), template);
 }
 
 async function handleMigrateCommand() {
     const directoryNames = await fs.readdir(config.dataDirectory);
     const workIds = directoryNames.filter(d => d.startsWith('RJ'));
+
+    for (const workId of workIds) {
+        const metadata = JSON.parse(await fs.readFile(path.join(config.dataDirectory, workId, 'metadata.json'), 'utf-8')) as WorkMetadata;
+        if (metadata.tracks.length == 0) {
+            logInfo(`${workId}: no tracks`);
+        }
+    }
+    // TODO track not synced ids
 }
 
 const command = process.argv[2];
 if (command == 'page') {
-    await makePage();
+    await handleMakePage();
 } else if (command == 'migrate') {
     await handleMigrateCommand();
 } else if (command == 'work') {
     await handleWorkCommand(process.argv.slice(3));
 } else {
-    console.error('USAGE: autotrack.ts SUBCOMMAND');
-    console.error('  work         manage works');
-    console.error('  make-page    manage client side page');
+    logInfo('USAGE: autotrack.ts SUBCOMMAND');
+    logInfo('  work         manage works');
+    logInfo('  make-page    manage client side page');
 }
 
 // work directory structure
@@ -842,14 +950,14 @@ if (command == 'page') {
 // server
 // to make server simple, it only serve static content and don't run any business logic code
 
-// docker run -it --rm --name audio1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
+// docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
 
-// TODO inline index.js index.css into index.html, inline index.html into make-page.ts, merge make-page.ts here
 // TODO https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement
+// TODO https://css-tricks.com/lets-create-a-custom-audio-player/
 // TODO pagination and sorting, sort by score and sort by random
-// TODO validate track raw record size against file size
 // TODO index.html only have workid (indicate cover) + title, don't have tags comment score etc.
 // TODO static content server may need configuration to support vtt/lrc uncommon file formats
+// TODO include typescript parse?
 
 // TODO consider dsl
 // 1: 1
@@ -857,3 +965,7 @@ if (command == 'page') {
 // 2: 4 sub 3
 // 1: 120 sub RJ123456/105
 // 2: 122 sub RJ123456/107
+// TODO at least basic batch, left inclusive right exclusive only when no track, auto index
+// track add 13:19
+// track add 13:25:2 sub 14:26:2
+// track add 13:19 sub RJ123456/33:45:2
