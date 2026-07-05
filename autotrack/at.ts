@@ -115,6 +115,28 @@ function createProgressPipe(totalSize: number): stream.Duplex {
     });
 }
 
+function printUsage() {
+    console.log('USAGE: autotrack.ts SUBCOMMAND');
+    console.log('  page                                make web page');
+    console.log('  WORKID                              display metadata and raw track records');
+    console.log('    title TITLE                       set work title');
+    console.log('    tag TAG                           toggle tag');
+    console.log('    comment [COMMENT]                 set work comment, use empty to clear');
+    console.log('    score +VALUE/-VALUE/=VALUE        set work score');
+    console.log('    track INDEX move NEWINDEX         set track index');
+    console.log('    track INDEX name NAME             set track name');
+    console.log('    track INDEX comment COMMNET       set track comment');
+    console.log('    add [EDITIONID/]RAWINDEX           add a track WITHOUT download');
+    console.log('    add [EDITIONID/]RAWINDEX sub [EDITIONID/]RAWINDEX');
+    console.log('                                      add a track with subtitle WITHOUT download');
+    console.log('    add [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP] [sub [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP]]');
+    console.log('                                      batch add tracks maybe with subtitle WITHOUT download');
+    console.log('                                      similar to python syntax, end index is exclusive, step default 1');
+    console.log('    extra [EDITIONID/]RAWINDEX        download extra file, not record to metadata');
+    console.log('    dry                               dry run download track files');
+    console.log('    commit                            commit track and subtitle list and download track files');
+}
+
 // return null for already printed error
 async function getWorkId(inputValue: string) {
 
@@ -126,9 +148,9 @@ async function getWorkId(inputValue: string) {
         const directoryNames = await fs.readdir(config.dataDirectory);
         const matches = directoryNames.filter(d => d.startsWith('RJ') && d.endsWith(inputValue));
         if (matches.length == 0) {
-            logError(`autotrack.ts: short work id ${inputValue} not found`);
+            logError(`short work id ${inputValue} not found`);
         } else if (matches.length > 1) {
-            logError(`autotrack.ts: short work id ${inputValue} ambiguous`);
+            logError(`short work id ${inputValue} ambiguous`);
         } else {
             workId = matches[0];
             logInfo(`work id ${workId}`);
@@ -137,22 +159,22 @@ async function getWorkId(inputValue: string) {
         logError(`USAGE: autotrack.ts work WORKID`);
     }
     
-    // check subwork id
-    let subworkIdOk = true;
+    // check language edition id
+    let editionIdOk = true;
     if (workId) {
         const directoryNames = await fs.readdir(config.dataDirectory);
         await Promise.all(directoryNames.filter(d => d.startsWith('RJ')).map(async existingWorkId => {
             const metadataPath = path.join(config.dataDirectory, existingWorkId, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
                 const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-                if (existingMetadata.subworkIds.includes(workId)) {
-                    logError(`autotrack.ts: cannot use subworkid, use main work id ${existingWorkId} instead`);
-                    subworkIdOk = false;
+                if (existingMetadata.languageEditions.includes(workId)) {
+                    logError(`cannot use language edition id, use main work id ${existingWorkId} instead`);
+                    editionIdOk = false;
                 }
             }
         }));
     }
-    return subworkIdOk ? workId : null;
+    return editionIdOk ? workId : null;
 }
 
 // only these properties are interested
@@ -196,14 +218,14 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
     } else {
         url.pathname = `/api/workInfo/${workId.substring(2)}`;
-        logInfo(`downloading raw work info ${workId} main work id ${mainWorkId}`);
-        if (LOGURL) { logInfo(`downloading url ${url}`); }
+        logInfo(`download raw work info ${workId} main work id ${mainWorkId}`);
+        if (LOGURL) { logInfo(`download url ${url}`); }
         // ATTENTION because of similar reason, don't parallel these web requests
         const response = await fetch(url);
         // no need to precisely and gracefully handle network error in this small script
         metadata = await response.json();
         await fs.writeFile(metadataPath, JSON.stringify(metadata, undefined, 2));
-        logInfo(`downloaded raw work info ${workId} main work id ${mainWorkId}`);
+        logInfo(`download raw work info ${workId} main work id ${mainWorkId} complete`);
     }
 
     let records: RawTrackRecord[];
@@ -213,12 +235,12 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
     } else {
         url.pathname = `/api/tracks/${workId.substring(2)}`;
         url.searchParams.append('v', '2');
-        logInfo(`downloading raw track info ${workId} main work id ${mainWorkId}`);
-        if (LOGURL) { logInfo(`downloading url ${url}`); }
+        logInfo(`download raw track info ${workId} main work id ${mainWorkId}`);
+        if (LOGURL) { logInfo(`download url ${url}`); }
         const response = await fetch(url);
         records = await response.json();
         await fs.writeFile(recordsPath, JSON.stringify(records, undefined, 2));
-        logInfo(`downloaded raw track info ${workId} main work id ${mainWorkId}`);
+        logInfo(`download raw track info ${workId} main work id ${mainWorkId} complete`);
     }
     const rootRecord: RawTrackRecord = { type: 'folder', title: 'root', children: records };
 
@@ -228,14 +250,14 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         if (!npfs.existsSync(coverImagePath)) {
             const url = new URL(metadata.thumbnailCoverUrl);
             if (!url.pathname.endsWith('.jpg')) {
-                logError('autotrack.ts: cover image url not a jpg? skip');
+                logError('cover image url not a jpg? skip');
             } else {
-                logInfo(`downloading cover image ${workId}`);
-                if (LOGURL) { logInfo(`downloading url ${url}`); }
+                logInfo(`download cover image ${workId}`);
+                if (LOGURL) { logInfo(`download url ${url}`); }
                 const response = await fetch(url);
                 // no need to precisely and gracefully handle network and fs error in this small script
                 await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(coverImagePath)));
-                logInfo(`downloaded cover image ${workId}`);
+                logInfo(`download cover image ${workId} complete`);
             }
         }
     }
@@ -251,7 +273,11 @@ interface WorkMetadata {
     providerProviderLink?: string,
     actors: string[],
     providerTags: string[],
-    subworkIds: string[],
+    // work ids for language editions, variable names use eid (edition work id)
+    // // this concept was named subwork, but that conflict with concept of subtitle which also abbreviated sub,
+    // // so name this back to language editions same as raw metadata, which seems to be a standard name of concept
+    // // in publishing areas (doujin asmr works are also published work)
+    languageEditions: string[],
     // custom properties
     // note that title is customizable to remove unnecessary decorations
     title: string,
@@ -265,6 +291,8 @@ interface WorkMetadata {
     // score generally works as one access time +1,
     // but if you feel very good can +2, and feel not good -1
     score: number,
+    // main work id or edition id
+    audioWorkId?: string,
     // mp3 | wav, don't expect other formats for now
     audioFormat?: string,
     // empty for no subtitle, available values vtt, lrc, others TODO
@@ -272,7 +300,7 @@ interface WorkMetadata {
     // UPDATE you should have reallized that w3c standard means there should be some level of builtin support
     // lrc format is "[mm:ss.xx]content" format, the time in next line indicate end of current line content
     subtitleFormat?: string,
-    // empty for no subtitle, main work id or subwork id
+    // empty for no subtitle, main work id or edition id
     subtitleWorkId?: string,
     // no need to use tree structure because most of the time I only use one directory,
     // even if really need same name files from multiple directory I can prepend something
@@ -288,7 +316,7 @@ interface TrackRecord {
     comment?: string,
     // original path in rawtracks, include original file name
     providerPath: string,
-    // exist if have subtitle, belong to main work or subwork
+    // exist if have subtitle, regardless of belong to main work or editions
     subtitleProviderPath?: string,
 }
 // get or create metadata, only main work has main metadata
@@ -302,7 +330,7 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
         // one invocation of this script only work on one workid, so no need to cache this
         interface LegacyWork { id: string, tags: string, addTime: string }
         const legacyWorks: LegacyWork[] = [];
-        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8') as string;
+        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
         // id;kind;name;path;audioext;subext;tags;add;access
         for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
             const fields = record.split(';');
@@ -324,7 +352,7 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
             providerProviderLink: rawMetadata.source_url!,
             actors: (rawMetadata.vas?.map(v => v?.name) ?? []).filter(x => x),
             providerTags: (rawMetadata.tags?.map(t => t?.i18n?.['ja-jp']?.name) ?? []).filter(x => x),
-            subworkIds: (rawMetadata.other_language_editions_in_db?.map(e => e?.source_id) ?? []).filter(x => x),
+            languageEditions: (rawMetadata.other_language_editions_in_db?.map(e => e?.source_id) ?? []).filter(x => x),
             title: rawMetadata.title,
             addTime: time,
             lastAccessTime: time,
@@ -346,7 +374,7 @@ async function writeMetadata(metadata: WorkMetadata) {
         providerProviderLink: metadata.providerProviderLink!,
         actors: metadata.actors,
         providerTags: metadata.providerTags,
-        subworkIds: metadata.subworkIds,
+        languageEditions: metadata.languageEditions,
         title: metadata.title,
         addTime: metadata.addTime,
         lastAccessTime: metadata.lastAccessTime,
@@ -354,9 +382,10 @@ async function writeMetadata(metadata: WorkMetadata) {
         score: metadata.score,
         comment: metadata.comment,
         managementComment: metadata.managementComment,
+        audioWorkId: metadata.audioWorkId,
         audioFormat: metadata.audioFormat,
-        subtitleFormat: metadata.subtitleFormat,
         subtitleWorkId: metadata.subtitleWorkId,
+        subtitleFormat: metadata.subtitleFormat,
         tracks: metadata.tracks.sort((t1, t2) => t1.index! - t2.index!).map<TrackRecord>(t => ({
             index: t.index,
             name: t.name,
@@ -377,7 +406,7 @@ interface FlatRawTrackRecord {
     duration: number,
     mediaDownloadUrl: string,
 }
-function flattenRawTrackRecords(root: RawTrackRecord) {
+function flattenRawTracks(root: RawTrackRecord) {
     const results: FlatRawTrackRecord[] = [];
     // dfs
     function collect(folder: RawTrackRecord, basepath: string) {
@@ -404,155 +433,65 @@ interface CommandContext {
     id: string,
     meta: WorkMetadata,
     rawMetadata: RawMetadata,
-    // also for main work ctx.rawTracksPerWork[ctx.id]
-    rawTracksPerWork: Record<string, FlatRawTrackRecord[]>,
+    // edition work id to raw tracks,
+    // also for main work: ctx.allRawTracks[ctx.id]
+    allRawTracks: Record<string, FlatRawTrackRecord[]>,
 }
 
-function handleDisplayMetadata(ctx: CommandContext, raw: boolean) {
-    console.log('autotrack.ts: metadata:');
-    console.log(`  actors: ${ctx.meta.actors.join(', ')}`);
-    console.log(`  provider tags: ${ctx.meta.providerTags.join(', ')}`);
-    console.log(`  subworks: ${ctx.meta.subworkIds.length ? ctx.meta.subworkIds.join(', ') : '(empty)'}`);
+function handleDisplayMetadata(ctx: CommandContext) {
+    logInfo('metadata:');
     console.log(`  title: ${ctx.meta.title}`);
-    console.log(`  add time: ${ctx.meta.addTime}`);
-    console.log(`  last access time: ${ctx.meta.lastAccessTime}`);
+    console.log(`  actors: ${ctx.meta.actors.join(', ')}`);
+    console.log(`  times: ${ctx.meta.addTime}, ${ctx.meta.lastAccessTime}`);
     console.log(`  tags: ${ctx.meta.tags.join(', ')}`);
-    console.log(`  comment: ${ctx.meta.comment ?? '(empty)'}`);
     console.log(`  score: ${ctx.meta.score}`);
+    console.log(`  comment: ${ctx.meta.comment ?? '(empty)'}`);
+    console.log(`  management comment: ${ctx.meta.managementComment ?? '(empty)'}`);
+    console.log(`  editions: ${ctx.meta.languageEditions.length ? ctx.meta.languageEditions.join(', ') : '(empty)'}`);
     console.log(`  audio format: ${ctx.meta.audioFormat ?? '(none)'}`);
     console.log(`  subtitle work id: ${ctx.meta.subtitleWorkId ?? '(no)'}`);
     console.log(`  subtitle format: ${ctx.meta.subtitleFormat ?? '(none)'}`);
-    console.log('  raw records: ');
     console.log('  tracks:');
-    for (const item of ctx.meta.tracks) {
-        console.log(`    ${item.index}: ${item.name} ${styleText('gray', `(${item.providerPath})`)}`);
+    for (const track of ctx.meta.tracks) {
+        console.log(`    ${track.index}: ${track.name} ${styleText('gray', `(${track.providerPath})`)}`);
     }
-    if (raw) {
-        console.log('  raw tracks:');
-        for (const [item, index] of ctx.rawTracksPerWork[ctx.id].map((v, i) => [v, i] as const)) {
-            const additionalInfo = styleText('gray', `[${getDisplaySize(item.size)} ${getDisplayDuration(item.duration)}]`);
-            console.log(`    ${index + 1}: ${item.path} ${additionalInfo}`);
+    console.log('  raw tracks:');
+    const getDisplayPath = (value: string) => value
+        .replaceAll('mp3', styleText('yellow', 'mp3'))
+        .replaceAll('vtt', styleText('yellow', 'vtt'))
+        .replaceAll('lrc', styleText('yellow', 'lrc'));
+    for (const [rawRecord, index] of ctx.allRawTracks[ctx.id].map((v, i) => [v, i] as const)) {
+        console.log(`    ${styleText('cyanBright', (index + 1).toString())}: ${getDisplayPath(rawRecord.path)
+            } ${styleText('gray', `[${getDisplaySize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
+    }
+    for (const editionId of ctx.meta.languageEditions) {
+        for (const [rawRecord, index] of ctx.allRawTracks[editionId].map((v, i) => [v, i] as const)) {
+            console.log(`    ${styleText('cyanBright', `${editionId}/${index + 1}`)}: ${getDisplayPath(rawRecord.path)
+                } ${styleText('gray', `[${getDisplaySize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
         }
-        for (const subworkId of ctx.meta.subworkIds) {
-            for (const [item, index] of ctx.rawTracksPerWork[subworkId].map((v, i) => [v, i] as const)) {
-                const additionalInfo = styleText('gray', `[${getDisplaySize(item.size)} ${getDisplayDuration(item.duration)}]`);
-                console.log(`    ${subworkId}/${index + 1}: ${item.path} ${additionalInfo}`);
-            }
-        }
-    } else {
-        logInfo(`use "meta raw" for all raw tracks`);
     }
-}
-
-// parameters: after "add" not include "add"
-function handleAddTrack(ctx: CommandContext, parameters: string[]) {
-    const rawIndex = +parameters[0];
-    const trackIndex = +parameters[1];
-    if (isNaN(rawIndex) || isNaN(trackIndex)) {
-        return logError('USAGE: autotrack.ts work WORKID track add RAWINDEX INDEX');
-    }
-    if (rawIndex <= 0 || rawIndex > ctx.rawTracksPerWork[ctx.id].length) {
-        return logError('autotrack.ts: work add: raw index out of range');
-    } else if (trackIndex <= 0) {
-        return logError('autotrack.ts: work add: invalid track index');
-    } else if (ctx.meta.tracks.some(t => t.index == trackIndex)) {
-        return logError('autotrack.ts: work add: track index already exist');
-    }
-    const rawRecord = ctx.rawTracksPerWork[ctx.id][rawIndex - 1];
-    if (rawRecord.type != 'audio') {
-        return logError('autotrack.ts: work add: record type should be audio');
-    }
-
-    const providerPath = rawRecord.path;
-    logInfo(`work add: provider path ${providerPath}`);
-    const audioFormat = path.extname(providerPath).substring(1);
-    if (audioFormat != 'mp3' && audioFormat != 'wav') {
-        return logError('autotrack.ts: work add: can only add mp3 or wav file');
-    } else if (ctx.meta.audioFormat && ctx.meta.audioFormat != audioFormat) {
-        return logError(`autotrack.ts: work add: new audio format ${audioFormat} not same as existing value ${ctx.meta.audioFormat}`);
-    }
-    ctx.meta.audioFormat = audioFormat;
-
-    const providerPathBaseName = path.basename(providerPath);
-    const trackName = providerPathBaseName.substring(0, providerPathBaseName.length - audioFormat.length - 1);
-    ctx.meta.tracks.push({
-        index: trackIndex,
-        name: trackName,
-        duration: rawRecord.duration,
-        providerPath,
-    });
-}
-
-// parameters: after "subtitle" not include "subtitle"
-function handleAddTrackSubtitle(ctx: CommandContext, track: TrackRecord, parameters: string[]) {
-    if (!parameters[0]) {
-        return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
-    }
-    let subworkId: string; // subwork id or work id
-    let rawIndex: number;
-    if (parameters[0].includes('/')) {
-        const splitted = parameters[0].split('/');
-        if (splitted.length != 2) {
-            return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
-        }
-        subworkId = splitted[0];
-        rawIndex = +splitted[1];
-    } else {
-        subworkId = ctx.id;
-        rawIndex = +parameters[0];
-    }
-
-    if (subworkId != ctx.id && !ctx.meta.subworkIds.includes(subworkId)) {
-        return logError(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
-    } else if (ctx.meta.subtitleWorkId && ctx.meta.subtitleWorkId != subworkId) {
-        return logError(`autotrack.ts: work track subtitle: subtitle work id ${subworkId} is not same as existing value ${ctx.meta.subtitleWorkId}`);
-    } else if (!rawIndex) {
-        return logError('USAGE: autotrack.ts work WORKID track INDEX subtitle [SUBWORKID/]RAWINDEX');
-    } else if (rawIndex < 0 || rawIndex > ctx.rawTracksPerWork[subworkId].length) {
-        return logError('autotrack.ts: work track subtitle: raw index out of range');
-    }
-    ctx.meta.subtitleWorkId = subworkId;
-
-    const rawRecord = ctx.rawTracksPerWork[subworkId][rawIndex - 1];
-    if (rawRecord.type != 'text') {
-        return logError('autotrack.ts: work track subtitle: subtitle should be text file');
-    }
-    let subtitleFormat: string;
-    if (rawRecord.path.endsWith(`.vtt`)) {
-        subtitleFormat = 'vtt';
-    } else if (rawRecord.path.endsWith(`.lrc`)) {
-        subtitleFormat = 'lrc';
-    } else {
-        return logError('autotrack.ts: work track subtitle: unrecognized subtitle format, expect .vtt, .lrc');
-    }
-    if (ctx.meta.subtitleFormat && ctx.meta.subtitleFormat != subtitleFormat) {
-        return logError(`autotrack.ts: work track subtitle: subtitle format ${subtitleFormat} is not same from existing value ${ctx.meta.subtitleFormat}`);
-    }
-    ctx.meta.subtitleFormat = subtitleFormat;
-    logInfo(`work track subtitle: track ${track.index} subtitle ${rawRecord.path}`);
-    track.subtitleProviderPath = rawRecord.path;
 }
 
 // parameters: after "move" not include "move"
 async function handleMoveTrack(ctx: CommandContext, track: TrackRecord, parameters: string[]) {
     if (!parameters[0]) {
-        return logError('USAGE: autotrack.ts work WORKID track INDEX move NEWINDEX');
+        return logError('USAGE: autotrack.ts WORKID move INDEX NEWINDEX');
     }
     const newIndex = +parameters[0];
     if (!newIndex || newIndex <= 0) {
-        return logError('autotrack.ts: work track move: invalid new index');
+        return logError('invliad new index');
     } else if (ctx.meta.tracks.some(t => t.index != track.index && t.index == newIndex)) {
-        return logError('autotrack.ts: work track move: new index already exist');
+        return logError('new index already exist');
     }
-    logInfo(`ATTENTION will try to move actual file, but no transaction and rollback for that`);
-    logInfo(`that is if audio file move ok but subtitle file move not ok, audio file will not rollback while metadata will not update`);
+    logInfo(`ATTENTION will try to move actual file, but no transaction and rollback for that, which means`);
+    logInfo(`if audio file move ok but subtitle file move not ok, audio file will not rollback while metadata will not update`);
     if (ctx.meta.audioFormat) {
         const oldAudioPath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
         const newAudioPath = path.join(config.dataDirectory, ctx.id, `track${newIndex}.${ctx.meta.audioFormat}`);
         if (npfs.existsSync(oldAudioPath)) {
             if (npfs.existsSync(newAudioPath)) {
                 // not regard as error
-                logInfo(`work track move: skip move audio file because target path exists`);
+                logInfo(`skip move audio file because target path exists`);
             } else {
                 logInfo(`move ${oldAudioPath} to ${newAudioPath}`);
                 await fs.rename(oldAudioPath, newAudioPath);
@@ -563,55 +502,231 @@ async function handleMoveTrack(ctx: CommandContext, track: TrackRecord, paramete
             const newSubtitlePath = `${newAudioPath}.${ctx.meta.subtitleFormat}`;
             if (npfs.existsSync(newSubtitlePath)) {
                 // not regard as error
-                logInfo(`work track move: skip move subtitle file because target path exists`);
+                logInfo(`skip move subtitle file because target path exists`);
             } else {
                 logInfo(`move ${oldSubtitlePath} to ${newSubtitlePath}`);
                 await fs.rename(oldSubtitlePath, newSubtitlePath);
             }
         }
     }
-    logInfo(`work track move: from ${track.index} to ${newIndex}`);
+    logInfo(`${ctx.id}: move track from ${track.index} to ${newIndex}`);
     track.index = newIndex;
 }
 
-// parameters: after "file" not include "file"
-async function handleDownloadArbitraryFile(ctx: CommandContext, parameters: string[]) {
-    if (!parameters[0]) {
-        return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
+interface RawIndexReference {
+    meid: string, // main or edition work id
+    rawIndex: number, // raw index or begin raw index
+    endRawIndex?: number,
+    step: number, // already handled default 1
+}
+// - add [EDITIONID/]RAWINDEX [sub [EDITIONID/]RAWINDEX]
+// - add [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP] [sub [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP]]
+// first word and 3rd word is same syntax, so can parse and validate syntax with same parser
+// return undefined for already printed error
+// // you need |void to make return logerror work, what's the meaning?
+function parseAndValidateRawIndexReference(ctx: CommandContext, parameter: string): RawIndexReference | void {
+
+    let meid: string;
+    let remaining = parameter;
+    if (!parameter.includes('/')) {
+        meid = ctx.id;
+    } else {
+        meid = parameter.split('/')[0];
+        remaining = parameter.substring(meid.length + 1);
     }
-    let subworkId: string; // subwork id or work id
+    if (meid != ctx.id && !ctx.meta.languageEditions.includes(meid)) {
+        return logError(`unrecognized edition work id ${meid}`);
+    }
+    const splitted = remaining.split(':');
+    if (splitted.length > 3) {
+        return logError(`invalid syntax in ${parameter}, see help`);
+    }
+    const rawIndex = +splitted[0];
+    if (isNaN(rawIndex)) {
+        return logError(`invalid raw index in ${parameter}: not a number? ${splitted[0]}`);
+    } else if (rawIndex <= 0) {
+        return logError(`invalid raw index in ${parameter}: negative`);
+    } else if (Math.floor(rawIndex) != rawIndex) {
+        return logError(`invalid raw index in ${parameter}: not an integer? ${rawIndex}`);
+    } else if (rawIndex > ctx.allRawTracks[meid].length) {
+        return logError(`invalid raw index in ${parameter}: out of range, max ${ctx.allRawTracks[meid].length}`);
+    }
+    let endRawIndex: number;
+    if (splitted.length > 1) {
+        endRawIndex = +splitted[1];
+        if (isNaN(endRawIndex)) {
+            return logError(`invalid end raw index in ${parameter}: not a number? ${splitted[1]}`);
+        } else if (endRawIndex <= 0) {
+            return logError(`invalid end raw index in ${parameter}: negative`);
+        } else if (Math.floor(endRawIndex) != endRawIndex) {
+            return logError(`invalid end raw index in ${parameter}: not an integer? ${endRawIndex}`);
+        // ATTENTION +1 because end raw index is exclusive so can point one element after end
+        } else if (endRawIndex > ctx.allRawTracks[meid].length + 1) {
+            return logError(`invalid end raw index in ${parameter}: out of range, max ${ctx.allRawTracks[meid].length + 1}`);
+        } else if (endRawIndex <= rawIndex) {
+            return logError(`invalid end raw index in ${parameter}: before begin index`);
+        }
+    }
+    let step = 1;
+    if (splitted.length > 2) {
+        step = parseInt(splitted[2]);
+        if (isNaN(step) || step <= 0) {
+            return logError(`invalid step in ${parameter}`);
+        }
+    }
+    return { meid, rawIndex, endRawIndex, step };
+}
+
+// add one track, optionally subtitle, auto assign next track index,
+// caller to validate audio work id and raw index, subtitle work id and raw index
+function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: number, subtitleWorkId?: string, subtitleRawIndex?: number) {
+    
+    if (ctx.meta.audioWorkId && ctx.meta.audioWorkId != audioWorkId) {
+        return logError(`audio work id ${audioWorkId} is not same as existing value ${ctx.meta.audioWorkId}`);
+    }
+    const rawAudio = ctx.allRawTracks[audioWorkId][audioRawIndex - 1];
+    if (rawAudio.type != 'audio') {
+        return logError('audio record type should be audio');
+    }
+
+    const audioProviderPath = rawAudio.path;
+    const audioFormat = path.extname(audioProviderPath).substring(1);
+    if (audioFormat != 'mp3' && audioFormat != 'wav' && audioFormat != 'flac') {
+        return logError('unrecognized audio format, currently support mp3, wav, flac');
+    } else if (ctx.meta.audioFormat && ctx.meta.audioFormat != audioFormat) {
+        return logError(`new audio format ${audioFormat} not same as existing audio format ${ctx.meta.audioFormat}`);
+    }
+
+    const trackIndex = ctx.meta.tracks.reduce((acc, t) => Math.max(acc, t.index), 0) + 1;
+    const audioProviderPathBaseName = path.basename(audioProviderPath);
+    const trackName = audioProviderPathBaseName.substring(0, audioProviderPathBaseName.length - audioFormat.length - 1);
+
+    let subtitleProviderPath: string;
+    if (subtitleWorkId) {
+        if (ctx.meta.subtitleWorkId && ctx.meta.subtitleWorkId != subtitleWorkId) {
+            return logError(`subtitle work id ${subtitleWorkId} is not same as existing value ${ctx.meta.subtitleWorkId}`);
+        }
+        const rawSubtitle = ctx.allRawTracks[subtitleWorkId][subtitleRawIndex - 1];
+        if (rawSubtitle.type != 'text') {
+            return logError('subtitle record type should be text');
+        }
+        
+        subtitleProviderPath = rawSubtitle.path;
+        const subtitleFormat = path.extname(subtitleProviderPath).substring(1);
+        if (subtitleFormat != 'vtt' && subtitleFormat != 'lrc') {
+            return logError('unrecognized subtitle format, currently support vtt, lrc');
+        } else if (ctx.meta.subtitleFormat && ctx.meta.subtitleFormat != subtitleFormat) {
+            return logError(`new subtitle format ${subtitleFormat} is not same as existing value ${ctx.meta.subtitleFormat}`);
+        }
+
+        // assign these after validation
+        ctx.meta.subtitleWorkId = subtitleWorkId;
+        ctx.meta.subtitleFormat = subtitleFormat;
+    }
+    // assign these after validation
+    ctx.meta.audioWorkId = audioWorkId;
+    ctx.meta.audioFormat = audioFormat;
+
+    logInfo(`add track ${trackIndex} audio ${audioProviderPath}${subtitleWorkId ? ` subtitle ${subtitleProviderPath}` : ''}`);
+    ctx.meta.tracks.push({ index: trackIndex, name: trackName, duration: rawAudio.duration, providerPath: audioProviderPath, subtitleProviderPath });
+}
+
+// parameters: after "add" not include "add"
+function handleAddTrack(ctx: CommandContext, parameters: string[]) {
+
+    function printThisCommandUsage() {
+        logError('USAGE: autotrack.ts WORKID add [EDITIONID/]RAWINDEX [sub [EDITIONID/]RAWINDEX]');
+        logError('USAGE: autotrack.ts WORKID add [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP] [sub [EDITIONID/]RAWINDEX:ENDRAWINDEX[:STEP]]');
+    }
+    // 1 word means without subtle, 3 word means with subtitle
+    const includeSubtitle = parameters.length == 3;
+    if (parameters.length != 1 && parameters.length != 3) { return printThisCommandUsage(); }
+    if (includeSubtitle && parameters[1] != 'sub' && parameters[1] != 'subtitle') { return printThisCommandUsage(); }
+
+    const audioRawIndexReference = parseAndValidateRawIndexReference(ctx, parameters[0]);
+    if (!audioRawIndexReference) { return; } // already printed error
+    let subtitleRawIndexReference: RawIndexReference; // ATTENTION this may be none if not include subtitle
+    if (includeSubtitle) {
+        subtitleRawIndexReference = parseAndValidateRawIndexReference(ctx, parameters[2]) as RawIndexReference;
+        if (!subtitleRawIndexReference) { return; } // already printed error
+        if (audioRawIndexReference.endRawIndex && !subtitleRawIndexReference.endRawIndex
+            || !audioRawIndexReference.endRawIndex && subtitleRawIndexReference.endRawIndex
+        ) {
+            return logError('audio raw index and subtitle raw index should use batch syntax at same time');
+        }
+        if (audioRawIndexReference.endRawIndex && subtitleRawIndexReference.endRawIndex) {
+            const audioCount = Math.ceil((audioRawIndexReference.endRawIndex
+                - audioRawIndexReference.rawIndex) / audioRawIndexReference.step);
+            const subtitleCount = Math.ceil((subtitleRawIndexReference.endRawIndex
+                - subtitleRawIndexReference.rawIndex) / subtitleRawIndexReference.step);
+            if (audioCount != subtitleCount) {
+                return logError(`audio count not same as subtitle count, ${audioCount} != ${subtitleCount}`);
+            }
+        }
+    }
+
+    // abstract a addonetrack function out and use plain logic to add each track is more clear
+    const { meid: audioWorkId, rawIndex: audioBeginRawIndex } = audioRawIndexReference;
+    if (!audioRawIndexReference.endRawIndex) {
+        if (!subtitleRawIndexReference) {
+            addOneTrack(ctx, audioWorkId, audioBeginRawIndex);
+        } else {
+            addOneTrack(ctx, audioWorkId, audioBeginRawIndex, subtitleRawIndexReference.meid, subtitleRawIndexReference.rawIndex);
+        }
+    } else {
+        if (!subtitleRawIndexReference) {
+            let currentTrackRawIndex = audioBeginRawIndex;
+            while (currentTrackRawIndex < audioRawIndexReference.endRawIndex) {
+                addOneTrack(ctx, audioWorkId, currentTrackRawIndex);
+                currentTrackRawIndex += audioRawIndexReference.step;
+            }
+        } else {
+            let currentTrackRawIndex = audioBeginRawIndex;
+            let currentSubtitleRawIndex = subtitleRawIndexReference.rawIndex;
+            // already validated they have same count, no need to have multiple end conditions
+            while (currentTrackRawIndex < audioRawIndexReference.endRawIndex) {
+                addOneTrack(ctx, audioWorkId, currentTrackRawIndex, subtitleRawIndexReference.meid, currentSubtitleRawIndex);
+                currentTrackRawIndex += audioRawIndexReference.step;
+                currentSubtitleRawIndex += subtitleRawIndexReference.step;
+            }
+        }
+    }
+}
+
+// parameters: after "extra" not include "extra"
+async function handleDownloadExtraFile(ctx: CommandContext, parameters: string[]) {
+    if (!parameters[0]) {
+        return logError('USAGE: autotrack.ts WORKID extra [EDITIONID/]RAWINDEX');
+    }
+    let meid: string; // main work id or edition work id
     let rawIndex: number;
     if (parameters[0].includes('/')) {
         const splitted = parameters[0].split('/');
         if (splitted.length != 2) {
-            return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
+            return logError('USAGE: autotrack.ts WORKID extra [EDITIONID/]RAWINDEX');
         }
-        subworkId = splitted[0];
-        rawIndex = +splitted[1];
+        [meid, rawIndex] = [splitted[0], +splitted[1]];
     } else {
-        subworkId = ctx.id;
-        rawIndex = +parameters[0];
+        [meid, rawIndex] = [ctx.id, +parameters[0]];
     }
 
-    if (subworkId != ctx.id && !ctx.meta.subworkIds.includes(subworkId)) {
-        return logError(`autotrack.ts: sub work id not belong to current work, available: ${ctx.meta.subworkIds.join(',')}`);
-    } else if (!rawIndex) {
-        return logError('USAGE: autotrack.ts work WORKID file [SUBWORKID/]RAWINDEX');
-    } else if (rawIndex < 0 || rawIndex > ctx.rawTracksPerWork[subworkId].length) {
-        return logError('autotrack.ts: work track subtitle: raw index out of range');
+    if (meid != ctx.id && !ctx.meta.languageEditions.includes(meid)) {
+        return logError(`unrecognized language edition work id`);
+    } else if (isNaN(rawIndex)) {
+        return logError('invalid raw index');
+    } else if (rawIndex <= 0 || rawIndex > ctx.allRawTracks[meid].length) {
+        return logError('raw index out of range');
     }
-    const rawRecord = ctx.rawTracksPerWork[subworkId][rawIndex - 1];
+    const rawRecord = ctx.allRawTracks[meid][rawIndex - 1];
     const filePath = path.join(config.dataDirectory, ctx.id, path.basename(rawRecord.path));
     if (npfs.existsSync(filePath)) {
-        return logInfo(`file path ${filePath} already exists, skip`);
+        return logInfo(`${ctx.id}: extra file path ${filePath} already exists, skip`);
     }
-    logInfo(`downloading file ${subworkId} ${rawRecord.path}`);
-    if (LOGURL) { logInfo(`downloading url ${rawRecord.mediaDownloadUrl}`); }
+    logInfo(`download extra file ${meid} ${rawRecord.path}`);
+    if (LOGURL) { logInfo(`download url ${rawRecord.mediaDownloadUrl}`); }
     const response = await fetch(rawRecord.mediaDownloadUrl);
-    // this can happen at abitrary file
-    if (!response.ok) {
-        return logError(`autotrack.ts: download file response not ok ${response.status}`);
-    }
+    // this can happen at abitrary file UPDATE this frequently happen to all image and video file in old works
+    if (!response.ok) { return logError(`download response not ok ${response.status}`); }
     if (rawRecord.size > 1048576) {
         // no need to precisely and gracefully handle network and fs error in this small script
         await finished(stream.Readable.fromWeb(response.body)
@@ -620,196 +735,168 @@ async function handleDownloadArbitraryFile(ctx: CommandContext, parameters: stri
         // don't display progress and elapsed time for small files
         await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(filePath)));
     }
-    logInfo(`downloaded file complete`);
+    logInfo(`download extra file complete`);
 }
-// parameters: after "fetch" not include "fetch"
-async function handleDownloadTracks(ctx: CommandContext, parameters: string[]) {
-    const dry = parameters[0] == "dry";
 
-    const tasks: { desc: string, url: string, filesize: number, filepath: string }[] = [];
+async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
+
+    const tasks: { index: number, kind: 'audio' | 'subtitle', rawRecord: FlatRawTrackRecord, filepath: string }[] = [];
     for (const track of ctx.meta.tracks) {
-        const desc = `track ${track.index} provider path ${track.providerPath}`;
-        const rawRecord = ctx.rawTracksPerWork[ctx.id].find(r => r.path == track.providerPath);
-        if (!rawRecord) {
-            return logError(`autotrack.ts: track ${track.index} provider path ${track.providerPath} not found, check metadata`);
+        const rawAudio = ctx.allRawTracks[ctx.meta.audioWorkId].find(r => r.path == track.providerPath);
+        if (!rawAudio) {
+            return logError(`track ${track.index} audio provider path not found? work ${ctx.meta.audioWorkId} path ${track.providerPath}`);
         }
-        const url = rawRecord.mediaDownloadUrl;
-        const filesize = rawRecord.size;
         const filepath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
-        tasks.push({ desc, url, filesize, filepath });
+        tasks.push({ index: track.index, kind: 'audio', rawRecord: rawAudio, filepath });
+    
         if (ctx.meta.subtitleFormat && track.subtitleProviderPath) {
-            const desc = `track ${track.index} subtitle work ${ctx.meta.subtitleWorkId} provider path ${track.subtitleProviderPath}`;
-            const rawRecord = ctx.rawTracksPerWork[ctx.meta.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
-            if (!rawRecord) {
-                return logError(`autotrack.ts: track ${track.index} subtitle work ${ctx.meta.subtitleWorkId} provider path ${track.subtitleProviderPath} not found, check metadata`);
+            const rawSubtitle = ctx.allRawTracks[ctx.meta.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
+            if (!rawSubtitle) {
+                return logError(`track ${track.index} subtitle provider path not found? work ${ctx.meta.subtitleFormat} path ${track.subtitleProviderPath}`);
             }
-            const url = rawRecord.mediaDownloadUrl;
-            const filesize = rawRecord.size;
             const filepath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}.${ctx.meta.subtitleFormat}`);
-            tasks.push({ desc, url, filesize, filepath });
+            tasks.push({ index: track.index, kind: 'subtitle', rawRecord: rawSubtitle, filepath });
         }
     }
     
-    // dry run
-    if (dry) {
-        for (const task of tasks) {
-            logInfo(`will download ${task.desc}`);
-            logInfo(`will use url ${task.url}`);
-            logInfo(`will use file path ${task.filepath}`);
-        }
-        return;
-    }
-
     let networkTaskCount = 0;
-    let totalStartTime = Temporal.Now.plainDateTimeISO();
+    let overallStartTime = Temporal.Now.plainDateTimeISO();
     for (const task of tasks) {
         if (npfs.existsSync(task.filepath)) {
             const stat = await fs.stat(task.filepath);
-            if (stat.size != task.filesize) {
-                logError(`autotrack.ts: task ${task.desc} file path ${task.filepath} expect file size ${task.filesize} actual size ${stat.size}`);
-                logError(`autotrack.ts: no pause and continue functionality implemented for now, you have to delete and retry`);
-                continue;
+            if (stat.size != task.rawRecord.size) {
+                logError(`track ${task.index} ${task.kind} file path ${task.filepath} exists but size mismatch?`
+                    + `currently no pause and continue functionality, you need to delete the file and retry commit`);
+                continue; // continue other tasks
             } else {
-                logInfo(`task ${task.desc} file path ${task.filepath} already exists, skip`);
+                logInfo(`track ${task.index} ${task.kind} file path ${task.filepath} already exists, skip`);
                 continue;
             }
         }
-        logInfo(`downloading ${task.desc}`);
-        if (LOGURL) { logInfo(`downloading url ${task.url}`); }
-        const response = await fetch(task.url);
-        if (!response.ok) {
-            return logError(`autotrack.ts: download file response not ok ${response.status}`);
-        }
-        if (task.filesize < 1048576) {
-            await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(task.filepath)));
+        if (dry) {
+            logInfo(`will download track ${task.index} ${task.kind} to ${task.filepath}`);
         } else {
-            await finished(stream.Readable.fromWeb(response.body)
-                .pipe(createProgressPipe(task.filesize)).pipe(npfs.createWriteStream(task.filepath)));
+            logInfo(`download track ${task.index} ${task.kind} to ${task.filepath}`);
+            if (LOGURL) { logInfo(`download url ${task.rawRecord.mediaDownloadUrl}`); }
+            const response = await fetch(task.rawRecord.mediaDownloadUrl);
+            if (!response.ok) {
+                return logError(`download file response not ok ${response.status}`);
+            }
+            if (task.rawRecord.size < 1048576) {
+                await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(task.filepath)));
+            } else {
+                await finished(stream.Readable.fromWeb(response.body)
+                    .pipe(createProgressPipe(task.rawRecord.size)).pipe(npfs.createWriteStream(task.filepath)));
+            }
+            logInfo(`download track ${task.index} ${task.kind} complete`);
         }
         networkTaskCount += 1;
-        logInfo(`task complete`);
     }
-    const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(totalStartTime);
-    logInfo(`download ${networkTaskCount} files elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
+    if (dry) {
+        logInfo(`will download ${networkTaskCount} files`);
+    } else {
+        const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(overallStartTime);
+        logInfo(`download ${networkTaskCount} files elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
+    }
 }
 
 // parameters: after "work" not include "work"
 async function handleWorkCommand(parameters: string[]) {
 
     const workId = await getWorkId(parameters[0]); if (!workId) { return; }
-    const [rawMetadata, treedRawTrackRecords] = await getRawMetadata(workId, workId);
+    const [rawMetadata, mainRawTracks] = await getRawMetadata(workId, workId);
     // get or create main metadata
     const metadata = await getMetadata(workId, rawMetadata);
-    // subworkid => subwork flat raw track records
-    const rawTracksPerWork: Record<string, FlatRawTrackRecord[]> = {};
-    rawTracksPerWork[workId] = flattenRawTrackRecords(treedRawTrackRecords);
-    for (const subworkId of metadata.subworkIds) {
-        // ATTENTION because of similar reason don't parallel this
-        const [_, treedRawTrackRecords] = await getRawMetadata(subworkId, workId);
-        rawTracksPerWork[subworkId] = flattenRawTrackRecords(treedRawTrackRecords);
+    const allRawTracks: [string, RawTrackRecord][] = [[workId, mainRawTracks]];
+    // ATTENTION because of similar reason, don't paralle this
+    for (const editionId of metadata.languageEditions) {
+        // edition raw metadata is not used
+        allRawTracks.push([editionId, (await getRawMetadata(editionId, workId))[1]]);
     }
-    const ctx: CommandContext = { id: workId, meta: metadata, rawMetadata, rawTracksPerWork };
+    const allFlatRawTracks = Object.fromEntries(allRawTracks.map(([i, r]) => [i, flattenRawTracks(r)]));
+    const ctx: CommandContext = { id: workId, meta: metadata, rawMetadata, allRawTracks: allFlatRawTracks };
     
-    if (parameters[1] == 'meta') {
-        handleDisplayMetadata(ctx, parameters[2] == 'raw');
+    if (parameters.length == 1 || parameters[1] == 'meta') {
+        handleDisplayMetadata(ctx);
     } else if (parameters[1] == 'title') {
-        if (parameters.length <= 2) {
-            logError('USAGE: autotrack.ts work WORKID title NEWTITLE');
+        if (!parameters[2]) {
+            logError('USAGE: autotrack.ts WORKID title NEWTITLE');
         } else {
-            logInfo(`work title: rename ${ctx.meta.title} to ${parameters[2]}`);
+            logInfo(`${workId}: rename ${ctx.meta.title} to ${parameters[2]}`);
             ctx.meta.title = parameters[2];
         }
-    } else if (parameters[1] == 'add-tag') {
-        if (parameters.length <= 2) {
-            logError('USAGE: autotrack.ts work WORKID add-tag TAG');
+    } else if (parameters[1] == 'tag') {
+        if (!parameters[2]) {
+            logError('USAGE: autotrack.ts WORKID tag TAG');
         } else if (ctx.meta.tags.includes(parameters[2])) {
-            logInfo(`work tag: tag ${parameters[2]} already exists`);
+            logInfo(`${workId}: del tag ${parameters[2]}`);
+            ctx.meta.tags.splice(ctx.meta.tags.indexOf(parameters[2]), 1);
         } else {
-            logInfo(`work tag: add tag ${parameters[2]}`);
+            logInfo(`${workId}: add tag ${parameters[2]}`);
             ctx.meta.tags.push(parameters[2]);
         }
-    } else if (parameters[1] == 'del-tag') {
-        if (parameters.length <= 2) {
-            logError('USAGE: autotrack.ts work WORKID del-tag TAG');
-        } else if (!ctx.meta.tags.includes(parameters[2])) {
-            logInfo(`work tag: tag ${parameters[2]} not exist?`);
-        } else {
-            logInfo(`work tag: del tag ${parameters[2]}`);
-            ctx.meta.tags.splice(ctx.meta.tags.indexOf(parameters[2]), 1);
-        }
     } else if (parameters[1] == 'comment') {
-        if (parameters.length <= 2) {
-            logError('USAGE: autotrack.ts work WORKID comment COMMENT');
+        if (!parameters[2]) {
+            logInfo(`${workId}: clear comment`);
+            delete ctx.meta.comment;
         } else {
-            logInfo(`work track comment: set from ${ctx.meta.comment ?? "(empty)"} to ${parameters[2]}`);
+            logInfo(`${workId}: set comment "${parameters[2]}"`);
             ctx.meta.comment = parameters[2];
         }
-    } else if (parameters[1] == '+1') {
-        logInfo(`work track score: +1 = ${ctx.meta.score + 1}`);
-        ctx.meta.score += 1;
-    } else if (parameters[1] == '+2') {
-        logInfo(`work track score: +2 = ${ctx.meta.score + 2}`);
-        ctx.meta.score += 2;
-    } else if (parameters[1] == '-1') {
-        logInfo(`work track score: +1 = ${metadata.score - 1}`);
-        ctx.meta.score -= 1;
-    } else if (parameters[1] == 'file') {
-        await handleDownloadArbitraryFile(ctx, parameters.slice(2));
-    } else if (parameters[1] == 'fetch') {
-        await handleDownloadTracks(ctx, parameters.slice(2));
+    } else if (parameters[1] == 'score') {
+        if (!parameters[2]) {
+            logError('USAGE: autotrack.ts WORKID score +VALUE/-VALUE/=VALUE');
+        } else {
+            const match = /^(\+|-|=)(\d+)$/.exec(parameters[2]);
+            if (!match) {
+                logError('USAGE: autotrack.ts WORKID score +VALUE/-VALUE/=VALUE');
+            } else {
+                const [operator, value] = [match[1], +match[2]];
+                ctx.meta.score = operator == '=' ? value : operator == '+' ? ctx.meta.score + value : ctx.meta.score - value;
+                logInfo(`${workId}: score ${operator} ${value}${operator != '=' ? ` = ${ctx.meta.score}` : ''}`);
+            }
+        }
     } else if (parameters[1] == 'track') {
-        if (parameters.length <= 2) {
-            logError('USAGE: autotrack.ts work WORKID track SUBCOMMAND');
-            logError('  add      add track virtually');
-            logError('  INDEX    manage track by index');
-        } else if (parameters[2] == 'add') {
-            handleAddTrack(ctx, parameters.slice(3));
+        if (!parameters[2]) {
+            logError('USAGE: autotrack.ts WORKID track INDEX SUBCOMMAND');
         } else {
             const trackIndex = +parameters[2];
             const track = metadata.tracks.find(t => t.index == trackIndex);
             if (isNaN(trackIndex)) {
-                logError('USAGE: autotrack.ts work WORKID track INDEX');
+                logError('USAGE: autotrack.ts WORKID track INDEX SUBCOMMAND');
             } else if (!track) {
-                logError('autotrack.ts: track index out of range');
-            } else {
-                if (parameters[3] == 'name') {
-                    if (parameters.length <= 4) {
-                        logError('USAGE: autotrack.ts work WORKID track INDEX name NAME');
-                    } else {
-                        logInfo(`work track name: rename from ${track.name} to ${parameters[4]}`);
-                        track.name = parameters[4];
-                    }
-                } else if (parameters[3] == 'move') {
-                    await handleMoveTrack(ctx, track, parameters.slice(4));
-                } else if (parameters[3] == 'subtitle') {
-                    handleAddTrackSubtitle(ctx, track, parameters.slice(4));
-                } else if (parameters[3] == 'comment') {
-                    if (parameters.length <= 4) {
-                        logError('USAGE: autotrack.ts work WORKID track INDEX comment COMMENT');
-                    } else {
-                        logInfo(`work track comment: set from ${track.comment ?? "(empty)"} to ${parameters[4]}`);
-                        track.comment = parameters[4];
-                    }
+                logError('track index out of range');
+            } else if (parameters[3] == 'move') {
+                await handleMoveTrack(ctx, track, parameters.slice(4));
+            } else if (parameters[3] == 'name') {
+                if (!parameters[4]) {
+                    logError('USAGE: autotrack.ts WORKID track INDEX name NAME');
                 } else {
-                    logInfo('USAGE: autotrack.ts work WORKID track INDEX SUBCOMMANDS');
-                    logInfo('  name        set track name');
-                    logInfo('  move        set track index');
-                    logInfo('  subtitle    associate subtitle file');
-                    logInfo('  comment     set comment');
+                    logInfo(`${workId}: track ${trackIndex}: rename from ${track.name} to ${parameters[4]}`);
+                    track.name = parameters[4];
                 }
+            } else if (parameters[3] == 'comment') {
+                if (!parameters[4]) {
+                    logInfo(`${workId}: track ${trackIndex}: clear comment`);
+                    delete track.comment;
+                } else {
+                    logInfo(`${workId}: track ${trackIndex}: set comment "${parameters[4]}"`);
+                    track.comment = parameters[4];
+                }
+            } else {
+                logError('unknown command, see help');
             }
         }
+    } else if (parameters[1] == 'add') {
+        await handleAddTrack(ctx, parameters.slice(2));
+    } else if (parameters[1] == 'extra') {
+        await handleDownloadExtraFile(ctx, parameters.slice(2));
+    } else if (parameters[1] == 'dry') {
+        await handleDownloadTracks(ctx, true);
+    } else if (parameters[1] == 'commit') {
+        await handleDownloadTracks(ctx, false);
     } else {
-        logInfo('USAGE: autotrack.ts work WORKID SUBCOMMAND');
-        logInfo('  meta       display metadata');
-        logInfo('  title      set work title');
-        logInfo('  add-tag    add tag');
-        logInfo('  del-tag    remove tag');
-        logInfo('  comment    set comment');
-        logInfo('  +1/+2/-1   set score');
-        logInfo('  file       download arbitrary file');
-        logInfo('  fetch      commit virtually setup tracks');
-        logInfo('  track      manage tracks');
+        logError('unknown command, see help');
     }
 
     await writeMetadata(metadata);
@@ -894,12 +981,49 @@ async function handleMigrateCommand() {
     const workIds = directoryNames.filter(d => d.startsWith('RJ'));
 
     for (const workId of workIds) {
-        const metadata = JSON.parse(await fs.readFile(path.join(config.dataDirectory, workId, 'metadata.json'), 'utf-8')) as WorkMetadata;
+        const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
         if (metadata.tracks.length == 0) {
             logInfo(`${workId}: no tracks`);
+        } else {
+            for (const track of metadata.tracks) {
+                const trackPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
+                if (!npfs.existsSync(trackPath)) {
+                    logInfo(`${workId}: track ${track.index} audio not exist`);
+                    continue;
+                }
+                if (metadata.subtitleFormat) {
+                    const subtitlePath = trackPath + '.' + metadata.subtitleFormat;
+                    if (!npfs.existsSync(subtitlePath)) {
+                        logInfo(`${workId}: track ${track.index} subtitle not exist`);
+                        continue;
+                    }
+                }
+                // TODO check size mismatch
+            }
         }
+        // writeMetadata(metadata);
     }
-    // TODO track not synced ids
+}
+// only when migrating from legacy data, pick a random not included workid
+async function handlePickCommand() {
+    const legacyWorkIds: string[] = [];
+    const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
+    // id;kind;name;path;audioext;subext;tags;add;access
+    for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
+        legacyWorkIds.push(record.split(';')[0]);
+    }
+    const directoryNames = await fs.readdir(config.dataDirectory);
+    const workIds = directoryNames.filter(d => d.startsWith('RJ'));
+    const editionIds: string[] = [];
+    for (const workId of workIds) {
+        const metadata = JSON.parse(await fs.readFile(path.join(config.dataDirectory, workId, 'metadata.json'), 'utf-8')) as WorkMetadata;
+        editionIds.push(...metadata.languageEditions);
+    }
+
+    const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id));
+    const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
+    console.log(pickedId);
 }
 
 const command = process.argv[2];
@@ -907,12 +1031,12 @@ if (command == 'page') {
     await handleMakePage();
 } else if (command == 'migrate') {
     await handleMigrateCommand();
-} else if (command == 'work') {
-    await handleWorkCommand(process.argv.slice(3));
+} else if (command == 'pick') {
+    await handlePickCommand();
+} else if (/^RJ\d+$/.test(command) || /^\d+$/.test(command)) {
+    await handleWorkCommand(process.argv.slice(2));
 } else {
-    logInfo('USAGE: autotrack.ts SUBCOMMAND');
-    logInfo('  work         manage works');
-    logInfo('  make-page    manage client side page');
+    printUsage();
 }
 
 // work directory structure
@@ -922,50 +1046,21 @@ if (command == 'page') {
 // - track{index}.{audioformat}.{subtitleformat}: subtitle files, e.g. track1.mp3.vtt
 // - raw-metadata.json: archive
 // - raw-tracks.json: archive
-// - raw-metadata-{subworkid}.json: subwork archive
-// - raw-tracks-{subworkid}.json: subwork archive
-
-// command line
-// - at.ts page: make index.html
-// - at.ts migrate: convenient command to run custom migration code for data structure and file structure
-// - at.ts work {workid}: create work directory, other work commands also create work directory if not exist
-//   - for all work commands, use latter digits as a short hand for existing *main* work id if not ambiguous
-//   - will also download raw files for subwork, make sure you first add the main work
-// - at.ts work {workid} meta: display work information and track information
-// - at.ts work {workid} meta raw: display work information and track information and raw track information
-// - at.ts work {workid} title {title}: set title, normally remove decorations
-// - at.ts work {workid} add-tag/del-tag {tagname}: set tag
-// - at.ts work {workid} comment {comment}: set comment
-// - at.ts work {workid} score+1/+2/-1: set score
-// - at.ts work {workid} file {rawindex}: download single arbitrary file immediately
-// - at.ts work {workid} fetch: download files according to setting
-// - at.ts work {workid} track add {rawindex} {index}: add single file to my tracks, this *does not* download file
-//   rawindex is index in raw track records flattened list, index is my index as in track1.mp3, track2.mp3, etc.
-// - at.ts work {workid} track {index} name {name}: set track name, normally remove decorations
-// - at.ts work {workid} track {index} move {newindex}: set track index TODO this rename file?
-// - at.ts work {workid} track {index} subtitle {subrjid/}?{rawindex}: associate subtitle to existing track index
-//   - raw index can prepend subworkid like in meta raw display
-// - at.ts work {workid} track {index} comment {comment}: set comment
+// - raw-metadata-{editionid}.json: language editions archive
+// - raw-tracks-{editionid}.json: language editions archive
 
 // server
-// to make server simple, it only serve static content and don't run any business logic code
+// - any static content server can work, no business logic code used
+// - may need to specifically allow subtitle files if your server restrict file types,
+//   vtt is text/vtt, lrc has no dedicated type, use text/plain
 
 // docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
 
 // TODO https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement
 // TODO https://css-tricks.com/lets-create-a-custom-audio-player/
 // TODO pagination and sorting, sort by score and sort by random
+//      consider change to 2 columns and still keep 10 per page, by the way, move title and tag to bottom side of cover in in work state
+// TODO add track index to track container
+// TODO page is too static that you nearly can always reuse existing elements no need to recreate elements when switch work
 // TODO index.html only have workid (indicate cover) + title, don't have tags comment score etc.
-// TODO static content server may need configuration to support vtt/lrc uncommon file formats
 // TODO include typescript parse?
-
-// TODO consider dsl
-// 1: 1
-// 1: 2 sub 1
-// 2: 4 sub 3
-// 1: 120 sub RJ123456/105
-// 2: 122 sub RJ123456/107
-// TODO at least basic batch, left inclusive right exclusive only when no track, auto index
-// track add 13:19
-// track add 13:25:2 sub 14:26:2
-// track add 13:19 sub RJ123456/33:45:2
