@@ -3,7 +3,7 @@
 FROM alpine:3.24.1 AS llvm-stage1
 
 # in the same directory that calls git clone (outside of repository)
-# tar cJf llvm-project.tar.xz -C ./llvm-project .
+# tar cJf llvm-project.tar.xz --exclude-vcs -C ./llvm-project .
 # for reference
 #   github webpage downloaded zip file is about 300m
 #   uncompress size is 2GB WITHOUT the .git folder
@@ -11,14 +11,19 @@ FROM alpine:3.24.1 AS llvm-stage1
 #   uncompress size is estimated 2.6GB with .git folder
 ADD --chown=0 llvm-project.tar.xz /llvm-src
 
-COPY --from=my/shell /etc/apk/repositories /etc/apk/repositories
 # build-base: include gcc, g++, ar, ld, make
 # python3: this is python3.12 for now
 # linux-headers: some source file is using gnu linux specific headers,
 #    docs does not mention this, I think this naturally exists in normal distro
 # git: this is used in --version display, good to have
 # zlib: missing zlib will make you completely compile llvm again if you need zlib later
-RUN apk add --no-cache build-base cmake ninja python3 linux-headers git zlib-dev
+RUN <<EORUN
+set -ex
+echo https://mirrors.aliyun.com/alpine/v3.24/main > /etc/apk/repositories
+echo https://mirrors.aliyun.com/alpine/v3.24/community >> /etc/apk/repositories
+apk update
+apk add --no-cache build-base cmake ninja python3 linux-headers git zlib-dev
+EORUN
 
 # https://cmake.org/cmake/help/latest/manual/cmake-presets.7.html
 # CMAKE_INSTALL_PREFIX: install in other location to make later COPY simpler
@@ -92,7 +97,7 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm-stage2 --tag my/llvm:latest .
+# docker build --target llvm-stage2 --tag my/llvm .
 FROM alpine:3.24.1 AS llvm-stage2
 
 # # why is previous stage unexpectedly cache miss?
@@ -106,12 +111,17 @@ FROM alpine:3.24.1 AS llvm-stage2
 ADD --chown=0 llvm-project.tar.xz /llvm-src
 COPY --from=my/llvm:stage1 /llvm-install /usr/local
 
-COPY --from=my/shell /etc/apk/repositories /etc/apk/repositories
 # libstdc++, libgcc: gcc built clang itself still need libgcc and libstdc++ to run
 # musl-dev: this is the libc/posix headers, you need them in hello world and all c/c++ programs
 # libatomic: c++ helloworld with include <print> need this lib to run
 # cmake, ninja, git, zlib-dev, python3, linux-headers: same as before
-RUN apk add --no-cache libstdc++ libgcc musl-dev libatomic cmake ninja git zlib-dev python3 linux-headers
+RUN <<EORUN
+set -ex
+echo https://mirrors.aliyun.com/alpine/v3.24/main > /etc/apk/repositories
+echo https://mirrors.aliyun.com/alpine/v3.24/community >> /etc/apk/repositories
+apk update
+apk add --no-cache libstdc++ libgcc musl-dev libatomic cmake ninja git zlib-dev python3 linux-headers
+EORUN
 
 # cmake variable differences
 # - clang-tools-extra: build clangd and clang-tidy by the way
@@ -183,14 +193,17 @@ CATEOF
 ./main.2
 RUNEOF
 
-# docker build --target llvm-shell --tag my/llvm:shell .
-FROM my/shell AS llvm-shell
+# docker build --target llvm-shell --tag my/llvm-shell .
+FROM alpine:3.24.1 AS llvm-shell
 
-COPY --from=my/llvm:stage2 /llvm-install /usr/local
+COPY --from=my/llvm /llvm-install /usr/local
 
 # add cmake: although I don't use cmake before, it seems clangd works better with cmake
 RUN <<RUNEOF
 set -ex
+echo https://mirrors.aliyun.com/alpine/v3.24/main > /etc/apk/repositories
+echo https://mirrors.aliyun.com/alpine/v3.24/community >> /etc/apk/repositories
+apk update
 apk add --no-cache musl-dev cmake ninja
 ln -sf /usr/local/bin/ld.lld /usr/local/bin/ld
 echo "/usr/lib:/usr/local/lib/x86_64-alpine-linux-musl" > /etc/ld-musl-x86_64.path

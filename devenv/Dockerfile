@@ -62,6 +62,9 @@ EOCAT
 # the default template of .zshrc is long, but only contains 4 important lines
 # see minimized version https://github.com/ohmyzsh/ohmyzsh/blob/master/templates/minimal.zshrc
 cat <<'EOCAT' > .zshrc
+# why do you need this
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
 export ZSH="$HOME/.omz"
 ZSH_THEME="mytheme"
 # disable auto update
