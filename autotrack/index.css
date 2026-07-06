@@ -1,105 +1,221 @@
 
 body {
+    margin: 0;
     background-color: #333;
+}
+
+/* header */
+header {
+    display: flex;
+    height: 28px;
+    margin: 8px 8px 0 8px;
 }
 h2 {
     margin: 0;
     font-family: san-serif;
     color: #ddd;
 }
-div#items-container {
-    height: calc(100vh - 48px);
+div#pager {
+    margin-left: 12px;
+    gap: 4px;
+    padding: 2px 0;
+}
+div#pager.visible {
+    display: flex;
+}
+div#pager:not(.visible) {
+    display: none;
+}
+button#page-prev, button#page-next {
+    height: 24px;
+    width: 24px;
+}
+input#page-number {
+    width: 20px;
+    padding: 0 2px;
+    text-align: right;
+}
+input#page-number::-webkit-outer-spin-button,
+input#page-number::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+span#page-count {
+    color: #ccc;
+    line-height: 24px;
+}
+
+/* summary */
+div#summary-container {
+    margin-left: 4px;
+    height: fit-content;
+    max-height: calc(100vh - 56px);
     overflow-x: hidden;
     overflow-y: auto;
+    /* by the way, not very posible to animation summary element position in this layout */
+    display: flex;
+    flex-wrap: wrap;
 }
-div.item-container {
-    margin: 8px 0;
-    display: grid;
-    grid-template-rows: 100px 35px;
-    grid-template-columns: 180px auto;
+div.summary {
+    width: 180px;
+    padding: 6px;
+}
+div.summary:not(.visible) {
+    display: none;
+}
+div.summary>img {
+    width: 180px;
+}
+div.summary>div.title {
+    color: #ccc;
+    font-size: 12px;
+}
+
+/* detail */
+div#detail-container {
+    color: #ccc;
+    margin: 0 8px;
+}
+div#detail-container:not(.visible) {
+    display: none;
+}
+div#detail-container>div>a.provider-link {
+    font-size: 10px;
+    color: #bbb;
+    text-decoration: none;
+    margin-left: 12px;
+}
+div#detail-container>div.line2 {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
     gap: 4px;
 }
-div.item-container>img.cover {
-    /* scale 0.75 */
-    width: 180px;
-    grid-area: 1/1/1/3;
-}
-div.item-container>div.title {
-    color: #ccc;
-    grid-area: 1/2/1/2;
-    font-size: 12px;
-}
-div.item-container>div.tags {
-    color: #ccc;
-    grid-area: 2/2/2/2;
-    display: flex;
-}
-div.item-container>div.tags>span {
+div#detail-container>div>span.tag {
     font-size: 12px;
     font-family: sans-serif;
     padding: 2px;
     border-radius: 2px;
-    background-color: cornflowerblue;
-    height: 13px;
+    line-height: 12px;
 }
-div#work-detail-container {
-    color: #ccc;
+div#detail-container>div>span.tag:not(.visible) {
+    display: none;
 }
-div#work-detail-container>div.id {
-    font-size: 10px;
-    font-family: sans-serif;
-}
-div#work-detail-container>div.original-tags {
-    display: flex;
-    font-size: 12px;
-}
-div#work-detail-container>div.actors {
-    margin-bottom: 12px;
-}
-div#work-detail-container>div.actors>span {
-    font-size: 12px;
-    font-family: sans-serif;
-    padding: 2px;
-    border-radius: 2px;
-    background-color: darkcyan;
-    height: 13px;
-}
-div.track-container {
-    display: grid;
-    grid-template-rows: 28px 28px;
-    grid-template-columns: auto 56px;
-    border-radius: 4px;
-    margin: 4px 0;
-    padding: 4px;
+div#detail-container>div>span.tag.provider-tag {
     background-color: #444;
 }
+div#detail-container>div>span.tag.actor {
+    background-color: chocolate;
+}
+div#detail-container>div>span.tag.my-tag {
+    background-color: #25b316;
+}
+div#detail-container>div>span.tag.my-score {
+    background-color: lightcoral;
+}
+div#detail-container>div>span.time {
+    font-size: 10px;
+    margin-right: 8px;
+}
+div#detail-container>div.line4 {
+    display: flex;
+    justify-content: flex-end;
+}
+div#detail-container>div>span.comment {
+    margin-right: 8px;
+    font-size: 14px;
+    font-family: sans-serif;
+    font-style: italic;
+    color: #aaa;
+}
+
+/* tracks */
+div#tracks-container {
+    /* add a large padding to avoid player block elements */
+    padding-bottom: 100px;
+}
+div#tracks-container:not(.visible) {
+    display: none;
+}
+div.track-container {
+    border-radius: 4px;
+    margin: 6px 8px;
+    padding: 4px 8px;
+    background: #444;
+    color: #ccc;
+    gap: 4px;
+    justify-content: space-between;
+    align-items: center;
+}
+div.track-container.active {
+    font-weight: bold;
+}
+div.track-container.visible {
+    display: flex;
+}
+div.track-container:not(.visible) {
+    display: none;
+}
 div.track-container>span.title {
-    grid-area: 1/1/3/1;
     line-height: 24px;
 }
 div.track-container>span.duration {
     font-size: 12px;
-    grid-area: 1/2/1/2;
+    font-family: sans-serif;
     line-height: 24px;
     text-align: center;
+    display: inline-block;
 }
-div.track-container>span.progress-text {
-    font-size: 12px;
-    grid-area: 2/2/2/2;
-    line-height: 24px;
-    text-align: center;
-}
-div.track-container>div.temp-audio-container {
-    grid-area: 2/1/2/3;
-    display: grid;
-    grid-template-rows: 28px;
-    grid-template-columns: 56px 56px 56px 56px 56px 56px;
-    gap: 4px;
-}
-a.provider-link, a.provider-provider-link {
-    color: #bbb;
-    text-decoration: none;
-    margin-top: 12px;
+div#tracks-container>div.comment {
+    margin-right: 8px;
+    font-size: 14px;
+    font-family: sans-serif;
+    font-style: italic;
+    color: #aaa;
     text-align: right;
-    margin-right: 12px;
+    height: 8px;
+    line-height: 8px;
+}
+div#tracks-container>div.comment:not(.visible) {
+    display: none;
+}
+
+/* player */
+div#player-container {
+    position: fixed;
+    bottom: 0;
+    width: calc(100vw - 16px);
+    padding: 8px;
+}
+div#player-container:not(.visible) {
+    display: none;
+}
+div#player-container>div.button-container {
+    display: flex;
+    padding: 8px 8px 6px 8px;
+    justify-content: right;
+    gap: 8px;
+    background-color: #444c;
+    border-radius: 4px;
+}
+div#player-container>div.button-container>button {
+    height: 28px;
+    padding: 4px 8px;
+}
+div#player-container>div.button-container>button:nth-child(3) {
+    width: 60px;
+}
+div#player-container>div.subtitle-container {
+    font-size: 12px;
+    color: #ccc;
+    height: 16px;
+    line-height: 16px;
+    padding: 4px 8px 2px 8px;
+    background-color: #444c;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    text-align: right;
+}
+div#player-container>div.subtitle-container:not(.visible) {
+    display: none;
 }

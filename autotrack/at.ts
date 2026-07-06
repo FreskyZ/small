@@ -4,6 +4,7 @@ import path from 'node:path';
 import stream from 'node:stream';
 import { styleText } from 'node:util';
 import { finished } from 'node:stream/promises';
+import * as ts from 'typescript';
 
 const config = JSON.parse(await fs.readFile('at.json', 'utf-8')) as {
     dataDirectory: string,
@@ -123,6 +124,7 @@ function printUsage() {
     console.log('    tag TAG                           toggle tag');
     console.log('    comment [COMMENT]                 set work comment, use empty to clear');
     console.log('    score +VALUE/-VALUE/=VALUE        set work score');
+    console.log('    access                            set work access time');
     console.log('    track INDEX move NEWINDEX         set track index');
     console.log('    track INDEX name NAME             set track name');
     console.log('    track INDEX comment COMMNET       set track comment');
@@ -222,6 +224,12 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         if (LOGURL) { logInfo(`download url ${url}`); }
         // ATTENTION because of similar reason, don't parallel these web requests
         const response = await fetch(url);
+        // this meet 522 cloudflare timeout error (with the familiar cloudflare error page by the way)
+        // and says cloudflare works but the original server don't work, I generally think it's rate limiting
+        if (!response.ok) {
+            logError(`download response not ok ${response.status}`);
+            return [null, null];
+        }
         // no need to precisely and gracefully handle network error in this small script
         metadata = await response.json();
         await fs.writeFile(metadataPath, JSON.stringify(metadata, undefined, 2));
@@ -295,13 +303,13 @@ interface WorkMetadata {
     audioWorkId?: string,
     // mp3 | wav, don't expect other formats for now
     audioFormat?: string,
+    // empty for no subtitle, main work id or edition id
+    subtitleWorkId?: string,
     // empty for no subtitle, available values vtt, lrc, others TODO
     // UPDATE: vtt is w3c standard? https://www.w3.org/TR/webvtt1/
     // UPDATE you should have reallized that w3c standard means there should be some level of builtin support
     // lrc format is "[mm:ss.xx]content" format, the time in next line indicate end of current line content
     subtitleFormat?: string,
-    // empty for no subtitle, main work id or edition id
-    subtitleWorkId?: string,
     // no need to use tree structure because most of the time I only use one directory,
     // even if really need same name files from multiple directory I can prepend something
     // like folder name to dinstinguish, even for large works with like 100 files spreaded
@@ -360,6 +368,9 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
             score: 1,
             tracks: [],
         };
+        if (metadata.languageEditions.some(eid => +eid.substring(2) < +workId.substring(2))) {
+            logError('language editions have smaller id, this indicate a main-edition reversion');
+        }
         await fs.writeFile(metadataPath, JSON.stringify(metadata, undefined, 2));
     }
     return metadata;
@@ -381,7 +392,7 @@ async function writeMetadata(metadata: WorkMetadata) {
         tags: metadata.tags,
         score: metadata.score,
         comment: metadata.comment,
-        managementComment: metadata.managementComment,
+        managementComment: metadata.managementComment ?? '',
         audioWorkId: metadata.audioWorkId,
         audioFormat: metadata.audioFormat,
         subtitleWorkId: metadata.subtitleWorkId,
@@ -448,8 +459,9 @@ function handleDisplayMetadata(ctx: CommandContext) {
     console.log(`  comment: ${ctx.meta.comment ?? '(empty)'}`);
     console.log(`  management comment: ${ctx.meta.managementComment ?? '(empty)'}`);
     console.log(`  editions: ${ctx.meta.languageEditions.length ? ctx.meta.languageEditions.join(', ') : '(empty)'}`);
+    console.log(`  audio work id: ${ctx.meta.audioWorkId ?? '(none)'}`);
     console.log(`  audio format: ${ctx.meta.audioFormat ?? '(none)'}`);
-    console.log(`  subtitle work id: ${ctx.meta.subtitleWorkId ?? '(no)'}`);
+    console.log(`  subtitle work id: ${ctx.meta.subtitleWorkId ?? '(none)'}`);
     console.log(`  subtitle format: ${ctx.meta.subtitleFormat ?? '(none)'}`);
     console.log('  tracks:');
     for (const track of ctx.meta.tracks) {
@@ -759,15 +771,19 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
         }
     }
     
+    let totalSize = 0;
     let networkTaskCount = 0;
     let overallStartTime = Temporal.Now.plainDateTimeISO();
     for (const task of tasks) {
+        let startPosition = 0;
         if (npfs.existsSync(task.filepath)) {
             const stat = await fs.stat(task.filepath);
             if (stat.size != task.rawRecord.size) {
-                logError(`track ${task.index} ${task.kind} file path ${task.filepath} exists but size mismatch?`
-                    + `currently no pause and continue functionality, you need to delete the file and retry commit`);
-                continue; // continue other tasks
+                // logError(`track ${task.index} ${task.kind} file path ${task.filepath} exists but size mismatch?`
+                //     + `currently no pause and continue functionality, you need to delete the file and retry commit`);
+                // continue;
+                logInfo(`track ${task.index} ${task.kind} has size not fulfilled file, start from ${stat.size}/${task.rawRecord.size}`);
+                startPosition = stat.size;
             } else {
                 logInfo(`track ${task.index} ${task.kind} file path ${task.filepath} already exists, skip`);
                 continue;
@@ -778,25 +794,33 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
         } else {
             logInfo(`download track ${task.index} ${task.kind} to ${task.filepath}`);
             if (LOGURL) { logInfo(`download url ${task.rawRecord.mediaDownloadUrl}`); }
-            const response = await fetch(task.rawRecord.mediaDownloadUrl);
+            const headers: [string, string][] = [];
+            if (startPosition != 0) {
+                headers.push(['range', `bytes=${startPosition}-`]);
+            }
+            const response = await fetch(task.rawRecord.mediaDownloadUrl, { headers });
             if (!response.ok) {
                 return logError(`download file response not ok ${response.status}`);
             }
-            if (task.rawRecord.size < 1048576) {
-                await finished(stream.Readable.fromWeb(response.body).pipe(npfs.createWriteStream(task.filepath)));
+            // console.log(Array.from(response.headers.entries())); // see accept-ranges: bytes
+            const expectedSize = task.rawRecord.size - startPosition;
+            const sourceStream = stream.Readable.fromWeb(response.body);
+            const targetStream = npfs.createWriteStream(task.filepath, { flags: 'a' });
+            if (expectedSize < 1048576) {
+                await finished(sourceStream.pipe(targetStream));
             } else {
-                await finished(stream.Readable.fromWeb(response.body)
-                    .pipe(createProgressPipe(task.rawRecord.size)).pipe(npfs.createWriteStream(task.filepath)));
+                await finished(sourceStream.pipe(createProgressPipe(expectedSize)).pipe(targetStream));
             }
             logInfo(`download track ${task.index} ${task.kind} complete`);
         }
+        totalSize += task.rawRecord.size;
         networkTaskCount += 1;
     }
     if (dry) {
-        logInfo(`will download ${networkTaskCount} files`);
+        logInfo(`will download ${networkTaskCount} files ${getDisplaySize(totalSize)}`);
     } else {
         const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(overallStartTime);
-        logInfo(`download ${networkTaskCount} files elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
+        logInfo(`download ${networkTaskCount} files ${getDisplaySize(totalSize)} elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
     }
 }
 
@@ -805,13 +829,16 @@ async function handleWorkCommand(parameters: string[]) {
 
     const workId = await getWorkId(parameters[0]); if (!workId) { return; }
     const [rawMetadata, mainRawTracks] = await getRawMetadata(workId, workId);
+    if (!rawMetadata) { return; } // already reported error
     // get or create main metadata
     const metadata = await getMetadata(workId, rawMetadata);
     const allRawTracks: [string, RawTrackRecord][] = [[workId, mainRawTracks]];
     // ATTENTION because of similar reason, don't paralle this
     for (const editionId of metadata.languageEditions) {
         // edition raw metadata is not used
-        allRawTracks.push([editionId, (await getRawMetadata(editionId, workId))[1]]);
+        const [rawMetadata, editionRawTracks] = await getRawMetadata(editionId, workId);
+        if (!rawMetadata) { return; } // already reported error
+        allRawTracks.push([editionId, editionRawTracks]);
     }
     const allFlatRawTracks = Object.fromEntries(allRawTracks.map(([i, r]) => [i, flattenRawTracks(r)]));
     const ctx: CommandContext = { id: workId, meta: metadata, rawMetadata, allRawTracks: allFlatRawTracks };
@@ -856,6 +883,10 @@ async function handleWorkCommand(parameters: string[]) {
                 logInfo(`${workId}: score ${operator} ${value}${operator != '=' ? ` = ${ctx.meta.score}` : ''}`);
             }
         }
+    } else if (parameters[1] == 'access') {
+        const currentTime = now();
+        logInfo(`${workId}: access ${currentTime}`);
+        ctx.meta.lastAccessTime = currentTime;
     } else if (parameters[1] == 'track') {
         if (!parameters[2]) {
             logError('USAGE: autotrack.ts WORKID track INDEX SUBCOMMAND');
@@ -907,7 +938,19 @@ function minifycss(originalContent: string) {
     // so can use simple string manipulation operation to minify
 
     let b = '';
-    let previousRightBracePosition = 0;
+    let previousCommentEndPosition = -2;
+    let commentStartPosition = originalContent.indexOf('/*');
+    while (commentStartPosition >= 0) {
+        const commentEndPosition = originalContent.indexOf('*/', commentStartPosition);
+        b += originalContent.substring(previousCommentEndPosition + 2, commentStartPosition);
+        previousCommentEndPosition = commentEndPosition;
+        commentStartPosition = originalContent.indexOf('/*', commentEndPosition);
+    }
+    b += originalContent.substring(previousCommentEndPosition + 2);
+    originalContent = b;
+
+    b = '';
+    let previousRightBracePosition = -1;
     let leftBracePosition = originalContent.indexOf('{');
     while (leftBracePosition >= 0) {
         const rightBracePosition = originalContent.indexOf('}', leftBracePosition);
@@ -927,20 +970,29 @@ function minifycss(originalContent: string) {
     return b.trim();
 }
 async function handleMakePage() {
+    // amazingly you need meta charset to make jajp characters work in html source code
     let template = `<!DOCTYPE html>
 <html>
 <head>
   <title>ASMR Offline</title>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style></style>
 </head>
 <body>
   <header>
     <h2>ASMR Offline</h2>
+    <div id="pager">
+        <button id="page-prev">&lt;</button>
+        <input type="number" id="page-number" value="1"></input>
+        <span id="page-count"></span>
+        <button id="page-next">&gt;</button>
+    </div>
   </header>
-  <div id="items-container"></div>
-  <div id="work-detail-container"></div>
-  <div class="audio-container"></div>
+  <div id="summary-container"></div>
+  <div id="detail-container"></div>
+  <div id="tracks-container"></div>
+  <div id="player-container"></div>
   <script></script>
 </body>
 </html>`;
@@ -958,19 +1010,22 @@ async function handleMakePage() {
             }
         }
     }));
-    let itemsContainerElement = '<div id="items-container">\n';
+    let summaryContainerElement = '<div id="summary-container">\n';
     for (const metadata of metadatas) { 
-        itemsContainerElement +=
-            `    <div class="item-container" data-id="${metadata.id}"`
-            + ` data-score="${metadata.score}">${metadata.title}</div>\n`;
+        summaryContainerElement +=
+            `    <div class="summary" data-id="${metadata.id}" data-score="${metadata.score}">${metadata.title}</div>\n`;
     }
-    itemsContainerElement += '  </div>';
-    template = template.replace('<div id="items-container"></div>', itemsContainerElement);
+    summaryContainerElement += '  </div>';
+    template = template.replace('<div id="summary-container"></div>', summaryContainerElement);
 
     const styles = await fs.readFile('index.css', 'utf-8');
     template = template.replace('<style></style>', `<style>\n${minifycss(styles)}\n  </style>`);
-    const scripts = await fs.readFile('index.js', 'utf-8');
-    template = template.replace('<script></script>', `<script type="module">\n${scripts.trim()}\n  </script>`);
+
+    const scripts = await fs.readFile('index.ts', 'utf-8');
+    const { config: tsconfig } = ts.parseConfigFileTextToJson("tsconfig.json", await fs.readFile('tsconfig.json', 'utf-8'));
+    // oh basic transpile is so simple
+    const transpileResult = ts.transpile(scripts, tsconfig.compilerOptions);
+    template = template.replace('<script></script>', `<script type="module">\n${transpileResult.trim()}\n  </script>`);
 
     logInfo(`write index.html`);
     await fs.writeFile(path.join(config.dataDirectory, 'index.html'), template);
@@ -979,10 +1034,18 @@ async function handleMakePage() {
 async function handleMigrateCommand() {
     const directoryNames = await fs.readdir(config.dataDirectory);
     const workIds = directoryNames.filter(d => d.startsWith('RJ'));
+    console.log(`${workIds.length} works`);
 
+    let maxTagCount = 0;
+    let maxTrackCount = 0;
     for (const workId of workIds) {
         const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
         const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+        maxTrackCount = Math.max(maxTrackCount, metadata.tracks.length);
+        // 1: score
+        // also subtitle format makes 1 tag (a has-subtitle tag)
+        maxTagCount = Math.max(maxTagCount, metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 1 + (metadata.subtitleFormat ? 1 : 0));
+
         if (metadata.tracks.length == 0) {
             logInfo(`${workId}: no tracks`);
         } else {
@@ -990,20 +1053,31 @@ async function handleMigrateCommand() {
                 const trackPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
                 if (!npfs.existsSync(trackPath)) {
                     logInfo(`${workId}: track ${track.index} audio not exist`);
-                    continue;
+                    break;
                 }
                 if (metadata.subtitleFormat) {
                     const subtitlePath = trackPath + '.' + metadata.subtitleFormat;
                     if (!npfs.existsSync(subtitlePath)) {
                         logInfo(`${workId}: track ${track.index} subtitle not exist`);
-                        continue;
+                        break;
+                    } else if (metadata.subtitleFormat == 'vtt') {
+                        // parseSubtitle('vtt', await fs.readFile(subtitlePath, 'utf-8')).slice(0, 10).map(c => `${c.start}-${c.end} ${c.text}`).join('\n');
+                        // console.log();
                     }
                 }
                 // TODO check size mismatch
             }
+            // check track index removed from track name, except with standard name track${index} they don't have a meaningful name
+            const alternativeNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+            const maybeForgetToRemoveTracks = metadata.tracks.filter(t => t.name != `track${t.index}`
+                && (t.name.includes(t.index.toString()) || (alternativeNumbers[t.index] && t.name.includes(alternativeNumbers[t.index]))));
+            if (maybeForgetToRemoveTracks.length > 2) {
+                logInfo(`${workId}: may be forget to remove track index from track name`)
+            }
         }
-        // writeMetadata(metadata);
+        // await writeMetadata(metadata);
     }
+    console.log({ maxTrackCount, maxTagCount });
 }
 // only when migrating from legacy data, pick a random not included workid
 async function handlePickCommand() {
@@ -1020,10 +1094,9 @@ async function handlePickCommand() {
         const metadata = JSON.parse(await fs.readFile(path.join(config.dataDirectory, workId, 'metadata.json'), 'utf-8')) as WorkMetadata;
         editionIds.push(...metadata.languageEditions);
     }
-
     const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id));
     const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
-    console.log(pickedId);
+    await handleWorkCommand([pickedId]);
 }
 
 const command = process.argv[2];
@@ -1056,11 +1129,5 @@ if (command == 'page') {
 
 // docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
 
-// TODO https://developer.mozilla.org/en-US/docs/Web/API/HTMLMediaElement
-// TODO https://css-tricks.com/lets-create-a-custom-audio-player/
-// TODO pagination and sorting, sort by score and sort by random
-//      consider change to 2 columns and still keep 10 per page, by the way, move title and tag to bottom side of cover in in work state
-// TODO add track index to track container
-// TODO page is too static that you nearly can always reuse existing elements no need to recreate elements when switch work
-// TODO index.html only have workid (indicate cover) + title, don't have tags comment score etc.
-// TODO include typescript parse?
+// TODO https://github.com/openai/whisper if you notice this is evil openai, this need gpu, need wslc to connect gpu
+// TODO unify provider tags and actor names

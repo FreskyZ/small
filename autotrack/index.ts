@@ -1,0 +1,449 @@
+
+// partial properties compare to management script
+interface WorkMetadata {
+    // loaded for all works before loading work detail
+    id: string,
+    score: number,
+    title: string,
+    // loaded after load work detail
+    providerLink: string,
+    providerProviderLink?: string,
+    actors: string[],
+    providerTags: string[],
+    addTime: string,
+    lastAccessTime: string,
+    tags: string[],
+    comment?: string,
+    audioFormat?: string,
+    subtitleFormat?: string,
+    tracks: TrackRecord[],
+}
+interface TrackRecord {
+    index: number,
+    name: string,
+    duration: number,
+    comment?: string,
+    // not actually used, but to determine whether this track has subtitle
+    subtitleProviderPath?: string,
+    // client side properties
+    cues: Cue[],
+}
+interface Cue {
+    // start and end time in seconds
+    start: number,
+    end: number,
+    text: string,
+}
+
+// get all work summary data that build by management script
+function getAllWorks() {
+    const result: WorkMetadata[] = [];
+    Array.from(document.querySelectorAll<HTMLDivElement>('div.summary')).forEach(element => {
+        result.push({
+            id: element.dataset['id'],
+            score: +element.dataset['score'],
+            title: element.innerText,
+        } as unknown as WorkMetadata);
+        element.remove();
+    });
+    // shuffle elements, TODO weighted shuffle?
+    let currentIndex = result.length;
+    while (currentIndex != 0) {
+        const randomIndex = Math.floor(Math.random() * currentIndex);
+        currentIndex--;
+        const temp = result[randomIndex];
+        result[randomIndex] = result[currentIndex];
+        result[currentIndex] = temp;
+    }
+    return result;
+}
+const allworks = getAllWorks();
+
+// constant config?
+const WorkPerPage = 16;
+const MaxTagCount = 24; // TODO can collect precise value
+const MaxTrackCount = 16; // TODO can collect precise value
+
+// all page state
+interface PageState {
+    pageNumber: number,
+    scrollPosition: number,
+    activeWorkId: string,
+    // track plain index is not track index
+    activeTrackPlainIndex: number,
+}
+const state: PageState = {
+    // start with invalid value, so that diff check in render can initial render page number = 1
+    pageNumber: 0,
+    scrollPosition: 0,
+    activeWorkId: null,
+    activeTrackPlainIndex: -1,
+};
+
+// setup all elements
+const pagerElements = {
+    container: document.querySelector<HTMLDivElement>('div#pager'),
+    prevButton: document.querySelector<HTMLButtonElement>('button#page-prev'),
+    nextButton: document.querySelector<HTMLButtonElement>('button#page-next'),
+    valueInput: document.querySelector<HTMLInputElement>('input#page-number'),
+    totalCount: document.querySelector<HTMLSpanElement>('span#page-count'),
+};
+pagerElements.container.classList.add('visible');
+pagerElements.totalCount.innerText = `/${Math.ceil(allworks.length / WorkPerPage)}`;
+pagerElements.prevButton.addEventListener('click', () => {
+    if (state.pageNumber > 1) { render({ pageNumber: state.pageNumber - 1 }); }
+});
+pagerElements.nextButton.addEventListener('click', () => {
+    if (state.pageNumber < Math.ceil(allworks.length / WorkPerPage)) { render({ pageNumber: state.pageNumber + 1 }); }
+});
+pagerElements.valueInput.addEventListener('change', e => {
+    const newPageNumber = +pagerElements.valueInput.value;
+    if (!isNaN(newPageNumber) && newPageNumber >= 1 && newPageNumber <= Math.ceil(allworks.length / WorkPerPage)) {
+        render({ pageNumber: newPageNumber });
+    }
+})
+
+const summaryElements = {
+    container: document.querySelector<HTMLDivElement>('div#summary-container'),
+    works: [] as {
+        container: HTMLDivElement,
+        image: HTMLImageElement,
+        title: HTMLDivElement,
+    }[],
+};
+function createSummaryElements() {
+    summaryElements.works = new Array<void>(WorkPerPage).fill().map(() => {
+        const container = document.createElement('div');
+        container.classList.add('summary');
+        container.addEventListener('click', () => {
+            render({
+                activeWorkId: state.activeWorkId ? null : container.dataset['id'],
+                // close player when closing work detail
+                activeTrackPlainIndex: state.activeWorkId ? -1 : state.activeTrackPlainIndex,
+            });
+        });
+        const image = document.createElement('img');
+        container.appendChild(image);
+        const title = document.createElement('div');
+        title.className = 'title';
+        container.appendChild(title);
+        summaryElements.container.appendChild(container);
+        return { container, image, title };
+    });
+}
+createSummaryElements();
+
+// detail container for the active work
+const detailElements = {
+    container: document.querySelector<HTMLDivElement>('div#detail-container'),
+    workId: null as HTMLSpanElement,
+    providerLink: null as HTMLAnchorElement,
+    providerProviderLink: null as HTMLAnchorElement,
+    // similar to track containers, use a max count should be enough,
+    // 3 different kind of tags are same kind of element with different class
+    tags: [] as HTMLSpanElement[],
+    addTime: null as HTMLSpanElement,
+    accessTime: null as HTMLSpanElement,
+    comment: null as HTMLSpanElement,
+};
+function createDetailElements() {
+    // line 1: id, provider link, provider provider link,
+    const line1Element = document.createElement('div');
+    line1Element.classList.add('line1');
+    detailElements.workId = document.createElement('span');
+    detailElements.workId.classList.add('id');
+    line1Element.appendChild(detailElements.workId);
+    detailElements.providerLink = document.createElement('a');
+    detailElements.providerLink.classList.add('provider-link');
+    detailElements.providerLink.target = '_blank';
+    detailElements.providerLink.referrerPolicy = 'no-referrer';
+    detailElements.providerLink.innerText = 'provider';
+    line1Element.appendChild(detailElements.providerLink);
+    detailElements.providerProviderLink = document.createElement('a');
+    // no need to distinguish them in style
+    detailElements.providerProviderLink.classList.add('provider-link');
+    detailElements.providerProviderLink.target = '_blank';
+    detailElements.providerProviderLink.referrerPolicy = 'no-referrer';
+    detailElements.providerProviderLink.innerText = 'provider';
+    line1Element.appendChild(detailElements.providerProviderLink);
+    detailElements.container.appendChild(line1Element);
+    // line 2: provider tags (gray), actors (orange?), my tags (green)
+    const line2Element = document.createElement('div');
+    line2Element.classList.add('line2');
+    detailElements.tags = new Array<void>(MaxTagCount).fill().map(() => {
+        const tag = document.createElement('span');
+        tag.classList.add('tag');
+        line2Element.appendChild(tag);
+        return tag;
+    });
+    detailElements.container.appendChild(line2Element);
+    // line 3: times
+    const line3Element = document.createElement('div');
+    line3Element.classList.add('line3');
+    detailElements.addTime = document.createElement('span');
+    detailElements.addTime.classList.add('time');
+    line3Element.appendChild(detailElements.addTime);
+    detailElements.accessTime = document.createElement('span');
+    detailElements.accessTime.classList.add('time');
+    line3Element.appendChild(detailElements.accessTime);
+    detailElements.container.appendChild(line3Element);
+    // line 4: comment
+    const line4Element = document.createElement('div');
+    line4Element.classList.add('line4');
+    detailElements.comment = document.createElement('span');
+    detailElements.comment.classList.add('comment');
+    line4Element.appendChild(detailElements.comment);
+    detailElements.container.appendChild(line4Element);
+}
+createDetailElements();
+
+const trackElements = {
+    container: document.querySelector<HTMLDivElement>('div#tracks-container'),
+    tracks: [] as {
+        container: HTMLDivElement,
+        title: HTMLSpanElement,
+        duration: HTMLSpanElement,
+        comment: HTMLDivElement,
+    }[],
+}
+function createTrackElements() {
+    trackElements.tracks = new Array<void>(MaxTrackCount).fill().map((_, plainIndex) => {
+        const container = document.createElement('div');
+        container.classList.add('track-container');
+        container.addEventListener('click', () =>
+            render({ activeTrackPlainIndex: state.activeTrackPlainIndex == plainIndex ? -1 : plainIndex }));
+        const title = document.createElement('span');
+        title.classList.add('title');
+        container.appendChild(title);
+        const duration = document.createElement('span');
+        duration.classList.add('duration');
+        container.appendChild(duration);
+        trackElements.container.appendChild(container);
+        // note comment is not child of track container but parallel to track container
+        const comment = document.createElement('div');
+        comment.classList.add('comment');
+        trackElements.container.appendChild(comment);
+        return { container, title, duration, comment };
+    });
+}
+createTrackElements();
+
+// player element
+const playerElements = {
+    container: document.querySelector<HTMLDivElement>('div#player-container'),
+    audio: null as HTMLAudioElement,
+    subtitleContainer: null as HTMLDivElement,
+    buttons: [] as HTMLButtonElement[],
+};
+function createPlayerElements() {
+
+    const audio = playerElements.audio = document.createElement('audio');
+    audio.autoplay = true;
+    playerElements.container.appendChild(audio);
+
+    playerElements.subtitleContainer = document.createElement('div');
+    playerElements.subtitleContainer.classList.add('subtitle-container');
+    playerElements.container.appendChild(playerElements.subtitleContainer);
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.classList.add('button-container');
+    function addButton(text: string, handleClick: () => any) {
+        const button = document.createElement('button');
+        button.innerText = text;
+        button.addEventListener('click', () => {
+            handleClick();
+        });
+        playerElements.buttons.push(button);
+        buttonContainer.appendChild(button);
+    }
+    addButton('<1min', () => audio.currentTime = Math.max(0, audio.currentTime - 60));
+    addButton('<10s', () => audio.currentTime = Math.max(0, audio.currentTime - 10));
+    addButton('||', () => audio.readyState >= audio.HAVE_METADATA ? (audio.paused ? audio.play() : audio.pause()) : void 0);
+    addButton('>10s', () => audio.currentTime = Math.min(audio.duration, audio.currentTime + 10));
+    addButton('>1min', () => audio.currentTime = Math.min(audio.duration, audio.currentTime + 60));
+    addButton('>10min', () => audio.currentTime = Math.min(audio.duration, audio.currentTime + 600));
+    playerElements.container.appendChild(buttonContainer);
+
+    audio.addEventListener('timeupdate', () => {
+        if (state.activeTrackPlainIndex < 0) { return; }
+        const remainingTime = Math.floor(audio.duration - audio.currentTime);
+        if (isNaN(remainingTime)) { return; }
+        const minutes = Math.floor(remainingTime / 60);
+        const seconds = Math.round(remainingTime - minutes * 60);
+        trackElements.tracks[state.activeTrackPlainIndex].duration.innerText = `-${minutes}:${seconds.toString().padStart(2, '0')}`;
+        const percent = Math.floor(audio.currentTime / audio.duration * 9900) / 100 + 0.5;
+        trackElements.tracks[state.activeTrackPlainIndex].container.style.background = `linear-gradient(to right, #666, #666 ${percent}%, #444 ${percent}%)`;
+        playerElements.subtitleContainer.innerText = allworks
+            .find(w => w.id == state.activeWorkId)
+            ?.tracks?.[state.activeTrackPlainIndex]
+            ?.cues?.find(c => c.start < audio.currentTime && c.end > audio.currentTime)?.text ?? '';
+    });
+    audio.addEventListener('pause', () => playerElements.buttons[2].innerText = '|>');
+    audio.addEventListener('play', () => playerElements.buttons[2].innerText = '||');
+}
+createPlayerElements();
+
+// NOTE copy this function to management script and parse all subtitle files
+function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
+    if (subtitleFormat == 'lrc') {
+        return [{ start: 0, end: 86400, text: 'lrc support TODO' }];
+    } else if (subtitleFormat != 'vtt') {
+        return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
+    }
+
+    const results: Cue[] = [];
+    // vtt: split line, recognize --> and the 2 timestamps around it, and take the next line as text
+    const lines = rawtext.split('\n');
+    for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
+        if (lines[rowIndex].includes('-->')) {
+            const splitted = lines[rowIndex].split('-->');
+            const leftMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[0]);
+            if (!leftMatch) {
+                console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at left part? "${lines[rowIndex]}"`);
+                continue;
+            }
+            const rightMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[1]);
+            if (!rightMatch) {
+                console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at right part? "${lines[rowIndex]}"`);
+                continue;
+            }
+            if (rowIndex + 1 >= lines.length) {
+                console.log(`subtitle: line#${rowIndex} has arrow but not have next line?`);
+                continue;
+            }
+            let start = leftMatch[0].length == 9
+                ? +leftMatch[0].substring(0, 2) * 60 + +leftMatch[0].substring(3, 5) + +leftMatch[0].substring(6, 9) / 1000
+                : +leftMatch[0].substring(0, 2) * 3600 + +leftMatch[0].substring(3, 5) * 60 + +leftMatch[0].substring(6, 8) + +leftMatch[0].substring(9, 12) / 1000;
+            let end = rightMatch[0].length == 9
+                ? +rightMatch[0].substring(0, 2) * 60 + +rightMatch[0].substring(3, 5) + +rightMatch[0].substring(6, 9) / 1000
+                : +rightMatch[0].substring(0, 2) * 3600 + +rightMatch[0].substring(3, 5) * 60 + +rightMatch[0].substring(6, 8) + +rightMatch[0].substring(9, 12) / 1000;
+            results.push({ start, end, text: lines[rowIndex + 1] });
+        }
+    }
+    return results;
+}
+
+// input newstate here so you can diff them to make render more efficient
+async function render(newState: Partial<PageState>) {
+
+    if ('pageNumber' in newState && newState.pageNumber != state.pageNumber) {
+        state.pageNumber = newState.pageNumber;
+        pagerElements.valueInput.value = state.pageNumber.toString();
+        // summary
+        summaryElements.container.scrollTo(0, 0);
+        summaryElements.works.forEach(e => e.container.classList.remove('visible'));
+        // slice allow ending index overflow by the way
+        const displayWorks = allworks.slice(WorkPerPage * (state.pageNumber - 1), WorkPerPage * state.pageNumber);
+        for (const [work, index] of displayWorks.map((w, i) => [w, i] as const)) {
+            summaryElements.works[index].container.classList.add('visible');
+            summaryElements.works[index].container.dataset['id'] = work.id;
+            summaryElements.works[index].image.src = `./${work.id}/cover.jpg`;
+            summaryElements.works[index].title.innerText = work.title;
+        }
+    }
+
+    const oldWorkId = state.activeWorkId;
+    if ('activeWorkId' in newState && newState.activeWorkId != state.activeWorkId) {
+        state.activeWorkId = newState.activeWorkId;
+        if (!newState.activeWorkId) {
+            // pager
+            pagerElements.container.classList.add('visible');
+            // summary
+            summaryElements.works.forEach(e => e.container.classList.add('visible'));
+            summaryElements.container.scrollTo(0, state.scrollPosition);
+            // detail
+            detailElements.container.classList.remove('visible');
+            // tracks
+            trackElements.container.classList.remove('visible');
+        } else {
+            // pager
+            pagerElements.container.classList.remove('visible');
+            // summary
+            state.scrollPosition = summaryElements.container.scrollTop;
+            summaryElements.works.forEach(w => w.container.classList.remove('visible'));
+            summaryElements.works.find(w => w.container.dataset['id'] == state.activeWorkId).container.classList.add('visible');
+            // detail
+            const work = allworks.find(w => w.id == state.activeWorkId);
+            // this should be a good condition to check whether data is loaded
+            if (!Array.isArray(work.tracks)) {
+                const response = await fetch(`./${work.id}/metadata.json`);
+                if (!response.ok) { alert('fetch metadata can be not ok?'); return; }
+                Object.assign(work, await response.json());
+            }
+            detailElements.container.classList.add('visible');
+            detailElements.workId.innerText = work.id;
+            detailElements.providerLink.href = work.providerLink;
+            detailElements.providerProviderLink.href = work.providerProviderLink;
+            detailElements.tags.forEach(t => t.classList.remove('visible'));
+            let tagIndex = 0;
+            const addTag = (text: string, className: string) => {
+                const element = detailElements.tags[tagIndex];
+                element.innerText = text;
+                element.className = `tag visible ${className}`;
+                tagIndex += 1;
+            };
+            if (work.subtitleFormat) { addTag('有字幕', 'provider-tag'); }
+            work.providerTags.forEach(v => addTag(v, 'provider-tag'));
+            work.actors.forEach(v => addTag(v, 'actor'));
+            work.tags.forEach(v => addTag(v, 'my-tag'));
+            addTag(`${work.score >= 0 ? '+' : '-'}${work.score}`, 'my-score');
+            detailElements.addTime.innerText = `add: ${work.addTime}`;
+            detailElements.accessTime.innerText = `access: ${work.lastAccessTime}`;
+            detailElements.comment.innerText = work.comment ? `--"${work.comment}"` : '';
+            // tracks
+            trackElements.container.classList.add('visible');
+            trackElements.tracks.forEach(t => t.container.classList.remove('visible'));
+            trackElements.tracks.forEach(t => t.comment.classList.remove('visible'));
+            // note that track plain index is not track index
+            for (const [track, trackPlainIndex] of work.tracks.map((t, i) => [t, i] as const)) {
+                trackElements.tracks[trackPlainIndex].container.classList.add('visible');
+                trackElements.tracks[trackPlainIndex].title.innerText = `${track.index}. ${track.name}`;
+                const minutes = Math.floor(track.duration / 60);
+                const seconds = Math.floor(track.duration - 60 * minutes);
+                trackElements.tracks[trackPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+                if (track.comment) {
+                    trackElements.tracks[trackPlainIndex].comment.classList.add('visible');
+                    trackElements.tracks[trackPlainIndex].comment.innerText = `--"${track.comment}"`;
+                }
+            }
+        }
+    }
+
+    if ('activeTrackPlainIndex' in newState && newState.activeTrackPlainIndex != state.activeTrackPlainIndex) {
+        const oldPlainIndex = state.activeTrackPlainIndex;
+        state.activeTrackPlainIndex = newState.activeTrackPlainIndex;
+        if (oldPlainIndex >= 0) {
+            trackElements.tracks[oldPlainIndex].container.style.background = '';
+            trackElements.tracks[oldPlainIndex].container.classList.remove('active');
+            const work = allworks.find(w => w.id == oldWorkId);
+            const track = work.tracks[oldPlainIndex];
+            const minutes = Math.floor(track.duration / 60);
+            const seconds = Math.floor(track.duration - 60 * minutes);
+            trackElements.tracks[oldPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+        if (state.activeTrackPlainIndex < 0) {
+            playerElements.container.classList.remove('visible');
+            playerElements.audio.src = '';
+        } else {
+            const work = allworks.find(w => w.id == state.activeWorkId);
+            const track = work.tracks[state.activeTrackPlainIndex];
+            playerElements.container.classList.add('visible');
+            playerElements.audio.src = `./${work.id}/track${track.index}.${work.audioFormat}`;
+            trackElements.tracks[state.activeTrackPlainIndex].container.classList.add('active');
+            if (track.subtitleProviderPath) {
+                playerElements.subtitleContainer.classList.add('visible');
+                if (!Array.isArray(track.cues)) {
+                    const response = await fetch(`./${work.id}/track${track.index}.${work.audioFormat}.${work.subtitleFormat}`);
+                    if (!response.ok) {
+                        track.cues = [{ start: 0, end: track.duration, text: `failed to load subtitle: ${response.status}` }];
+                    } else {
+                        track.cues = parseSubtitle(work.subtitleFormat, await response.text());
+                    }
+                }
+            } else {
+                playerElements.subtitleContainer.classList.remove('visible');
+            }
+        }
+    }
+}
+render({ pageNumber: 1 });
