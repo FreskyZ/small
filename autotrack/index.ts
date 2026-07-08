@@ -430,7 +430,7 @@ async function render(newState: Partial<PageState>) {
             // note that track plain index is not track index
             for (const [track, trackPlainIndex] of work.tracks.map((t, i) => [t, i] as const)) {
                 trackElements.tracks[trackPlainIndex].container.classList.add('visible');
-                trackElements.tracks[trackPlainIndex].title.innerText = `${track.index}. ${track.name}`;
+                trackElements.tracks[trackPlainIndex].title.innerText = `${track.index}. ${track.name ?? `トラック${track.index}`}`;
                 const minutes = Math.floor(track.duration / 60);
                 const seconds = Math.floor(track.duration - 60 * minutes);
                 trackElements.tracks[trackPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;

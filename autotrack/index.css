@@ -7,13 +7,14 @@ body {
 /* header */
 header {
     display: flex;
-    height: 28px;
+    height: 32px;
     margin: 8px 8px 0 8px;
 }
 h2 {
     margin: 0;
     font-family: san-serif;
     color: #ddd;
+    line-height: 32px;
 }
 div#pager {
     margin-left: 12px;
@@ -27,8 +28,8 @@ div#pager:not(.visible) {
     display: none;
 }
 button#page-prev, button#page-next {
-    height: 24px;
-    width: 24px;
+    height: 28px;
+    width: 28px;
 }
 input#page-number {
     width: 20px;
@@ -42,11 +43,12 @@ input#page-number::-webkit-inner-spin-button {
 }
 span#page-count {
     color: #ccc;
-    line-height: 24px;
+    line-height: 28px;
 }
 
 /* summary */
 div#summary-container {
+    margin-top: 8px;
     margin-left: 4px;
     height: fit-content;
     max-height: calc(100vh - 56px);
@@ -58,7 +60,7 @@ div#summary-container {
 }
 div.summary {
     width: 180px;
-    padding: 6px;
+    padding: 1px 6px;
 }
 div.summary:not(.visible) {
     display: none;

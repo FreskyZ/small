@@ -119,6 +119,7 @@ function createProgressPipe(totalSize: number): stream.Duplex {
 function printUsage() {
     console.log('USAGE: autotrack.ts SUBCOMMAND');
     console.log('  page                                make web page');
+    console.log('  migrate                             some migration helper commands');
     console.log('  WORKID                              display metadata and raw track records');
     console.log('    title TITLE                       set work title');
     console.log('    tag TAG                           toggle tag');
@@ -211,6 +212,7 @@ interface RawTrackRecord {
 async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawMetadata, RawTrackRecord]> {
     const url = new URL(config.providerApiBaseUri);
     const pathPostfix = workId == mainWorkId ? '' : `-${workId}`;
+    const displayId = workId == mainWorkId ? workId : `${workId} main work id ${mainWorkId}`;
     await fs.mkdir(path.join(config.dataDirectory, mainWorkId), { recursive: true });
 
     let metadata: RawMetadata;
@@ -220,7 +222,7 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
     } else {
         url.pathname = `/api/workInfo/${workId.substring(2)}`;
-        logInfo(`download raw work info ${workId} main work id ${mainWorkId}`);
+        logInfo(`download raw work info ${displayId}`);
         if (LOGURL) { logInfo(`download url ${url}`); }
         // ATTENTION because of similar reason, don't parallel these web requests
         const response = await fetch(url);
@@ -233,7 +235,7 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
         // no need to precisely and gracefully handle network error in this small script
         metadata = await response.json();
         await fs.writeFile(metadataPath, JSON.stringify(metadata, undefined, 2));
-        logInfo(`download raw work info ${workId} main work id ${mainWorkId} complete`);
+        logInfo(`download raw work info ${displayId} complete`);
     }
 
     let records: RawTrackRecord[];
@@ -243,12 +245,12 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
     } else {
         url.pathname = `/api/tracks/${workId.substring(2)}`;
         url.searchParams.append('v', '2');
-        logInfo(`download raw track info ${workId} main work id ${mainWorkId}`);
+        logInfo(`download raw track info ${displayId}`);
         if (LOGURL) { logInfo(`download url ${url}`); }
         const response = await fetch(url);
         records = await response.json();
         await fs.writeFile(recordsPath, JSON.stringify(records, undefined, 2));
-        logInfo(`download raw track info ${workId} main work id ${mainWorkId} complete`);
+        logInfo(`download raw track info ${displayId} complete`);
     }
     const rootRecord: RawTrackRecord = { type: 'folder', title: 'root', children: records };
 
@@ -319,7 +321,8 @@ interface WorkMetadata {
 }
 interface TrackRecord {
     index: number,
-    name: string,
+    // name will be empty for no meaningful name available (provider and provider provider use track1, track01, etc.)
+    name?: string,
     duration: number,
     comment?: string,
     // original path in rawtracks, include original file name
@@ -465,7 +468,7 @@ function handleDisplayMetadata(ctx: CommandContext) {
     console.log(`  subtitle format: ${ctx.meta.subtitleFormat ?? '(none)'}`);
     console.log('  tracks:');
     for (const track of ctx.meta.tracks) {
-        console.log(`    ${track.index}: ${track.name} ${styleText('gray', `(${track.providerPath})`)}`);
+        console.log(`    ${track.index}: ${track.name ?? '(empty)'} ${styleText('gray', `(${track.providerPath})`)}`);
     }
     console.log('  raw tracks:');
     const getDisplayPath = (value: string) => value
@@ -1042,81 +1045,305 @@ async function handleMakePage() {
     await fs.writeFile(path.join(config.dataDirectory, 'index.html'), template);
 }
 
-async function handleMigrateCommand() {
-    const directoryNames = await fs.readdir(config.dataDirectory);
-    const workIds = directoryNames.filter(d => d.startsWith('RJ'));
-    console.log(`${workIds.length} works`);
-
-    let maxTagCount = 0;
-    let maxTrackCount = 0;
-    for (const workId of workIds) {
-        const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
-        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-        maxTrackCount = Math.max(maxTrackCount, metadata.tracks.length);
-        // 1: score
-        // also subtitle format makes 1 tag (a has-subtitle tag)
-        maxTagCount = Math.max(maxTagCount, metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 1 + (metadata.subtitleFormat ? 1 : 0));
-
-        if (metadata.tracks.length == 0) {
-            logInfo(`${workId}: no tracks`);
-        } else {
-            for (const track of metadata.tracks) {
-                const trackPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
-                if (!npfs.existsSync(trackPath)) {
-                    logInfo(`${workId}: track ${track.index} audio not exist`);
-                    break;
+// ATTENTION sync with index.ts
+interface Cue { start: number, end: number, text: string }
+function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
+    const results: Cue[] = [];
+    if (subtitleFormat == 'vtt') {
+        // vtt: split line, recognize --> and the 2 timestamps around it, and take the next line as text
+        const lines = rawtext.split('\n');
+        for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
+            if (lines[rowIndex].includes('-->')) {
+                const splitted = lines[rowIndex].split('-->');
+                const leftMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[0]);
+                if (!leftMatch) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at left part? "${lines[rowIndex]}"`);
+                    continue;
                 }
-                if (metadata.subtitleFormat) {
-                    const subtitlePath = trackPath + '.' + metadata.subtitleFormat;
-                    if (!npfs.existsSync(subtitlePath)) {
-                        logInfo(`${workId}: track ${track.index} subtitle not exist`);
-                        break;
-                    } else if (metadata.subtitleFormat == 'vtt') {
-                        // parseSubtitle('vtt', await fs.readFile(subtitlePath, 'utf-8')).slice(0, 10).map(c => `${c.start}-${c.end} ${c.text}`).join('\n');
-                        // console.log();
-                    }
+                const rightMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[1]);
+                if (!rightMatch) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at right part? "${lines[rowIndex]}"`);
+                    continue;
                 }
-                // TODO check size mismatch
-            }
-            // check track index removed from track name, except with standard name track${index} they don't have a meaningful name
-            const alternativeNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
-            const maybeForgetToRemoveTracks = metadata.tracks.filter(t => t.name != `track${t.index}`
-                && (t.name.includes(t.index.toString()) || (alternativeNumbers[t.index] && t.name.includes(alternativeNumbers[t.index]))));
-            if (maybeForgetToRemoveTracks.length > 2) {
-                logInfo(`${workId}: may be forget to remove track index from track name`)
+                if (rowIndex + 1 >= lines.length) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but not have next line?`);
+                    continue;
+                }
+                let start = leftMatch[0].length == 9
+                    ? +leftMatch[0].substring(0, 2) * 60 + +leftMatch[0].substring(3, 5) + +leftMatch[0].substring(6, 9) / 1000
+                    : +leftMatch[0].substring(0, 2) * 3600 + +leftMatch[0].substring(3, 5) * 60 + +leftMatch[0].substring(6, 8) + +leftMatch[0].substring(9, 12) / 1000;
+                let end = rightMatch[0].length == 9
+                    ? +rightMatch[0].substring(0, 2) * 60 + +rightMatch[0].substring(3, 5) + +rightMatch[0].substring(6, 9) / 1000
+                    : +rightMatch[0].substring(0, 2) * 3600 + +rightMatch[0].substring(3, 5) * 60 + +rightMatch[0].substring(6, 8) + +rightMatch[0].substring(9, 12) / 1000;
+                results.push({ start, end, text: lines[rowIndex + 1] });
             }
         }
-        // await writeMetadata(metadata);
+    } else if (subtitleFormat == 'lrc') {
+        // split line, recognize [\d\d:\d\d.\d\d] and later part if payload, every payload begins at this line's time and ends at next line's time
+        const lines = rawtext.split('\n');
+        let incompleteRecord: Cue = null;
+        for (const line of lines) {
+            const match = /^\[(\d\d):(\d\d\.\d\d)\]/.exec(line.trim());
+            if (match) {
+                const time = +match[1] * 60 + +match[2];
+                if (incompleteRecord) { incompleteRecord.end = time; }
+                const text = line.trim().substring(10).trim();
+                if (text) {
+                    incompleteRecord = { start: time, end: time, text };
+                    results.push(incompleteRecord);
+                } else {
+                    // don't forget to clear, or else [time1]text1\n[time2]\n[time3], time3 will be assigned to text1
+                    incompleteRecord = null;
+                }
+            }
+        }
+    } else {
+        return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
     }
-    console.log({ maxTrackCount, maxTagCount });
+    return results;
 }
-// only when migrating from legacy data, pick a random not included workid
-async function handlePickCommand() {
-    const legacyWorkIds: string[] = [];
-    const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
-    // id;kind;name;path;audioext;subext;tags;add;access
-    for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
-        legacyWorkIds.push(record.split(';')[0]);
-    }
+
+// various helper scripts to use in migration service
+// the migration originally means migrate from old local storage to current new local storage,
+// now it means migrate from my provider's online access to my local storage's offline access
+async function handleMigrateCommand(parameters: string[]) {
+
     const directoryNames = await fs.readdir(config.dataDirectory);
-    const workIds = directoryNames.filter(d => d.startsWith('RJ'));
-    const editionIds: string[] = [];
-    for (const workId of workIds) {
-        const metadata = JSON.parse(await fs.readFile(path.join(config.dataDirectory, workId, 'metadata.json'), 'utf-8')) as WorkMetadata;
-        editionIds.push(...metadata.languageEditions);
+    // rough workids according to directory names in data datadictory, compare to various kind of work id collection later
+    const roughWorkIds = directoryNames.filter(d => d.startsWith('RJ'));
+
+    // validate: file structure complete (has metadata.json), have track, size match, track name no track index, subtitle parse
+    if (parameters[0] == 'validate') {
+        await Promise.all(roughWorkIds.map(async workId => {
+            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) {
+                // all output of this command is error/warning, no need to red them all
+                return logInfo(`${workId}: incomplete file structure`);
+            }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            if (metadata.tracks.length == 0) {
+                return logInfo(`${workId}: no track`);
+            }
+            
+            const mainRawTracksPath = path.join(config.dataDirectory, workId, 'raw-tracks.json');
+            const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
+            const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
+            // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
+            for (const editionId of metadata.languageEditions) {
+                const editionRawTracksPath = path.join(config.dataDirectory, workId, `raw-tracks-${editionId}.json`);
+                const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
+                rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
+            }
+
+            let reportedAudioFileMissing;
+            let reportedSubtitleFileMissing;
+            for (const track of metadata.tracks) {
+                const audioPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
+                if (!npfs.existsSync(audioPath)) {
+                    if (!reportedAudioFileMissing) {
+                        logInfo(`${workId}: track ${track.index} audio file missing`);
+                        reportedAudioFileMissing = true;
+                    } // should not merge condition because following else branch need file exist
+                } else {
+                    const stat = await fs.stat(audioPath);
+                    const rawAudio = rawTracks[metadata.audioWorkId].find(r => r.path == track.providerPath);
+                    if (!rawAudio) {
+                        logInfo(`${workId}: track ${track.index} provider path not found?`);
+                    } else if (stat.size != rawAudio.size) {
+                        logInfo(`${workId}: track ${track.index} size mismatch, expect ${rawAudio.size} actual ${stat.size}`);
+                    }
+                }
+                if (metadata.subtitleFormat && track.subtitleProviderPath) {
+                    const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                    if (!npfs.existsSync(subtitlePath)) {
+                        if (!reportedSubtitleFileMissing) {
+                            logInfo(`${workId}: track ${track.index} subtitle file missing`);
+                            reportedSubtitleFileMissing = true;
+                        } // should not merge condition because following else branch need file exist
+                    } else {
+                        if (track.subtitleProviderPath != '書き取り') {
+                            const stat = await fs.stat(subtitlePath);
+                            const rawSubtitle = rawTracks[metadata.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
+                            if (!rawSubtitle) {
+                                logInfo(`${workId}: track ${track.index} subtitle provider path not found?`);
+                            } else if (stat.size != rawSubtitle.size) {
+                                logInfo(`${workId}: track ${track.index} subtitle size mismatch, expect ${rawSubtitle.size} actual ${stat.size}`);
+                            }
+                        }
+                        parseSubtitle(metadata.subtitleFormat, await fs.readFile(subtitlePath, 'utf-8'));
+                    }
+                }
+            }
+            // check track index removed from track name, this is warning
+            const alternativeNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+            const maybeForgetToRemoveTracks = metadata.tracks.filter(t => t.name && (t.name.includes(t.index
+                .toString()) || (alternativeNumbers[t.index] && t.name.includes(alternativeNumbers[t.index]))));
+            if (maybeForgetToRemoveTracks.length > 2) {
+                logInfo(`${workId}: may be forget to remove track index from track name`);
+            }
+        }));
+    // subtitle workid: display subtitle
+    } else if (parameters[0] == 'subtitle' && parameters[1]) {
+        if (!roughWorkIds.includes(parameters[1])) {
+            return logError(`work id not found, here don't support short work id because I'm lazy`);
+        }
+        const workId = parameters[1];
+        const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+        if (!npfs.existsSync(metadataPath)) { return logError(`${workId}: no metadata?`); }
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+        if (!metadata.subtitleFormat) { return logError(`${workId}: no subtitle format?`); }
+        for (const track of metadata.tracks) {
+            if (track.subtitleProviderPath) {
+                const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                if (!npfs.existsSync(subtitlePath)) { return logError(`${workId}: track ${track.index} subtitle file not exist?`); }
+                const cues = parseSubtitle(metadata.subtitleFormat, await fs.readFile(subtitlePath, 'utf-8'));
+                for (const cue of cues) { console.log(`#${track.index}: ${cue.start}-${cue.end}: ${cue.text}`); }
+            }
+        }
+    // stat: work count, max tag count, max track count
+    } else if (parameters[0] == 'stat') {
+        let hasFileStructureWorkCount = 0;
+        let hasTrackWorkCount = 0;
+        let hasTrackHasSubtitleWorkCount = 0;
+        let completedWorkCount = 0;
+        let completedHasSubtitleWorkCount = 0;
+        let maxTagCount = 0;
+        let maxTagHolders: WorkMetadata[] = [];
+        let maxTrackCount = 0;
+        let maxTrackHolders: WorkMetadata[] = [];
+        await Promise.all(roughWorkIds.map(async workId => {
+            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) { return; }
+            hasFileStructureWorkCount += 1;
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+
+            // subtitle: a has-subtitle tag
+            // 2: 1 for score, ATTENTION 1 for temporary wip flag
+            const tagElementCount = metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 2 + (metadata.subtitleFormat ? 1 : 0);
+            if (tagElementCount > maxTagCount) {
+                maxTagCount = tagElementCount;
+                maxTagHolders = [metadata];
+            } else if (tagElementCount == maxTagCount) {
+                maxTagHolders.push(metadata);
+            }
+
+            if (metadata.tracks.length == 0) { return; }
+            hasTrackWorkCount += 1;
+            if (metadata.subtitleFormat) { hasTrackHasSubtitleWorkCount += 1; }
+            if (metadata.tracks.length > maxTrackCount) {
+                maxTrackCount = metadata.tracks.length;
+                maxTrackHolders = [metadata];
+            } else if (metadata.tracks.length == maxTrackCount) {
+                maxTrackHolders.push(metadata);
+            }
+
+            // completed work count is same check as validation, but no error message and early return
+            const mainRawTracksPath = path.join(config.dataDirectory, workId, 'raw-tracks.json');
+            const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
+            const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
+            // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
+            for (const editionId of metadata.languageEditions) {
+                const editionRawTracksPath = path.join(config.dataDirectory, workId, `raw-tracks-${editionId}.json`);
+                const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
+                rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
+            }
+            for (const track of metadata.tracks) {
+                const audioPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
+                if (!npfs.existsSync(audioPath)) { return; }
+                const stat = await fs.stat(audioPath);
+                const rawAudio = rawTracks[metadata.audioWorkId].find(r => r.path == track.providerPath);
+                if (!rawAudio || stat.size != rawAudio.size) { return; }
+                if (metadata.subtitleFormat && track.subtitleProviderPath) {
+                    const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                    if (!npfs.existsSync(subtitlePath)) { return; }
+                    if (track.subtitleProviderPath != '書き取り') {
+                        const stat = await fs.stat(subtitlePath);
+                        const rawSubtitle = rawTracks[metadata.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
+                        if (!rawSubtitle || stat.size != rawSubtitle.size) { return; }
+                    }
+                }
+            }
+            completedWorkCount += 1;
+            if (metadata.subtitleFormat) { completedHasSubtitleWorkCount += 1; }
+        }));
+        logInfo(`work count rough: ${roughWorkIds.length}`);
+        logInfo(`work count file structure: ${hasFileStructureWorkCount}`);
+        logInfo(`work count has track: ${hasTrackWorkCount} (has subtitle: ${hasTrackHasSubtitleWorkCount})`);
+        logInfo(`work count complete: ${completedWorkCount} (has subtitle: ${completedHasSubtitleWorkCount})`);
+        logInfo(`max track count ${maxTrackCount}, holders: ${maxTrackHolders.map(h => h.id).join(', ')}`);
+        logInfo(`max tag count ${maxTagCount}, holders: ${maxTagHolders.map(h => h.id).join(', ')}`);
+
+    // following are investigate/interesting topics:
+    // shortid: short ids and avg length?
+    } else if (parameters[0] == "shortid") {
+        let totalLength = 0;
+        for (const workId of roughWorkIds) {
+            for (let length = 1; length < workId.length - 2; length += 1) {
+                const shortId = workId.substring(workId.length - length);
+                if (roughWorkIds.filter(w => w.endsWith(shortId)).length == 1) {
+                    logInfo(`${workId}: ${shortId}`);
+                    totalLength += shortId.length;
+                    break;
+                }
+            }
+        }
+        logInfo(`short id avg length ${totalLength / roughWorkIds.length}`);
+    // tagdb: for now, only collect occurance of provider tags and actors and print them in order
+    // TODO try prefer japaness chinese character, try avoid english, chinese chinese and katakana/harakana
+    } else if (parameters[0] == "tagdb") {
+        const tagCounts: Record<string, number> = {};
+        const actorCounts: Record<string, number> = {};
+        await Promise.all(roughWorkIds.map(async workId => {
+            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) { return; }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            for (const tag of metadata.providerTags) {
+                tag in tagCounts ? tagCounts[tag] += 1 : (tagCounts[tag] = 1);
+            }
+            for (const actor of metadata.actors) {
+                actor in actorCounts ? actorCounts[actor] += 1 : (actorCounts[actor] = 1);
+            }
+        }));
+        const allTags = Object.entries(tagCounts).sort((t1, t2) => t1[0].localeCompare(t2[0]));
+        const allActors = Object.entries(actorCounts).sort((t1, t2) => t1[0].localeCompare(t2[0]));
+        for (const [tag, times] of allTags) { console.log(`${tag}: ${times}`); }
+        for (const [tag, times] of allActors) { console.log(`${tag}: ${times}`); }
+    // pick, only for migrating from legacy local stoage to new local storage
+    } else if (parameters[0] == 'pick') {
+        const legacyWorkIds: string[] = [];
+        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
+        // id;kind;name;path;audioext;subext;tags;add;access
+        for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
+            legacyWorkIds.push(record.split(';')[0]);
+        }
+        const directoryNames = await fs.readdir(config.dataDirectory);
+        const workIds = directoryNames.filter(d => d.startsWith('RJ'));
+        const editionIds: string[] = [];
+        const noMetadataIds: string[] = [];
+        for (const workId of workIds) {
+            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            if (npfs.existsSync(metadataPath)) {
+                const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+                editionIds.push(...metadata.languageEditions);
+            } else {
+                noMetadataIds.push(workId);
+            }
+        }
+        const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id)).concat(noMetadataIds);
+        const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
+        logInfo(`pick ${pickedId} from ${remainingLegacyWorkIds.length} remaining ids`)
+        await handleWorkCommand([pickedId]);
+    } else {
+        logInfo('USAGE: autotrack.ts migrate validate | subtitle WORKID');
     }
-    const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id));
-    const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
-    await handleWorkCommand([pickedId]);
+    return;
 }
 
 const command = process.argv[2];
 if (command == 'page') {
     await handleMakePage();
 } else if (command == 'migrate') {
-    await handleMigrateCommand();
-} else if (command == 'pick') {
-    await handlePickCommand();
+    await handleMigrateCommand(process.argv.slice(3));
 } else if (/^RJ\d+$/.test(command) || /^\d+$/.test(command)) {
     await handleWorkCommand(process.argv.slice(2));
 } else {
@@ -1139,6 +1366,3 @@ if (command == 'page') {
 //   vtt is text/vtt, lrc has no dedicated type, use text/plain
 
 // docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
-
-// TODO https://github.com/openai/whisper if you notice this is evil openai, this need gpu, need wslc to connect gpu
-// TODO unify provider tags and actor names

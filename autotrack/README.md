@@ -3,6 +3,8 @@ autotrack: AUTOnomous sensory meridian response audio TRACK local storage manage
 meridian first mean the vertical lines in grid system on a sphere, like 120N line on earth is a meridian,
 and later extended to represent 经络 in traditional chinese medicine, and later is use to refer sexual climate in internet slang?
 
+### Subtitle Formats
+
 vtt is a more popular subtitle format in my provider's data, others use lrc, no other subtitle format seen for now
 
 vtt is designed for html5 caption feature (the difference between subtitle and caption seems to be subtitle being translated text
@@ -25,15 +27,42 @@ downloading and extracting this you see some vc++ project files, some c source c
 to ai I cannot put any part of the code in this repository because this repository is licensed under apl, it's not a big trouble because
 the original logic is very simple thus the format specification will be very simple and I can easily describe it in my implementation 
 
-```sh
-wslc -it --gpus all python
-uv init
-uv add openai-whisper
-# if you forget to -v, use cat largefile.bin | wslc exec -i <container_name> sh -c 'cat > /path/in/container/largefile.bin'
-# while powershell don't have cat, you need get-content -asbytestream for pwsh and get-content -encoding byte for windows powershell
-# UPDATE windows powershell cannot work and memory leak?
-apt install ffmpeg
-# model file will be in ~/.cache/whisper
-.venv/bin/whisper 4.mp3 --language ja
-# and have output! no need to install nvidia drivers and something like cuda library?
-```
+### Auto Transcription
+
+by the way, if you think the universe history begins when human has attention, speech recognition is already using
+neural networks before that, so name current era asr models "attention based models" seems better than "llm based"
+as they are very small comparing to major language models, see wiki https://en.wikipedia.org/wiki/Speech_recognition
+
+for japanese speech recognition used in this project, you'd better want a japaness people researched/created model,
+but there is none, so fallback to other cjk people created model, use qwen https://huggingface.co/Qwen/Qwen3-ASR-1.7B,
+by the way, to add timestamps to generated text, need an aligner https://huggingface.co/Qwen/Qwen3-ForcedAligner-0.6B
+
+to make gpu available in wsl, you need some setup, see https://docs.nvidia.com/cuda/wsl-user-guide/index.html and
+https://docs.docker.com/desktop/features/gpu/, note that wsl docker with normal linux installation approach is *very*
+different from docker desktop for windows, I'd assume you have known this if you choose to do the not recommended way,
+while at the time of writing, wsl containers gets beta with gpu access as one of the examples and performance as one
+of selling points, https://devblogs.microsoft.com/commandline/wsl-container-is-now-available-for-public-preview/, try
+use this, run `wslc run -it --gpus all debian nvidia-smi` to see your gpu available in container environment, as it's
+displaying my windows graphics card driver version, I think no need of separate driver installation inside containers
+
+qwen-asr recommends vllm and flash attention, etc. optimization approaches in readme, but you may want to avoid
+optional operations and confirm it works first, to use a huggingface model you simply write `{repoowner}/{reponame}`
+similar to github repository reference, if you have network issues in inference site, you can download it from other
+place by `from huggingface_hub import snapshot_download; snapshot_download(repo_id=f'{repoowner}/{reponame}')`, and
+pack the cache directory or share the cache directory to use it, if you have more network issues, you can download
+it manually from huggingface web page, similar to download a zip file from github web page, difference is that model
+reporistory normally have one or several very large tensor files, while total file count is normally low, and bundle
+them inside a zip file will not help reduce network traffic but will need very long time and cpu cost to decompress
+the file, after you download all the files (README, LICENSE, etc. files not really needed of course), change the repo
+name reference in source code to the local path containing these files seems good
+
+before you stablize the operations and scriptify them into a dockerfile, you may want to temporary persist the cache
+files to avoid duplicate download between container instances, currently I'm using a generic uv image as base image,
+uv cache see docs https://docs.astral.sh/uv/concepts/cache/#cache-directory, UV_CACHE_DIR or default to ~/.cache/uv,
+huggingface cache see docs https://huggingface.co/docs/transformers/v5.13.0/en/installation#cache-directory, which is
+HF_HUB_CACHE or default to ~/.cache/huggingface
+
+to use the qwen asr models, its own readme recommends the dedicated qwen-asr python package, while huggingface also
+has dedicated page for qwen asr https://huggingface.co/docs/transformers/v5.13.0/en/model_doc/qwen3_asr, reading its
+source code https://github.com/QwenLM/Qwen3-ASR/tree/main/qwen_asr you can see it's not large library but still doing
+a lot of works so I'd like to investigate the detail later and use qwen-asr package for now
