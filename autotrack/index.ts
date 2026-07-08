@@ -17,6 +17,8 @@ interface WorkMetadata {
     audioFormat?: string,
     subtitleFormat?: string,
     tracks: TrackRecord[],
+    // NOTE temporary while migration
+    incomplete: boolean,
 }
 interface TrackRecord {
     index: number,
@@ -37,32 +39,33 @@ interface Cue {
 
 // get all work summary data that build by management script
 function getAllWorks() {
-    const result: WorkMetadata[] = [];
+    const results: WorkMetadata[] = [];
     Array.from(document.querySelectorAll<HTMLDivElement>('div.summary')).forEach(element => {
-        result.push({
+        results.push({
             id: element.dataset['id'],
             score: +element.dataset['score'],
             title: element.innerText,
+            incomplete: element.dataset['wip'] == '1',
         } as unknown as WorkMetadata);
         element.remove();
     });
-    // shuffle elements, TODO weighted shuffle?
-    let currentIndex = result.length;
-    while (currentIndex != 0) {
-        const randomIndex = Math.floor(Math.random() * currentIndex);
-        currentIndex--;
-        const temp = result[randomIndex];
-        result[randomIndex] = result[currentIndex];
-        result[currentIndex] = temp;
-    }
-    return result;
+    // 1. shuffle elements, TODO weighted shuffle?
+    // let currentIndex = results.length;
+    // while (currentIndex != 0) {
+    //     const randomIndex = Math.floor(Math.random() * currentIndex);
+    //     currentIndex--;
+    //     const temp = results[randomIndex];
+    //     results[randomIndex] = results[currentIndex];
+    //     results[currentIndex] = temp;
+    // }
+    return results;
 }
 const allworks = getAllWorks();
 
 // constant config?
 const WorkPerPage = 16;
-const MaxTagCount = 24; // TODO can collect precise value
-const MaxTrackCount = 16; // TODO can collect precise value
+const MaxTagCount = 25; // TODO can collect precise value
+const MaxTrackCount = 20; // TODO can collect precise value
 
 // all page state
 interface PageState {
@@ -96,6 +99,7 @@ pagerElements.prevButton.addEventListener('click', () => {
 pagerElements.nextButton.addEventListener('click', () => {
     if (state.pageNumber < Math.ceil(allworks.length / WorkPerPage)) { render({ pageNumber: state.pageNumber + 1 }); }
 });
+pagerElements.valueInput.addEventListener('focusin', () => pagerElements.valueInput.select());
 pagerElements.valueInput.addEventListener('change', e => {
     const newPageNumber = +pagerElements.valueInput.value;
     if (!isNaN(newPageNumber) && newPageNumber >= 1 && newPageNumber <= Math.ceil(allworks.length / WorkPerPage)) {
@@ -205,6 +209,9 @@ const trackElements = {
         duration: HTMLSpanElement,
         comment: HTMLDivElement,
     }[],
+    // it's not good to put in player-container because that's fixed,
+    // it's not very good to put here but put here for now
+    subtitleContainer: null as HTMLDivElement,
 }
 function createTrackElements() {
     trackElements.tracks = new Array<void>(MaxTrackCount).fill().map((_, plainIndex) => {
@@ -225,6 +232,9 @@ function createTrackElements() {
         trackElements.container.appendChild(comment);
         return { container, title, duration, comment };
     });
+    trackElements.subtitleContainer = document.createElement('div');
+    trackElements.subtitleContainer.classList.add('subtitle-container');
+    trackElements.container.appendChild(trackElements.subtitleContainer);
 }
 createTrackElements();
 
@@ -232,7 +242,7 @@ createTrackElements();
 const playerElements = {
     container: document.querySelector<HTMLDivElement>('div#player-container'),
     audio: null as HTMLAudioElement,
-    subtitleContainer: null as HTMLDivElement,
+    activeSubtitle: null as HTMLDivElement,
     buttons: [] as HTMLButtonElement[],
 };
 function createPlayerElements() {
@@ -241,9 +251,9 @@ function createPlayerElements() {
     audio.autoplay = true;
     playerElements.container.appendChild(audio);
 
-    playerElements.subtitleContainer = document.createElement('div');
-    playerElements.subtitleContainer.classList.add('subtitle-container');
-    playerElements.container.appendChild(playerElements.subtitleContainer);
+    playerElements.activeSubtitle = document.createElement('div');
+    playerElements.activeSubtitle.classList.add('active-subtitle');
+    playerElements.container.appendChild(playerElements.activeSubtitle);
 
     const buttonContainer = document.createElement('div');
     buttonContainer.classList.add('button-container');
@@ -271,9 +281,9 @@ function createPlayerElements() {
         const minutes = Math.floor(remainingTime / 60);
         const seconds = Math.round(remainingTime - minutes * 60);
         trackElements.tracks[state.activeTrackPlainIndex].duration.innerText = `-${minutes}:${seconds.toString().padStart(2, '0')}`;
-        const percent = Math.floor(audio.currentTime / audio.duration * 9900) / 100 + 0.5;
+        const percent = Math.floor(audio.currentTime / audio.duration * 9950) / 100 + 0.5;
         trackElements.tracks[state.activeTrackPlainIndex].container.style.background = `linear-gradient(to right, #666, #666 ${percent}%, #444 ${percent}%)`;
-        playerElements.subtitleContainer.innerText = allworks
+        playerElements.activeSubtitle.innerText = allworks
             .find(w => w.id == state.activeWorkId)
             ?.tracks?.[state.activeTrackPlainIndex]
             ?.cues?.find(c => c.start < audio.currentTime && c.end > audio.currentTime)?.text ?? '';
@@ -285,40 +295,57 @@ createPlayerElements();
 
 // NOTE copy this function to management script and parse all subtitle files
 function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
-    if (subtitleFormat == 'lrc') {
-        return [{ start: 0, end: 86400, text: 'lrc support TODO' }];
-    } else if (subtitleFormat != 'vtt') {
-        return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
-    }
-
     const results: Cue[] = [];
-    // vtt: split line, recognize --> and the 2 timestamps around it, and take the next line as text
-    const lines = rawtext.split('\n');
-    for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
-        if (lines[rowIndex].includes('-->')) {
-            const splitted = lines[rowIndex].split('-->');
-            const leftMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[0]);
-            if (!leftMatch) {
-                console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at left part? "${lines[rowIndex]}"`);
-                continue;
+    if (subtitleFormat == 'vtt') {
+        // vtt: split line, recognize --> and the 2 timestamps around it, and take the next line as text
+        const lines = rawtext.split('\n');
+        for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
+            if (lines[rowIndex].includes('-->')) {
+                const splitted = lines[rowIndex].split('-->');
+                const leftMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[0]);
+                if (!leftMatch) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at left part? "${lines[rowIndex]}"`);
+                    continue;
+                }
+                const rightMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[1]);
+                if (!rightMatch) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at right part? "${lines[rowIndex]}"`);
+                    continue;
+                }
+                if (rowIndex + 1 >= lines.length) {
+                    console.log(`subtitle: line#${rowIndex} has arrow but not have next line?`);
+                    continue;
+                }
+                let start = leftMatch[0].length == 9
+                    ? +leftMatch[0].substring(0, 2) * 60 + +leftMatch[0].substring(3, 5) + +leftMatch[0].substring(6, 9) / 1000
+                    : +leftMatch[0].substring(0, 2) * 3600 + +leftMatch[0].substring(3, 5) * 60 + +leftMatch[0].substring(6, 8) + +leftMatch[0].substring(9, 12) / 1000;
+                let end = rightMatch[0].length == 9
+                    ? +rightMatch[0].substring(0, 2) * 60 + +rightMatch[0].substring(3, 5) + +rightMatch[0].substring(6, 9) / 1000
+                    : +rightMatch[0].substring(0, 2) * 3600 + +rightMatch[0].substring(3, 5) * 60 + +rightMatch[0].substring(6, 8) + +rightMatch[0].substring(9, 12) / 1000;
+                results.push({ start, end, text: lines[rowIndex + 1] });
             }
-            const rightMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[1]);
-            if (!rightMatch) {
-                console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at right part? "${lines[rowIndex]}"`);
-                continue;
-            }
-            if (rowIndex + 1 >= lines.length) {
-                console.log(`subtitle: line#${rowIndex} has arrow but not have next line?`);
-                continue;
-            }
-            let start = leftMatch[0].length == 9
-                ? +leftMatch[0].substring(0, 2) * 60 + +leftMatch[0].substring(3, 5) + +leftMatch[0].substring(6, 9) / 1000
-                : +leftMatch[0].substring(0, 2) * 3600 + +leftMatch[0].substring(3, 5) * 60 + +leftMatch[0].substring(6, 8) + +leftMatch[0].substring(9, 12) / 1000;
-            let end = rightMatch[0].length == 9
-                ? +rightMatch[0].substring(0, 2) * 60 + +rightMatch[0].substring(3, 5) + +rightMatch[0].substring(6, 9) / 1000
-                : +rightMatch[0].substring(0, 2) * 3600 + +rightMatch[0].substring(3, 5) * 60 + +rightMatch[0].substring(6, 8) + +rightMatch[0].substring(9, 12) / 1000;
-            results.push({ start, end, text: lines[rowIndex + 1] });
         }
+    } else if (subtitleFormat == 'lrc') {
+        // split line, recognize [\d\d:\d\d.\d\d] and later part if payload, every payload begins at this line's time and ends at next line's time
+        const lines = rawtext.split('\n');
+        let incompleteRecord: Cue = null;
+        for (const line of lines) {
+            const match = /^\[(\d\d):(\d\d\.\d\d)\]/.exec(line.trim());
+            if (match) {
+                const time = +match[1] * 60 + +match[2];
+                if (incompleteRecord) { incompleteRecord.end = time; }
+                const text = line.trim().substring(10).trim();
+                if (text) {
+                    incompleteRecord = { start: time, end: time, text };
+                    results.push(incompleteRecord);
+                } else {
+                    // don't forget to clear, or else [time1]text1\n[time2]\n[time3], time3 will be assigned to text1
+                    incompleteRecord = null;
+                }
+            }
+        }
+    } else {
+        return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
     }
     return results;
 }
@@ -349,12 +376,17 @@ async function render(newState: Partial<PageState>) {
             // pager
             pagerElements.container.classList.add('visible');
             // summary
-            summaryElements.works.forEach(e => e.container.classList.add('visible'));
+            allworks // use similar slice to only visible display works
+                .slice(WorkPerPage * (state.pageNumber - 1), WorkPerPage * state.pageNumber)
+                .map((_, index) => summaryElements.works[index].container.classList.add('visible'));
             summaryElements.container.scrollTo(0, state.scrollPosition);
             // detail
             detailElements.container.classList.remove('visible');
             // tracks
             trackElements.container.classList.remove('visible');
+            trackElements.subtitleContainer.classList.remove('visible');
+            // player
+            playerElements.container.classList.remove('visible');
         } else {
             // pager
             pagerElements.container.classList.remove('visible');
@@ -382,7 +414,8 @@ async function render(newState: Partial<PageState>) {
                 element.className = `tag visible ${className}`;
                 tagIndex += 1;
             };
-            if (work.subtitleFormat) { addTag('有字幕', 'provider-tag'); }
+            if (work.incomplete) { addTag('WIP', 'provider-tag'); }
+            if (work.subtitleFormat) { addTag('字幕付', 'provider-tag'); }
             work.providerTags.forEach(v => addTag(v, 'provider-tag'));
             work.actors.forEach(v => addTag(v, 'actor'));
             work.tags.forEach(v => addTag(v, 'my-tag'));
@@ -422,6 +455,7 @@ async function render(newState: Partial<PageState>) {
             trackElements.tracks[oldPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }
         if (state.activeTrackPlainIndex < 0) {
+            trackElements.subtitleContainer.classList.remove('visible');
             playerElements.container.classList.remove('visible');
             playerElements.audio.src = '';
         } else {
@@ -431,7 +465,7 @@ async function render(newState: Partial<PageState>) {
             playerElements.audio.src = `./${work.id}/track${track.index}.${work.audioFormat}`;
             trackElements.tracks[state.activeTrackPlainIndex].container.classList.add('active');
             if (track.subtitleProviderPath) {
-                playerElements.subtitleContainer.classList.add('visible');
+                playerElements.activeSubtitle.classList.add('visible');
                 if (!Array.isArray(track.cues)) {
                     const response = await fetch(`./${work.id}/track${track.index}.${work.audioFormat}.${work.subtitleFormat}`);
                     if (!response.ok) {
@@ -440,8 +474,17 @@ async function render(newState: Partial<PageState>) {
                         track.cues = parseSubtitle(work.subtitleFormat, await response.text());
                     }
                 }
+                trackElements.subtitleContainer.classList.add('visible');
+                trackElements.subtitleContainer.scroll(0, 0);
+                trackElements.subtitleContainer.innerText = track.cues.map(c => {
+                    const negativeTime = track.duration - c.start;
+                    const minutes = Math.floor(negativeTime / 60);
+                    const seconds = Math.floor(negativeTime - minutes * 60);
+                    return `-${minutes}:${seconds.toString().padStart(2, '0')} ${c.text}`;
+                }).join('\n');
             } else {
-                playerElements.subtitleContainer.classList.remove('visible');
+                playerElements.activeSubtitle.classList.remove('visible');
+                trackElements.subtitleContainer.classList.remove('visible');
             }
         }
     }

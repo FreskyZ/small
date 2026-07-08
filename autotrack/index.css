@@ -179,6 +179,17 @@ div#tracks-container>div.comment {
 div#tracks-container>div.comment:not(.visible) {
     display: none;
 }
+div#tracks-container>div.subtitle-container {
+    margin: 8px;
+    color: #aaa;
+    font-size: 12px;
+    max-height: 200px;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+div#tracks-container>div.subtitle-container:not(.visible) {
+    display: none;
+}
 
 /* player */
 div#player-container {
@@ -205,10 +216,9 @@ div#player-container>div.button-container>button {
 div#player-container>div.button-container>button:nth-child(3) {
     width: 60px;
 }
-div#player-container>div.subtitle-container {
+div#player-container>div.active-subtitle {
     font-size: 12px;
     color: #ccc;
-    height: 16px;
     line-height: 16px;
     padding: 4px 8px 2px 8px;
     background-color: #444c;
@@ -216,6 +226,6 @@ div#player-container>div.subtitle-container {
     border-radius: 4px;
     text-align: right;
 }
-div#player-container>div.subtitle-container:not(.visible) {
+div#player-container>div.active-subtitle:not(.visible) {
     display: none;
 }

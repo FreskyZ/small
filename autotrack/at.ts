@@ -999,6 +999,8 @@ async function handleMakePage() {
 
     // inline workid + title list in html file should be easier then separate index.json data
     const metadatas: WorkMetadata[] = [];
+    // NOTE temporary add this flag for migration purpose
+    const incompleteWorkIds: string[] = [];
     await Promise.all((await fs.readdir(config.dataDirectory)).map(async directoryName => {
         if (directoryName.startsWith('RJ')) {
             const metadataPath = path.join(config.dataDirectory, directoryName, 'metadata.json');
@@ -1006,14 +1008,23 @@ async function handleMakePage() {
                 const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
                 if (metadata.tracks.length) {
                     metadatas.push(metadata);
+                    for (const track of metadata.tracks) {
+                        const audioPath = path.join(config.dataDirectory, metadata.id, `track${track.index}.${metadata.audioFormat}`);
+                        if (!npfs.existsSync(audioPath)) {
+                            incompleteWorkIds.push(metadata.id);
+                        }
+                    }
                 }
             }
         }
     }));
     let summaryContainerElement = '<div id="summary-container">\n';
+    // NOTE temporary sort here because front end does not have much information to sort
+    // add time use simple ymdhms format so can directly compare as string
+    metadatas.sort((m1, m2) => m1.addTime.localeCompare(m2.addTime));
     for (const metadata of metadatas) { 
         summaryContainerElement +=
-            `    <div class="summary" data-id="${metadata.id}" data-score="${metadata.score}">${metadata.title}</div>\n`;
+            `    <div class="summary" data-id="${metadata.id}" data-score="${metadata.score}" data-wip="${incompleteWorkIds.includes(metadata.id) ? '1' : '0'}">${metadata.title}</div>\n`;
     }
     summaryContainerElement += '  </div>';
     template = template.replace('<div id="summary-container"></div>', summaryContainerElement);
