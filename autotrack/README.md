@@ -19,27 +19,27 @@ and later extended to represent 经络 in traditional chinese medicine, and late
 vtt is a more popular subtitle format in my provider's data, others use lrc, no other format seen for now
 
 vtt is designed for html5 caption feature (the difference between subtitle and caption seems to be subtitle being
-translated text other than original media's language, caption being accessiblity feature to support users without
+translated text other than original media's language, caption being accessibility feature to support users without
 sound functionality), vtt has a specification at w3c https://w3c.github.io/webvtt/, it is inspired by srt format,
 or SubRip Text format provided by the subrip software https://en.wikipedia.org/wiki/SubRip, this is an early 2000s
 *free* software, you may have learned the difference betwee free softwares and open source softwares and know free
 software community is created at 1980s, and become great with gnu project and linux kernel, and read the classical
-list of free software examples for many times, which does not include this, which may be refreshing to you
+list of free software examples for many times, which does not include this, which is refreshing
 
 lrc file format https://en.wikipedia.org/wiki/LRC_(file_format) comes with another 2000s free software "Kuo lyrics
-displayer" by a developer from taiwan province, which is an winamp plugin and according to ai is the first software
-piece to provide the user experience to display lyrics real time along with music playing and provide a listbox to
-display recent lyrics, I guess it is then welcomed by free software community, and later years the good development
-of "Chinese music" (you can have like millions of articles discussing about this topic comparing to nowadays music
-music industry, but not here), the trend of "internet shared free music" (pirate music), and the good sell of cheap
-mp3 players (山寨) and development of karaoke (shops?) adopted this technology to support real time lyrics, making
-this format the defacto standard in cjk music community, without a formal standard or specification, this make some
-spec-favor developers like me a bit confusing, but there is still some "official" things to reference, is that the
-software source code is still available via wayback machine https://web.archive.org/web/19990129022949/http://www.fortunecity.com/tinpan/tricky/483/vislyric.html,
-downloading and extracting this you see some vc++ project files, some c source code files and an evil gpl license
-file, which according to ai I cannot put any part of the source code in this repository because this repository is
-licensed under apache, it's not a big problem because the original logic is simple and I can easily describe it in
-my implementation
+displayer" by a developer from taiwan province, which is an winamp plugin, ai says it's the first software piece to
+provide the user experience to display lyrics at real time along with music playing and recent lyrics in a sibling
+listbox, and later years the development of Chinese music industry (you can have millions of articles talking about
+this topic comparing to current music industry, but not here), the trending of "internet shared free music" (pirate
+music), and the good selling of cheap mp3 players (山寨) and development of karaoke (shops?) adopted this technology
+to support real time lyrics, making this format the defacto standard in cjk (cj?) music community, without a formal
+standard or specification, this make some spec-favor developers like me a bit confusing, but some kind of "official"
+reference still exists, that the software source code is still available via wayback machine
+https://web.archive.org/web/19990129022949/http://www.fortunecity.com/tinpan/tricky/483/vislyric.html, downloading
+and extracting this you see some vc++ project files (they are binary files if you come from sln+vcxproj era or even
+slnx era), some c source code files and an evil gplv2 license file, which according to ai I cannot put any part of
+the source code in this repository because this repository is licensed under apache, it's not a big problem because
+the original logic is simple and I can easily describe it in my implementation
 
 UPDATE what do you mean by the original implementation does support sub-second part?
 
@@ -47,12 +47,12 @@ UPDATE what do you mean by the original implementation does support sub-second p
 
 this project itself don't include a server to serving the files, because any static content server will work
 
-but you may need to specifically allow subtitle files if your static content middleware check file extensions,
-vtt has web standard and may be supported, if you need explicit config, it has mime type text/vtt, lrc is not
-that common in this area, and don't have a dedicated mime type, use text/plain, vss is currently my choice to
-my personal standard for very simple subtitles, it is same default supported by asp.net core because is same as
-micorosft office visio old file format, *by coincidence*, this may not be true for your static content server,
-and it also don't have an mime type and should use text/plain
+but you may need to specifically allow subtitle files if your static content middleware check file extensions, vtt
+has web standard and may be supported, if you need explicit config, it has mime type text/vtt, lrc is not common in
+this area, and don't have a dedicated mime type, use text/plain, vss is currently my choice to my personal standard
+for very simple subtitles, it is unexpectedly default supported by asp.net core because it is same as visio's old
+file format, *by coincidence*, this may not be true for your static content server, and it also don't have an mime
+type and should use text/plain
 
 by the way, asp.net core static file middleware default supported extensions
 see https://github.com/dotnet/aspnetcore/blob/main/src/Middleware/StaticFiles/src/StaticFileMiddleware.cs#L41
@@ -106,7 +106,7 @@ model at https://huggingface.co/docs/transformers/v5.13.0/en/model_doc/qwen3_asr
 the library don't have many python files and may be simple to understand, but currently I don't want to dive in it
 and will use the qwen-asr library for now,
 
-simplest code snippet:
+basic code snippet:
 
 ```py
 import torch
@@ -116,7 +116,7 @@ results = model.transcribe(audio="track1.mp3", language='Japanese')
 print(results[0].text)
 ```
 
-with forced aligner
+with forced aligner:
 
 ```py
 import torch
@@ -146,7 +146,7 @@ popular, but ai said version or generated example code version may be an older p
 
 by the way, why is nvidia/cuda:devel image display 4.33g on wsl docker but 7.8g on wslc?
 
-with flash attention
+with flash attention:
 
 ```py
 import torch

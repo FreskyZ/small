@@ -43,29 +43,34 @@ function getAllWorks() {
     Array.from(document.querySelectorAll<HTMLDivElement>('div.summary')).forEach(element => {
         results.push({
             id: element.dataset['id'],
-            score: +element.dataset['score'],
             title: element.innerText,
             incomplete: element.dataset['wip'] == '1',
         } as unknown as WorkMetadata);
         element.remove();
     });
-    // 1. shuffle elements, TODO weighted shuffle?
-    // let currentIndex = results.length;
-    // while (currentIndex != 0) {
-    //     const randomIndex = Math.floor(Math.random() * currentIndex);
-    //     currentIndex--;
-    //     const temp = results[randomIndex];
-    //     results[randomIndex] = results[currentIndex];
-    //     results[currentIndex] = temp;
-    // }
+    // shuffle elements
+    let currentIndex = results.length;
+    while (currentIndex != 0) {
+        const randomIndex = Math.floor(Math.random() * currentIndex);
+        currentIndex--;
+        const temp = results[randomIndex];
+        results[randomIndex] = results[currentIndex];
+        results[currentIndex] = temp;
+    }
+    // read url query id and...put it at first element
+    const queryId = new URL(window.location as any).searchParams.get('id');
+    if (queryId && queryId.startsWith('RJ') && results.some(w => w.id == queryId)) {
+        // because put this as last statement of this module does not work because conflict with render implementation magic
+        // render({ activeWorkId: queryId });
+        const [work] = results.splice(results.findIndex(w => w.id == queryId), 1);
+        results.unshift(work);
+    }
     return results;
 }
 const allworks = getAllWorks();
 
-// constant config?
+// constant config region?
 const WorkPerPage = 16;
-const MaxTagCount = 25; // TODO can collect precise value
-const MaxTrackCount = 20; // TODO can collect precise value
 
 // all page state
 interface PageState {
@@ -136,6 +141,11 @@ function createSummaryElements() {
     });
 }
 createSummaryElements();
+// your javascript api will translate this?
+const MaxTagCount = +summaryElements.container.dataset.maxTag;
+const MaxTrackCount = +summaryElements.container.dataset.maxTrack;
+delete summaryElements.container.dataset.maxTag;
+delete summaryElements.container.dataset.maxTrack;
 
 // detail container for the active work
 const detailElements = {
@@ -344,6 +354,15 @@ function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
                 }
             }
         }
+    } else if (subtitleFormat == 'vss') {
+        return rawtext.trim().split('\n').filter(x => x).map<Cue>(r => {
+            const [timeRange, text] = r.split(':').map(x => x.trim());
+            const [start, end] = timeRange.split('-').map(x => +x);
+            return { start, end, text };
+        });
+    } else if (subtitleFormat == 'txt') {
+        // txt don't have time associated texts, it only displays in the textarea
+        return [];
     } else {
         return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
     }

@@ -15,9 +15,12 @@ console.log(`autotrack.ts: data directory ${config.dataDirectory}`);
 // console.log(`autotrack.ts: provider base uri ${config.providerBaseUri}`);
 // console.log(`autotrack.ts: provider api base uri ${config.providerApiBaseUri}`);
 
+function makepath(...paths: string[]) {
+    return path.join(config.dataDirectory, ...paths);
+}
+
 // urls are too long to help readablity
 const LOGURL = !!process.env['AT_LOGURL'];
-
 // they are simple console.log for now
 function logInfo(content: string) {
     console.log(`autotrack.ts: ${content}`);
@@ -167,7 +170,7 @@ async function getWorkId(inputValue: string) {
     if (workId) {
         const directoryNames = await fs.readdir(config.dataDirectory);
         await Promise.all(directoryNames.filter(d => d.startsWith('RJ')).map(async existingWorkId => {
-            const metadataPath = path.join(config.dataDirectory, existingWorkId, 'metadata.json');
+            const metadataPath = makepath(existingWorkId, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
                 const existingMetadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
                 if (existingMetadata.languageEditions.includes(workId)) {
@@ -213,10 +216,10 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
     const url = new URL(config.providerApiBaseUri);
     const pathPostfix = workId == mainWorkId ? '' : `-${workId}`;
     const displayId = workId == mainWorkId ? workId : `${workId} main work id ${mainWorkId}`;
-    await fs.mkdir(path.join(config.dataDirectory, mainWorkId), { recursive: true });
+    await fs.mkdir(makepath(mainWorkId), { recursive: true });
 
     let metadata: RawMetadata;
-    const metadataPath = path.join(config.dataDirectory, mainWorkId, `raw-metadata${pathPostfix}.json`);
+    const metadataPath = makepath(mainWorkId, `raw-metadata${pathPostfix}.json`);
     if (npfs.existsSync(metadataPath)) {
         // no need to precisely and gracefully handle json error in this small script
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
@@ -239,7 +242,7 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
     }
 
     let records: RawTrackRecord[];
-    const recordsPath = path.join(config.dataDirectory, mainWorkId, `raw-tracks${pathPostfix}.json`);
+    const recordsPath = makepath(mainWorkId, `raw-tracks${pathPostfix}.json`);
     if (npfs.existsSync(recordsPath)) {
         records = JSON.parse(await fs.readFile(recordsPath, 'utf-8'));
     } else {
@@ -256,7 +259,7 @@ async function getRawMetadata(workId: string, mainWorkId: string): Promise<[RawM
 
     // download cover by the way
     if (workId == mainWorkId) {
-        const coverImagePath = path.join(config.dataDirectory, mainWorkId, 'cover.jpg');
+        const coverImagePath = makepath(mainWorkId, 'cover.jpg');
         if (!npfs.existsSync(coverImagePath)) {
             const url = new URL(metadata.thumbnailCoverUrl);
             if (!url.pathname.endsWith('.jpg')) {
@@ -303,14 +306,11 @@ interface WorkMetadata {
     score: number,
     // main work id or edition id
     audioWorkId?: string,
-    // mp3 | wav, don't expect other formats for now
+    // mp3 | wav | flac, don't expect other formats for now
     audioFormat?: string,
     // empty for no subtitle, main work id or edition id
     subtitleWorkId?: string,
-    // empty for no subtitle, available values vtt, lrc, others TODO
-    // UPDATE: vtt is w3c standard? https://www.w3.org/TR/webvtt1/
-    // UPDATE you should have reallized that w3c standard means there should be some level of builtin support
-    // lrc format is "[mm:ss.xx]content" format, the time in next line indicate end of current line content
+    // empty for no subtitle, available values vtt, lrc, vss, txt
     subtitleFormat?: string,
     // no need to use tree structure because most of the time I only use one directory,
     // even if really need same name files from multiple directory I can prepend something
@@ -333,7 +333,7 @@ interface TrackRecord {
 // get or create metadata, only main work has main metadata
 async function getMetadata(workId: string, rawMetadata: RawMetadata) {
     let metadata: WorkMetadata;
-    const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+    const metadataPath = makepath(workId, 'metadata.json');
     if (npfs.existsSync(metadataPath)) {
         // no need to precisely and gracefully handle json error in this small script
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
@@ -409,7 +409,7 @@ async function writeMetadata(metadata: WorkMetadata) {
             subtitleProviderPath: t.subtitleProviderPath,
         })),
     };
-    await fs.writeFile(path.join(config.dataDirectory, metadata.id, 'metadata.json'), JSON.stringify(newmetadata, undefined, 2));
+    await fs.writeFile(makepath(metadata.id, 'metadata.json'), JSON.stringify(newmetadata, undefined, 2));
 }
 
 interface FlatRawTrackRecord {
@@ -501,8 +501,8 @@ async function handleMoveTrack(ctx: CommandContext, track: TrackRecord, paramete
     logInfo(`ATTENTION will try to move actual file, but no transaction and rollback for that, which means`);
     logInfo(`if audio file move ok but subtitle file move not ok, audio file will not rollback while metadata will not update`);
     if (ctx.meta.audioFormat) {
-        const oldAudioPath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
-        const newAudioPath = path.join(config.dataDirectory, ctx.id, `track${newIndex}.${ctx.meta.audioFormat}`);
+        const oldAudioPath = makepath(ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
+        const newAudioPath = makepath(ctx.id, `track${newIndex}.${ctx.meta.audioFormat}`);
         if (npfs.existsSync(oldAudioPath)) {
             if (npfs.existsSync(newAudioPath)) {
                 // not regard as error
@@ -628,6 +628,7 @@ function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: nu
         
         subtitleProviderPath = rawSubtitle.path;
         const subtitleFormat = path.extname(subtitleProviderPath).substring(1);
+        // not include other subtitle formats, they are not added
         if (subtitleFormat != 'vtt' && subtitleFormat != 'lrc') {
             return logError('unrecognized subtitle format, currently support vtt, lrc');
         } else if (ctx.meta.subtitleFormat && ctx.meta.subtitleFormat != subtitleFormat) {
@@ -733,7 +734,7 @@ async function handleDownloadExtraFile(ctx: CommandContext, parameters: string[]
         return logError('raw index out of range');
     }
     const rawRecord = ctx.allRawTracks[meid][rawIndex - 1];
-    const filePath = path.join(config.dataDirectory, ctx.id, path.basename(rawRecord.path));
+    const filePath = makepath(ctx.id, path.basename(rawRecord.path));
     if (npfs.existsSync(filePath)) {
         return logInfo(`${ctx.id}: extra file path ${filePath} already exists, skip`);
     }
@@ -761,15 +762,15 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
         if (!rawAudio) {
             return logError(`track ${track.index} audio provider path not found? work ${ctx.meta.audioWorkId} path ${track.providerPath}`);
         }
-        const filepath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
+        const filepath = makepath(ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
         tasks.push({ index: track.index, kind: 'audio', rawRecord: rawAudio, filepath });
     
-        if (ctx.meta.subtitleFormat && track.subtitleProviderPath) {
+        if (ctx.meta.subtitleFormat && track.subtitleProviderPath && track.subtitleProviderPath != '書き取り') {
             const rawSubtitle = ctx.allRawTracks[ctx.meta.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
             if (!rawSubtitle) {
                 return logError(`track ${track.index} subtitle provider path not found? work ${ctx.meta.subtitleFormat} path ${track.subtitleProviderPath}`);
             }
-            const filepath = path.join(config.dataDirectory, ctx.id, `track${track.index}.${ctx.meta.audioFormat}.${ctx.meta.subtitleFormat}`);
+            const filepath = makepath(ctx.id, `track${track.index}.${ctx.meta.audioFormat}.${ctx.meta.subtitleFormat}`);
             tasks.push({ index: track.index, kind: 'subtitle', rawRecord: rawSubtitle, filepath });
         }
     }
@@ -820,7 +821,11 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
         networkTaskCount += 1;
     }
     if (dry) {
-        logInfo(`will download ${networkTaskCount} files ${getDisplaySize(totalSize)}`);
+        if (networkTaskCount == 0 || totalSize == 0) {
+            logInfo('up to date');
+        } else {
+            logInfo(`will download ${networkTaskCount} files ${getDisplaySize(totalSize)}`);
+        }
     } else {
         const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(overallStartTime);
         logInfo(`download ${networkTaskCount} files ${getDisplaySize(totalSize)} elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
@@ -973,6 +978,26 @@ function minifycss(originalContent: string) {
     return b.trim();
 }
 async function handleMakePage() {
+
+    const directoryNames = await fs.readdir(config.dataDirectory);
+    const workIds = directoryNames.filter(d => d.startsWith('RJ'));
+    let maxTagCount = 0;
+    let maxTrackCount = 0;
+    await Promise.all(workIds.map(async workId => {
+        const metadataPath = makepath(workId, 'metadata.json');
+        if (!npfs.existsSync(metadataPath)) { return; }
+        const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+        // subtitle: a has-subtitle tag
+        // 2: 1 for score, ATTENTION 1 for temporary wip flag
+        const tagElementCount = metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 2 + (metadata.subtitleFormat ? 1 : 0);
+        if (tagElementCount > maxTagCount) {
+            maxTagCount = tagElementCount;
+        }
+        if (metadata.tracks.length > maxTrackCount) {
+            maxTrackCount = metadata.tracks.length;
+        }
+    }));
+
     // amazingly you need meta charset to make jajp characters work in html source code
     let template = `<!DOCTYPE html>
 <html>
@@ -1006,13 +1031,13 @@ async function handleMakePage() {
     const incompleteWorkIds: string[] = [];
     await Promise.all((await fs.readdir(config.dataDirectory)).map(async directoryName => {
         if (directoryName.startsWith('RJ')) {
-            const metadataPath = path.join(config.dataDirectory, directoryName, 'metadata.json');
+            const metadataPath = makepath(directoryName, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
                 const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
                 if (metadata.tracks.length) {
                     metadatas.push(metadata);
                     for (const track of metadata.tracks) {
-                        const audioPath = path.join(config.dataDirectory, metadata.id, `track${track.index}.${metadata.audioFormat}`);
+                        const audioPath = makepath(metadata.id, `track${track.index}.${metadata.audioFormat}`);
                         if (!npfs.existsSync(audioPath)) {
                             incompleteWorkIds.push(metadata.id);
                         }
@@ -1021,13 +1046,12 @@ async function handleMakePage() {
             }
         }
     }));
-    let summaryContainerElement = '<div id="summary-container">\n';
-    // NOTE temporary sort here because front end does not have much information to sort
-    // add time use simple ymdhms format so can directly compare as string
-    metadatas.sort((m1, m2) => m1.addTime.localeCompare(m2.addTime));
+    let summaryContainerElement = `<div id="summary-container" data-max-tag="${maxTagCount}" data-max-track="${maxTrackCount}">\n`;
+    // sort to make index.html stable
+    metadatas.sort((m1, m2) => m1.id.localeCompare(m2.id));
     for (const metadata of metadatas) { 
         summaryContainerElement +=
-            `    <div class="summary" data-id="${metadata.id}" data-score="${metadata.score}" data-wip="${incompleteWorkIds.includes(metadata.id) ? '1' : '0'}">${metadata.title}</div>\n`;
+            `    <div class="summary" data-id="${metadata.id}" data-wip="${incompleteWorkIds.includes(metadata.id) ? '1' : '0'}">${metadata.title}</div>\n`;
     }
     summaryContainerElement += '  </div>';
     template = template.replace('<div id="summary-container"></div>', summaryContainerElement);
@@ -1042,7 +1066,7 @@ async function handleMakePage() {
     template = template.replace('<script></script>', `<script type="module">\n${transpileResult.trim()}\n  </script>`);
 
     logInfo(`write index.html`);
-    await fs.writeFile(path.join(config.dataDirectory, 'index.html'), template);
+    await fs.writeFile(makepath('index.html'), template);
 }
 
 // ATTENTION sync with index.ts
@@ -1115,22 +1139,21 @@ async function handleMigrateCommand(parameters: string[]) {
     // validate: file structure complete (has metadata.json), have track, size match, track name no track index, subtitle parse
     if (parameters[0] == 'validate') {
         await Promise.all(roughWorkIds.map(async workId => {
-            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            const metadataPath = makepath(workId, 'metadata.json');
             if (!npfs.existsSync(metadataPath)) {
-                // all output of this command is error/warning, no need to red them all
-                return logInfo(`${workId}: incomplete file structure`);
+                return logError(`${workId}: incomplete file structure`);
             }
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
             if (metadata.tracks.length == 0) {
-                return logInfo(`${workId}: no track`);
+                return logError(`${workId}: no track`);
             }
             
-            const mainRawTracksPath = path.join(config.dataDirectory, workId, 'raw-tracks.json');
+            const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
             const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
             const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
             // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
             for (const editionId of metadata.languageEditions) {
-                const editionRawTracksPath = path.join(config.dataDirectory, workId, `raw-tracks-${editionId}.json`);
+                const editionRawTracksPath = makepath(workId, `raw-tracks-${editionId}.json`);
                 const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
                 rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
             }
@@ -1138,7 +1161,7 @@ async function handleMigrateCommand(parameters: string[]) {
             let reportedAudioFileMissing;
             let reportedSubtitleFileMissing;
             for (const track of metadata.tracks) {
-                const audioPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
+                const audioPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
                 if (!npfs.existsSync(audioPath)) {
                     if (!reportedAudioFileMissing) {
                         logInfo(`${workId}: track ${track.index} audio file missing`);
@@ -1154,7 +1177,7 @@ async function handleMigrateCommand(parameters: string[]) {
                     }
                 }
                 if (metadata.subtitleFormat && track.subtitleProviderPath) {
-                    const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                    const subtitlePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
                     if (!npfs.existsSync(subtitlePath)) {
                         if (!reportedSubtitleFileMissing) {
                             logInfo(`${workId}: track ${track.index} subtitle file missing`);
@@ -1174,32 +1197,83 @@ async function handleMigrateCommand(parameters: string[]) {
                     }
                 }
             }
+            // not this, especially allow chinese or japaness kanji as index, they make track name more interesting
+            // const alternativeNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
             // check track index removed from track name, this is warning
-            const alternativeNumbers = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九']
-            const maybeForgetToRemoveTracks = metadata.tracks.filter(t => t.name && (t.name.includes(t.index
-                .toString()) || (alternativeNumbers[t.index] && t.name.includes(alternativeNumbers[t.index]))));
+            const maybeForgetToRemoveTracks = metadata.tracks.filter(t => t.name && t.name.includes(t.index.toString()));
             if (maybeForgetToRemoveTracks.length > 2) {
                 logInfo(`${workId}: may be forget to remove track index from track name`);
             }
         }));
+    // reverse validate legacy storage
+    } else if (parameters[0] == 'reverse-validate') {
+        interface LegacyWork { id: string, name: string, tags: string, addTime: string }
+        const legacyWorks: LegacyWork[] = [];
+        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
+        // id;kind;name;path;audioext;subext;tags;add;access
+        for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
+            const fields = record.split(';');
+            legacyWorks.push({ id: fields[0]!, name: fields[2], tags: fields[6]!, addTime: fields[7]! });
+        }
+
+        // main work id + edition work id => metadata
+        const workIdMap: Record<string, WorkMetadata> = {};
+        for (const workId of roughWorkIds) {
+            const metadataPath = makepath(workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) {
+                logError(`${workId}: metadata not exist?`);
+            }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            workIdMap[workId] = metadata;
+            metadata.languageEditions.forEach(e => workIdMap[e] = metadata);
+        }
+
+        for (const legacyWork of legacyWorks) {
+            const metadata = workIdMap[legacyWork.id];
+            if (!metadata) {
+                logError(`legacy work id ${legacyWork.id} not found?`);
+                continue;
+            }
+            // just a interest comparison
+            if (legacyWork.id == metadata.id && legacyWork.name != metadata.title) {
+                // logInfo(`${metadata.id}: by the way, name not same\n  legacy: ${legacyWork.name}\n     now: ${metadata.title}`);
+            }
+            // it is known that legacy work don't have multiple tag
+            if (legacyWork.tags) {
+                if (metadata.tags.length != 1 || legacyWork.tags != metadata.tags[0]) {
+                    // RESULT: find 1 and proved to be incorrect value in legacy data
+                    logError(`${metadata.id}[was ${legacyWork.id}]: tag not same ${legacyWork.tags} != ${metadata.tags.join(',')}`);
+                }
+            }
+            const convertedTime = convertLegacyTime(legacyWork.addTime);
+            if (convertedTime != metadata.addTime) {
+                // RESULT find several differences, proved to be
+                // - both main work and edition work recorded
+                // - duplicate bookmarks in different bookmark folder
+                // - duplicate record with different url pathname
+                // - real forget to take legacy data's time because of early days data structure mess
+                logError(`${metadata.id}[was ${legacyWork.id}]: add time not same ${convertedTime} != ${metadata.addTime}`);
+            }
+        }
     // subtitle workid: display subtitle
     } else if (parameters[0] == 'subtitle' && parameters[1]) {
         if (!roughWorkIds.includes(parameters[1])) {
             return logError(`work id not found, here don't support short work id because I'm lazy`);
         }
         const workId = parameters[1];
-        const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+        const metadataPath = makepath(workId, 'metadata.json');
         if (!npfs.existsSync(metadataPath)) { return logError(`${workId}: no metadata?`); }
         const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
         if (!metadata.subtitleFormat) { return logError(`${workId}: no subtitle format?`); }
         for (const track of metadata.tracks) {
             if (track.subtitleProviderPath) {
-                const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                const subtitlePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
                 if (!npfs.existsSync(subtitlePath)) { return logError(`${workId}: track ${track.index} subtitle file not exist?`); }
                 const cues = parseSubtitle(metadata.subtitleFormat, await fs.readFile(subtitlePath, 'utf-8'));
                 for (const cue of cues) { console.log(`#${track.index}: ${cue.start}-${cue.end}: ${cue.text}`); }
             }
         }
+        
     // stat: work count, max tag count, max track count
     } else if (parameters[0] == 'stat') {
         let hasFileStructureWorkCount = 0;
@@ -1212,7 +1286,7 @@ async function handleMigrateCommand(parameters: string[]) {
         let maxTrackCount = 0;
         let maxTrackHolders: WorkMetadata[] = [];
         await Promise.all(roughWorkIds.map(async workId => {
-            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            const metadataPath = makepath(workId, 'metadata.json');
             if (!npfs.existsSync(metadataPath)) { return; }
             hasFileStructureWorkCount += 1;
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
@@ -1238,23 +1312,23 @@ async function handleMigrateCommand(parameters: string[]) {
             }
 
             // completed work count is same check as validation, but no error message and early return
-            const mainRawTracksPath = path.join(config.dataDirectory, workId, 'raw-tracks.json');
+            const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
             const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
             const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
             // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
             for (const editionId of metadata.languageEditions) {
-                const editionRawTracksPath = path.join(config.dataDirectory, workId, `raw-tracks-${editionId}.json`);
+                const editionRawTracksPath = makepath(workId, `raw-tracks-${editionId}.json`);
                 const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
                 rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
             }
             for (const track of metadata.tracks) {
-                const audioPath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}`);
+                const audioPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
                 if (!npfs.existsSync(audioPath)) { return; }
                 const stat = await fs.stat(audioPath);
                 const rawAudio = rawTracks[metadata.audioWorkId].find(r => r.path == track.providerPath);
                 if (!rawAudio || stat.size != rawAudio.size) { return; }
                 if (metadata.subtitleFormat && track.subtitleProviderPath) {
-                    const subtitlePath = path.join(config.dataDirectory, workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                    const subtitlePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
                     if (!npfs.existsSync(subtitlePath)) { return; }
                     if (track.subtitleProviderPath != '書き取り') {
                         const stat = await fs.stat(subtitlePath);
@@ -1294,7 +1368,7 @@ async function handleMigrateCommand(parameters: string[]) {
         const tagCounts: Record<string, number> = {};
         const actorCounts: Record<string, number> = {};
         await Promise.all(roughWorkIds.map(async workId => {
-            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            const metadataPath = makepath(workId, 'metadata.json');
             if (!npfs.existsSync(metadataPath)) { return; }
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
             for (const tag of metadata.providerTags) {
@@ -1308,7 +1382,9 @@ async function handleMigrateCommand(parameters: string[]) {
         const allActors = Object.entries(actorCounts).sort((t1, t2) => t1[0].localeCompare(t2[0]));
         for (const [tag, times] of allTags) { console.log(`${tag}: ${times}`); }
         for (const [tag, times] of allActors) { console.log(`${tag}: ${times}`); }
+
     // pick, only for migrating from legacy local stoage to new local storage
+    // UPDATE completed, leave this command here for memory
     } else if (parameters[0] == 'pick') {
         const legacyWorkIds: string[] = [];
         const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
@@ -1321,7 +1397,7 @@ async function handleMigrateCommand(parameters: string[]) {
         const editionIds: string[] = [];
         const noMetadataIds: string[] = [];
         for (const workId of workIds) {
-            const metadataPath = path.join(config.dataDirectory, workId, 'metadata.json');
+            const metadataPath = makepath(workId, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
                 const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
                 editionIds.push(...metadata.languageEditions);
@@ -1330,6 +1406,10 @@ async function handleMigrateCommand(parameters: string[]) {
             }
         }
         const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id)).concat(noMetadataIds);
+        if (remainingLegacyWorkIds.length == 0) {
+            logInfo('complete! congratulations!');
+            return;
+        }
         const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
         logInfo(`pick ${pickedId} from ${remainingLegacyWorkIds.length} remaining ids`)
         await handleWorkCommand([pickedId]);
@@ -1349,20 +1429,5 @@ if (command == 'page') {
 } else {
     printUsage();
 }
-
-// work directory structure
-// - metadata.json: main metadata use by client
-// - cover.jpg: cover image
-// - track{index}.{audioformat}: audio tracks, e.g. track1.mp3
-// - track{index}.{audioformat}.{subtitleformat}: subtitle files, e.g. track1.mp3.vtt
-// - raw-metadata.json: archive
-// - raw-tracks.json: archive
-// - raw-metadata-{editionid}.json: language editions archive
-// - raw-tracks-{editionid}.json: language editions archive
-
-// server
-// - any static content server can work, no business logic code used
-// - may need to specifically allow subtitle files if your server restrict file types,
-//   vtt is text/vtt, lrc has no dedicated type, use text/plain
 
 // docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
