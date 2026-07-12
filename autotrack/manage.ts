@@ -6,7 +6,7 @@ import { styleText } from 'node:util';
 import { finished } from 'node:stream/promises';
 import * as ts from 'typescript';
 
-const config = JSON.parse(await fs.readFile('at.json', 'utf-8')) as {
+const config = JSON.parse(await fs.readFile('config.json', 'utf-8')) as {
     dataDirectory: string,
     providerBaseUri: string,
     providerApiBaseUri: string,
@@ -30,15 +30,10 @@ function logError(content: string) {
 }
 
 // temporal api is very confusing, for now, wrap them inside these functions
-function now() {
+function getCurrentTime() {
     const v = Temporal.Now.zonedDateTimeISO();
     return `${v.year}${v.month.toString().padStart(2, '0')}${v.day.toString().padStart(2, '0')}T${
         v.hour.toString().padStart(2, '0')}${v.minute.toString().padStart(2, '0')}${v.second.toString().padStart(2, '0')}Z`;
-}
-// convert legacy work info YYYY-MM-DDThh:mm:ssZ to YYYYMMDDThhmmssZ
-function convertLegacyTime(value: string) {
-    const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/.exec(value)!;
-    return `${match[1]}${match[2]}${match[3]}T${match[4]}${match[5]}${match[6]}Z`;
 }
 function getDisplayTemporalDuration(duration: Temporal.Duration) {
     return duration.minutes ? `${duration.minutes}m${duration.seconds}s` : `${duration.seconds}s`;
@@ -338,25 +333,9 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
         // no need to precisely and gracefully handle json error in this small script
         metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8'));
     } else {
-        // one invocation of this script only work on one workid, so no need to cache this
-        interface LegacyWork { id: string, tags: string, addTime: string }
-        const legacyWorks: LegacyWork[] = [];
-        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
-        // id;kind;name;path;audioext;subext;tags;add;access
-        for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
-            const fields = record.split(';');
-            legacyWorks.push({ id: fields[0]!, tags: fields[6]!, addTime: fields[7]! });
-        }
-        const legacyMetadata = legacyWorks.find(w => w.id == workId);
-        if (legacyMetadata) { logInfo('read legacy metadata'); }
-
         const providerLink = new URL(config.providerBaseUri);
         providerLink.pathname = `/work/${workId}`;
-        // what spec are you using that YYYY-MM-DDThh:mm:ssZ is not parsable???
-        // Temporal.ZonedDateTime.from(legacyMetadata.addTime) ???
-        // Temporal.ZonedDateTime.from(new Date(legacyMetadata.addTime)) Date construct accepts but temporal constructor don't ???
-        const time = legacyMetadata?.addTime ? convertLegacyTime(legacyMetadata.addTime) : now();
-
+        const currentTime = getCurrentTime();
         metadata = {
             id: workId,
             providerLink: providerLink.toString(),
@@ -365,9 +344,9 @@ async function getMetadata(workId: string, rawMetadata: RawMetadata) {
             providerTags: (rawMetadata.tags?.map(t => t?.i18n?.['ja-jp']?.name) ?? []).filter(x => x),
             languageEditions: (rawMetadata.other_language_editions_in_db?.map(e => e?.source_id) ?? []).filter(x => x),
             title: rawMetadata.title,
-            addTime: time,
-            lastAccessTime: time,
-            tags: legacyMetadata?.tags ? legacyMetadata.tags.split(',') : [],
+            addTime: currentTime,
+            lastAccessTime: currentTime,
+            tags: [],
             score: 1,
             tracks: [],
         };
@@ -892,7 +871,7 @@ async function handleWorkCommand(parameters: string[]) {
             }
         }
     } else if (parameters[1] == 'access') {
-        const currentTime = now();
+        const currentTime = getCurrentTime();
         logInfo(`${workId}: access ${currentTime}`);
         ctx.meta.lastAccessTime = currentTime;
     } else if (parameters[1] == 'track') {
@@ -1056,10 +1035,10 @@ async function handleMakePage() {
     summaryContainerElement += '  </div>';
     template = template.replace('<div id="summary-container"></div>', summaryContainerElement);
 
-    const styles = await fs.readFile('index.css', 'utf-8');
+    const styles = await fs.readFile('client.css', 'utf-8');
     template = template.replace('<style></style>', `<style>\n${minifycss(styles)}\n  </style>`);
 
-    const scripts = await fs.readFile('index.ts', 'utf-8');
+    const scripts = await fs.readFile('client.ts', 'utf-8');
     const { config: tsconfig } = ts.parseConfigFileTextToJson("tsconfig.json", await fs.readFile('tsconfig.json', 'utf-8'));
     // oh basic transpile is so simple
     const transpileResult = ts.transpile(scripts, tsconfig.compilerOptions);
@@ -1069,7 +1048,7 @@ async function handleMakePage() {
     await fs.writeFile(makepath('index.html'), template);
 }
 
-// ATTENTION sync with index.ts
+// ATTENTION sync with client.ts
 interface Cue { start: number, end: number, text: string }
 function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
     const results: Cue[] = [];
@@ -1205,56 +1184,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 logInfo(`${workId}: may be forget to remove track index from track name`);
             }
         }));
-    // reverse validate legacy storage
-    } else if (parameters[0] == 'reverse-validate') {
-        interface LegacyWork { id: string, name: string, tags: string, addTime: string }
-        const legacyWorks: LegacyWork[] = [];
-        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
-        // id;kind;name;path;audioext;subext;tags;add;access
-        for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
-            const fields = record.split(';');
-            legacyWorks.push({ id: fields[0]!, name: fields[2], tags: fields[6]!, addTime: fields[7]! });
-        }
 
-        // main work id + edition work id => metadata
-        const workIdMap: Record<string, WorkMetadata> = {};
-        for (const workId of roughWorkIds) {
-            const metadataPath = makepath(workId, 'metadata.json');
-            if (!npfs.existsSync(metadataPath)) {
-                logError(`${workId}: metadata not exist?`);
-            }
-            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-            workIdMap[workId] = metadata;
-            metadata.languageEditions.forEach(e => workIdMap[e] = metadata);
-        }
-
-        for (const legacyWork of legacyWorks) {
-            const metadata = workIdMap[legacyWork.id];
-            if (!metadata) {
-                logError(`legacy work id ${legacyWork.id} not found?`);
-                continue;
-            }
-            // just a interest comparison
-            if (legacyWork.id == metadata.id && legacyWork.name != metadata.title) {
-                // logInfo(`${metadata.id}: by the way, name not same\n  legacy: ${legacyWork.name}\n     now: ${metadata.title}`);
-            }
-            // it is known that legacy work don't have multiple tag
-            if (legacyWork.tags) {
-                if (metadata.tags.length != 1 || legacyWork.tags != metadata.tags[0]) {
-                    // RESULT: find 1 and proved to be incorrect value in legacy data
-                    logError(`${metadata.id}[was ${legacyWork.id}]: tag not same ${legacyWork.tags} != ${metadata.tags.join(',')}`);
-                }
-            }
-            const convertedTime = convertLegacyTime(legacyWork.addTime);
-            if (convertedTime != metadata.addTime) {
-                // RESULT find several differences, proved to be
-                // - both main work and edition work recorded
-                // - duplicate bookmarks in different bookmark folder
-                // - duplicate record with different url pathname
-                // - real forget to take legacy data's time because of early days data structure mess
-                logError(`${metadata.id}[was ${legacyWork.id}]: add time not same ${convertedTime} != ${metadata.addTime}`);
-            }
-        }
     // subtitle workid: display subtitle
     } else if (parameters[0] == 'subtitle' && parameters[1]) {
         if (!roughWorkIds.includes(parameters[1])) {
@@ -1273,7 +1203,62 @@ async function handleMigrateCommand(parameters: string[]) {
                 for (const cue of cues) { console.log(`#${track.index}: ${cue.start}-${cue.end}: ${cue.text}`); }
             }
         }
-        
+
+    // pick an incomplete work to continue download
+    } else if (parameters[0] == 'pick') {
+        // collect all incomplete work and pick is a waste of time at current progress about 100/240,
+        // should be better to random shuffle work id list first and find first match, TODO add warning when progress reach 80%
+
+        const completed = async (workId: string) => {
+            const metadataPath = makepath(workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) { return; }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            if (metadata.tracks.length == 0) { return; }
+            // completed work count is same check as validation, but no error message and early return
+            const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
+            const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
+            const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
+            // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
+            for (const editionId of metadata.languageEditions) {
+                const editionRawTracksPath = makepath(workId, `raw-tracks-${editionId}.json`);
+                const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
+                rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
+            }
+            for (const track of metadata.tracks) {
+                const audioPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
+                if (!npfs.existsSync(audioPath)) { return; }
+                const stat = await fs.stat(audioPath);
+                const rawAudio = rawTracks[metadata.audioWorkId].find(r => r.path == track.providerPath);
+                if (!rawAudio || stat.size != rawAudio.size) { return; }
+                if (metadata.subtitleFormat && track.subtitleProviderPath) {
+                    const subtitlePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
+                    if (!npfs.existsSync(subtitlePath)) { return; }
+                    if (track.subtitleProviderPath != '書き取り') {
+                        const stat = await fs.stat(subtitlePath);
+                        const rawSubtitle = rawTracks[metadata.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
+                        if (!rawSubtitle || stat.size != rawSubtitle.size) { return; }
+                    }
+                }
+            }
+            return true;
+        };
+        const workIds = [...roughWorkIds];
+        let currentIndex = workIds.length;
+        while (currentIndex != 0) {
+            const randomIndex = Math.floor(Math.random() * currentIndex);
+            currentIndex--;
+            const temp = workIds[randomIndex];
+            workIds[randomIndex] = workIds[currentIndex];
+            workIds[currentIndex] = temp;
+        }
+        for (const workId of workIds) {
+            if (!await completed(workId)) {
+                await handleWorkCommand([workId, 'dry']);
+                console.log(`at ${workId} commit`);
+                return;
+            }
+        }
+
     // stat: work count, max tag count, max track count
     } else if (parameters[0] == 'stat') {
         let hasFileStructureWorkCount = 0;
@@ -1292,7 +1277,7 @@ async function handleMigrateCommand(parameters: string[]) {
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
 
             // subtitle: a has-subtitle tag
-            // 2: 1 for score, ATTENTION 1 for temporary wip flag
+            // 2: 1 for score, TODO temporary 1 for wip flag
             const tagElementCount = metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 2 + (metadata.subtitleFormat ? 1 : 0);
             if (tagElementCount > maxTagCount) {
                 maxTagCount = tagElementCount;
@@ -1383,36 +1368,6 @@ async function handleMigrateCommand(parameters: string[]) {
         for (const [tag, times] of allTags) { console.log(`${tag}: ${times}`); }
         for (const [tag, times] of allActors) { console.log(`${tag}: ${times}`); }
 
-    // pick, only for migrating from legacy local stoage to new local storage
-    // UPDATE completed, leave this command here for memory
-    } else if (parameters[0] == 'pick') {
-        const legacyWorkIds: string[] = [];
-        const legacyWorksOriginalContent = await fs.readFile('legacy.csv', 'utf-8');
-        // id;kind;name;path;audioext;subext;tags;add;access
-        for (const record of legacyWorksOriginalContent.trim().split('\n').slice(1)) {
-            legacyWorkIds.push(record.split(';')[0]);
-        }
-        const directoryNames = await fs.readdir(config.dataDirectory);
-        const workIds = directoryNames.filter(d => d.startsWith('RJ'));
-        const editionIds: string[] = [];
-        const noMetadataIds: string[] = [];
-        for (const workId of workIds) {
-            const metadataPath = makepath(workId, 'metadata.json');
-            if (npfs.existsSync(metadataPath)) {
-                const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-                editionIds.push(...metadata.languageEditions);
-            } else {
-                noMetadataIds.push(workId);
-            }
-        }
-        const remainingLegacyWorkIds = legacyWorkIds.filter(id => !workIds.includes(id) && !editionIds.includes(id)).concat(noMetadataIds);
-        if (remainingLegacyWorkIds.length == 0) {
-            logInfo('complete! congratulations!');
-            return;
-        }
-        const pickedId = remainingLegacyWorkIds[Math.floor(Math.random() * remainingLegacyWorkIds.length)];
-        logInfo(`pick ${pickedId} from ${remainingLegacyWorkIds.length} remaining ids`)
-        await handleWorkCommand([pickedId]);
     } else {
         logInfo('USAGE: autotrack.ts migrate validate | subtitle WORKID');
     }

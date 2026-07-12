@@ -17,7 +17,7 @@ interface WorkMetadata {
     audioFormat?: string,
     subtitleFormat?: string,
     tracks: TrackRecord[],
-    // NOTE temporary while migration
+    // TODO remove when generally complete
     incomplete: boolean,
 }
 interface TrackRecord {
@@ -61,6 +61,7 @@ function getAllWorks() {
     const queryId = new URL(window.location as any).searchParams.get('id');
     if (queryId && queryId.startsWith('RJ') && results.some(w => w.id == queryId)) {
         // because put this as last statement of this module does not work because conflict with render implementation magic
+        // TODO try to make this work
         // render({ activeWorkId: queryId });
         const [work] = results.splice(results.findIndex(w => w.id == queryId), 1);
         results.unshift(work);
