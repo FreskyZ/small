@@ -67,6 +67,13 @@ EORUN
 # uv sync
 # EORUN
 
+# the previous major installation step take too much time,
+# so do not invalidate that and add not important small packages here
+RUN <<EORUN
+set -ex
+cd /work
+uv add rich
+EORUN
 ADD transcribe.py /work/
 
 WORKDIR /work

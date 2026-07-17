@@ -266,3 +266,139 @@ I assume my dataset is too difficult for the generic forced aligner model?
 
 the current implementation run transcrption only and even distribute the sentences into time range
 by character length, which is amazingly the highest quality I can get in the investigation process
+
+current workflow:
+
+- manage.ts migrate prepare WORKID: copy track files to Input directory
+- uv run transcribe.py: auto transcribe
+- manage.ts migrate take WORKID: copy result files into track directory
+- manage.ts migrate use WORKID VSSVER: use vss version and mark work as has subtitle
+
+### Base85 Versions
+
+according to python document, there are multiple base85 versions,
+see https://docs.python.org/3/library/base64.html#base85-encodings, see wiki https://en.wikipedia.org/wiki/Ascii85
+
+first there is a unix utility btoa to encode binary printable ascii, but
+
+- cannot find it in unix or bsd (original bsd) source code?
+- cannot find it in freebsd https://github.com/freebsd/freebsd-src or openbsd https://github.com/openbsd/src source code?
+- can find it in freebsd ports https://github.com/freebsd/freebsd-ports/tree/main/converters/btoa
+  and openbsd ports https://github.com/openbsd/ports/tree/master/converters/btoa as a 3rd party package port?
+- the ports repositories don't have original source code before patch,
+  - openbsd port makefile have a url but the domain is expired?
+  - freebsd port have a MASTER_SITES
+    in makefile https://github.com/freebsd/freebsd-ports/blob/2f8a34d30d6bc2dbb0bcef6bca3900f7dab02dfc/converters/btoa/Makefile,
+    according to https://github.com/freebsd/freebsd-ports/blob/2f8a34d30d6bc2dbb0bcef6bca3900f7dab02dfc/Mk/bsd.sites.mk
+    it is something like http://distcache.FreeBSD.org/local-distfiles but the domain is now an alias to https://pkg.freebsd.org?
+  - cannot understand how these port repositories work
+- wiki has a mail session archive talking about character set change, which is a google groups archive
+  https://groups.google.com/g/comp.compression/c/Ve7k8XF-F5k/m/gBWfpyL-gfgJ which is confusing because
+  the dates are 1991 but google is not created at that time?
+- have to believe wiki that they use characters from whitespace (0x20) to t (0x74) inclusive at first
+  and later change to ! (0x21) to u (0x75) inclusive to avoid whitespace handling (like trim) in some mail programs
+- this version is also used in pdf 2.0 (ISO 32000-2) but this is not last century's news?
+  this is an ISO standard so I'm not trying to obtain it and look for this not important things
+- but you can always see python source code, base64.a85encode is at
+  https://github.com/python/cpython/blob/abdd7aea18bde039fe35983b5c0d8036bc16f1a7/Modules/binascii.c#L236,
+  it is from ! to u, and will do z for 4 zeros and y for 4 whitespaces
+
+as base64 function is called b64encode you may expect b85encode as the formal function for base85, but this comes from
+an april fool's joke? in rfc https://datatracker.ietf.org/doc/html/rfc1924.html? and why do python docs and wiki section
+https://en.wikipedia.org/wiki/Ascii85#RFC_1924_version talks about an april fool's joke so calmly?
+
+- rfc1924 character set:   0-9, A-Z, a-z, !#$%&()*+-;<=>?@^_`{|}~
+- git base85 character set 0-9, A-Z, a-z, !#$%&()*+-;<=>?@^_`{|}~
+  see https://github.com/git/git/blob/44de1520f08d1dfebc3ab2d9f644208eaa5ac925/base85.c
+- python source code                      !#$%&()*+-;<=>?@^_`{|}~
+  see https://github.com/python/cpython/blob/abdd7aea18bde039fe35983b5c0d8036bc16f1a7/Modules/binascii.c#L232
+
+and a zeromq version, use char set 0-9, a-z, A-Z, .-:+=^!/*?&<>()[]{}@%$#
+see https://github.com/python/cpython/blob/abdd7aea18bde039fe35983b5c0d8036bc16f1a7/Modules/binascii.c#L2747 
+
+- avoids quote mark and escape mark so to easily write in source code
+- added in version 3.13, so ai may not know this, and not available in distro with python3.12,
+  bpo created in aug 2017 https://github.com/python/cpython/issues/75299, but finally added in 2024?
+- the issue links a zeromq rfc https://rfc.zeromq.org/spec/32/ but how is the rfc used in zeromq?
+  the source code is easily at https://github.com/zeromq/pyzmq/blob/8aef37e428bc0bb012c7dc29382f1a5d7a46c080/zmq/utils/z85.py#L20
+- search zeromq docs shows they use it genericly for multiple locations that need binary
+
+for this project, use b85encode to avoid the question: why is this a85/z85 not b85 similar to b64encode
+
+### Backup
+
+although github actions is very unreliable in recent years, github is still a relative reliable location for backup purpose
+
+to avoid direct sexsual content in github, although I think this level of such content is very ok for github and for
+a no one care repository, also considering raw track files are very large and contain a lot of redundent information,
+most works will only take less than 10 records from all track records while some work have tens of or even hundreds of
+raw track records, so the solution is compressing the files, no need to password, they are already public information,
+especially considering metadata is even public information for provider provider
+
+binary files do not work well with git, base64 them into text content may be good, after base64 and split lines they
+will be similar to git tracked minified js, not good but will work with git, oh, can use base85 to reduce more file size
+
+collect stat:
+
+- tar.xz raw metadata, raw tracks and cover image result in min 11kb max 72kb avg 32kb,
+  after base85 get max 90kb, avg 40kb, that is about 700 lines of 128 characters per line
+- oh, forget to minify json, that is -0.2kb avg size
+- oh, convert jpg to avif result in avg 17kb, indicating jpeg format is very not efficient
+  comparing to avif, and image files are taking large portion of the archive file size and
+  it is not suitable to compress image and json files together
+- so exclude cover image result in avg 5kb, indicating the raw track files have too much
+  duplicate information and result in high compression rate
+- by the way, exclude image files, put jpeg beside tar.xz file result in -0.1kb,
+  or uncompressed jpeg + compressed json - compressed jpeg and json = -0.1kb
+  and uncompressed avif + compressed json - compressed avif and json = -0.15kb
+- the new max 40kb binary is 50kb text,
+  which is similar to 30kb build-script.md and container.md, is smaller than 90kb ipv6.md
+
+file structure considerations
+
+- metadata is mutable, raw metadata files (include raw tracks) are immutable, they need to be different files to
+  avoid frequently update files that most of the content is not changed
+- raw metadata json files are compressed and base85 encoded and splitted into lines of text to make them look like
+  normal minified files, to distinguish json content and image content, separate them with one empty line
+- no need to distinguish main work and edition work in archive file entries, always name them
+  raw-metadata-{workid}.json and raw-tracks-{workid}.json
+- name immutable files to A12345678, A for archive, avoid RJ id to reduce discoverability,
+  in that case, name metadata file to M12345678, M for metadata or mutable
+- avoid properties in metadata that is directly available in raw metadata, like provider link and provider tags,
+  check each property
+  - work title and track names may contain direct content, discard them because they are not important
+  - change times to timestamps to reduce their discoverability a little
+  - change my tags to index in fixed list
+  - leave comments in work and track and management comments as they generally don't contain direct content
+  - change provider path and subtitle provider path to sequence of index in each level, *after* sort each level
+    item name, because some work have strange order in existing raw tracks, I guess they may be returning a random
+    result, sort them should be more reasonable (do not modify archived raw track data)
+  - audio format and subtitle format check extension in path
+  - subtitle work change to an index in language edition list, that is sorted list in all ids in this archive file
+- to reduce amount of m files, consider collect works with same ending part in one file, like m8 for all works ends
+  with 8, if work count reach a threshold, split into 2 files, like maybe split m8 into m18 and m28, do not leave m8
+  or else hard to decide where to find a work, the cost of this scheme is hard to track the history, but I guess this
+  is not important
+- to reduce discoverability, do not use named properties but store them in a plain list of properties, so that I
+  propose this format
+
+1: 12345678 (work id)
+2: 1784292871 (add time)
+3: 1784292871 (add time)
+4: 1 (score)
+5: comment
+6: management comment
+7: 1 (tag indexes)
+8: 1 (subtitle work index)
+(track index already in key)
+1-1: 1000, 12345678 (duration and size, use to sanity check path index sequence)
+1-3: comment
+1-4: 1,2,3,4 (provider path)
+1-5: 2,2,3,4 (subtitle provider path, -1 for asr)
+2-1: ...
+...
+
+
+
+
+

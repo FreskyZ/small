@@ -372,9 +372,8 @@ function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
         }
     } else if (subtitleFormat == 'vss') {
         return rawtext.trim().split('\n').filter(x => x).map<Cue>(r => {
-            const [timeRange, text] = r.split(':').map(x => x.trim());
-            const [start, end] = timeRange.split('-').map(x => +x);
-            return { start, end, text };
+            const [start, end, text] = r.split(',').map(x => x.trim());
+            return { start: +start, end: +end, text };
         });
     } else if (subtitleFormat == 'txt') {
         // txt don't have time associated texts, it only displays in the textarea
