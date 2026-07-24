@@ -60,6 +60,8 @@ and https://github.com/dotnet/aspnetcore/blob/main/src/Middleware/StaticFiles/sr
 I use url with main branch because I assume this code will not change in future, if it is not true you may have to
 use your intelligence to find them again?
 
+UPDATE what do you mean by flac is not default included?
+
 ### Auto Transcription
 
 by the way, if you think the universe begins when attention is noticed, speech recognition is already using neural
@@ -329,44 +331,53 @@ for this project, use b85encode to avoid the question: why is this a85/z85 not b
 
 although github actions is very unreliable in recent years, github is still a relative reliable location for backup purpose
 
-to avoid direct sexsual content in github, although I think this level of such content is very ok for github and for
-a no one care repository, also considering raw track files are very large and contain a lot of redundent information,
-most works will only take less than 10 records from all track records while some work have tens of or even hundreds of
-raw track records, so the solution is compressing the files, no need to password, they are already public information,
-especially considering metadata is even public information for provider provider
+to avoid direct sexsual content in github, although I think this level of such content is very ok for github and for a no one
+care repository, also considering raw track files are very large and contain a lot of redundent information, that have a full
+work title in all records, and have multiple duplicate url encoded titles in all records, and most works use less than 10 tracks
+while most works have tens of records and some works have hundreds of records, and the solution is to compress the files, no
+password needed because they are already public information, from provider, and from provider provider
 
-binary files do not work well with git, base64 them into text content may be good, after base64 and split lines they
-will be similar to git tracked minified js, not good but will work with git, oh, can use base85 to reduce more file size
+binary files do not work well with git, base64 them into text and split into normal width lines may be good, and makes them
+somewhat looks like a git tracked minified js library, not good enough but will work, oh, can use base85 to reduce more file size
 
 collect stat:
 
 - tar.xz raw metadata, raw tracks and cover image result in min 11kb max 72kb avg 32kb,
   after base85 get max 90kb, avg 40kb, that is about 700 lines of 128 characters per line
 - oh, forget to minify json, that is -0.2kb avg size
-- oh, convert jpg to avif result in avg 17kb, indicating jpeg format is very not efficient
-  comparing to avif, and image files are taking large portion of the archive file size and
-  it is not suitable to compress image and json files together
-- so exclude cover image result in avg 5kb, indicating the raw track files have too much
-  duplicate information and result in high compression rate
-- by the way, exclude image files, put jpeg beside tar.xz file result in -0.1kb,
+  - UPDATE oh, forget python json library default to avoid non ascii characters in output, disable that get -0.18kb avg size
+  - UPDATE what do you mean by json.dump default use whitespace for comma and colon? disable that get -25b (not kb) avg size
+- oh, convert jpg to avif result in avg 17kb, indicating jpeg format is not very efficient comparing to avif, and image files
+  are taking large portion of the archive file size and is not suitable to compress image and json files together
+- exclude image files, put jpeg beside tar.xz file result in -0.1kb,
   or uncompressed jpeg + compressed json - compressed jpeg and json = -0.1kb
   and uncompressed avif + compressed json - compressed avif and json = -0.15kb
-- the new max 40kb binary is 50kb text,
-  which is similar to 30kb build-script.md and container.md, is smaller than 90kb ipv6.md
+- so exclude cover image and json file only use avg 5kb, indicating the raw track files have too much duplicate information
+  and result in a good compression rate
+- by the way, use a85encode instead of b85encode reduce 50b (not kb) avg size, indicating that avif format and xz format is
+  already using space efficiently and a85's extension does not improve compression rate effectively
+- by the way, rename entries will not cause complete change in result because tar and b85 are not hash, but xz is kind of hash,
+  it will become completely different in the middle if change one of the entry name
+- max 40kb binary which is 50kb text, which is similar to 30kb build-script.md, container.md, and is smaller than 90kb ipv6.md
+
+additional stat that appears later
+
+- direct bundle result in 100kb binary, json minify get 98kb (this is all work total, not avg)
+- remove redundent top level properties and change provider path and subtitle provider path to index get 60kb
 
 file structure considerations
 
-- metadata is mutable, raw metadata files (include raw tracks) are immutable, they need to be different files to
-  avoid frequently update files that most of the content is not changed
-- raw metadata json files are compressed and base85 encoded and splitted into lines of text to make them look like
-  normal minified files, to distinguish json content and image content, separate them with one empty line
-- no need to distinguish main work and edition work in archive file entries, always name them
-  raw-metadata-{workid}.json and raw-tracks-{workid}.json
-- name immutable files to A12345678, A for archive, avoid RJ id to reduce discoverability,
-  in that case, name metadata file to M12345678, M for metadata or mutable
+- metadata is mutable, raw metadata files (include raw tracks) are immutable, should not put one work's raw
+  metadata and metadata in one file to avoid frequently update a file that most of the part is not changed
+- as concluted that cover image and json files should not be in one compressed file, base85 encode their content
+  separately and split into lines separately and put them in one text file separated by additional one empty line
+- distinguish main work and edition work's raw metadata files with different naming convention is not convenient,
+  unify them to same, also update real file structure later
+- name archive file A12345678.txt, A for archive, avoid RJ to reduce discoverability by plain search?
+  distinguish \d{6} work id and \d{8} work id is inconvenient, unify them to \d{8}, update real structure later
 - avoid properties in metadata that is directly available in raw metadata, like provider link and provider tags,
   check each property
-  - work title and track names may contain direct content, discard them because they are not important
+  - work title and track names may contain direct content, discard them?
   - change times to timestamps to reduce their discoverability a little
   - change my tags to index in fixed list
   - leave comments in work and track and management comments as they generally don't contain direct content
@@ -375,30 +386,9 @@ file structure considerations
     result, sort them should be more reasonable (do not modify archived raw track data)
   - audio format and subtitle format check extension in path
   - subtitle work change to an index in language edition list, that is sorted list in all ids in this archive file
-- to reduce amount of m files, consider collect works with same ending part in one file, like m8 for all works ends
-  with 8, if work count reach a threshold, split into 2 files, like maybe split m8 into m18 and m28, do not leave m8
-  or else hard to decide where to find a work, the cost of this scheme is hard to track the history, but I guess this
-  is not important
-- to reduce discoverability, do not use named properties but store them in a plain list of properties, so that I
-  propose this format
-
-1: 12345678 (work id)
-2: 1784292871 (add time)
-3: 1784292871 (add time)
-4: 1 (score)
-5: comment
-6: management comment
-7: 1 (tag indexes)
-8: 1 (subtitle work index)
-(track index already in key)
-1-1: 1000, 12345678 (duration and size, use to sanity check path index sequence)
-1-3: comment
-1-4: 1,2,3,4 (provider path)
-1-5: 2,2,3,4 (subtitle provider path, -1 for asr)
-2-1: ...
-...
-
-
-
-
-
+- can use a custom format similar to yml for metadata to reduce size UPDATE not good
+- can use a custom format with some csv without meaningful properties for metadata to reduce size
+  UPDATE not good, hard to understand the result text file and the encoding and decoding code
+- can put them in something like hash file structure?
+  e.g. put file names 12xxxx in folder 12, 34xxxx in folder 34
+  e.g. put id 12345678 in file M8.txt, put id 23456789 in M9.txt UPDATE not good, complex to implement

@@ -35,9 +35,6 @@ function getCurrentTime() {
     return `${v.year}${v.month.toString().padStart(2, '0')}${v.day.toString().padStart(2, '0')}T${
         v.hour.toString().padStart(2, '0')}${v.minute.toString().padStart(2, '0')}${v.second.toString().padStart(2, '0')}Z`;
 }
-function getDisplayTemporalDuration(duration: Temporal.Duration) {
-    return duration.minutes ? `${duration.minutes}m${duration.seconds}s` : `${duration.seconds}s`;
-}
 
 function getDisplaySize(size: number | undefined) {
     let displaySize = `${size}b`;
@@ -55,11 +52,19 @@ function getDisplaySize(size: number | undefined) {
 function getDisplayDuration(duration: number | undefined) {
     let displayDuration = '?s';
     if (duration) {
-        const minutes = Math.floor(duration / 60);
-        const seconds = Math.round(duration - minutes * 60);
-        displayDuration = minutes ? `${minutes}m${seconds}s` : `${seconds}s`;
+        const hours = Math.floor(duration / 3600);
+        const minutes = Math.floor((duration - hours * 3600) / 60);
+        const seconds = Math.round(duration - hours * 3600 - minutes * 60);
+        displayDuration = hours ? `${hours}h${minutes}m${seconds}s` : minutes ? `${minutes}m${seconds}s` : `${seconds}s`;
     }
     return displayDuration;
+}
+function getDisplayTemporalDuration(duration: Temporal.Duration) {
+    let b = '';
+    if (duration.hours) { b += `${duration.hours}h`; }
+    if (duration.minutes) { b += `${duration.minutes}m`; }
+    b += `${duration.seconds}s`;
+    return b;
 }
 
 function createProgressPipe(totalSize: number): stream.Duplex {
@@ -416,6 +421,31 @@ function flattenRawTracks(root: RawTrackRecord) {
             collect(subfolder, basepath + '/' + subfolder.title);
         }
         for (const item of folder.children?.filter(f => f.type != 'folder') ?? []) {
+            results.push({
+                type: item.type,
+                path: basepath + '/' + item.title,
+                size: item.size!,
+                duration: item.duration!,
+                mediaDownloadUrl: item.mediaDownloadUrl!,
+            });
+        }
+    }
+    // start with virtual root directory
+    collect(root, '');
+    return results;
+}
+function flattenSortRawTracks(root: RawTrackRecord) {
+    const results: FlatRawTrackRecord[] = [];
+    // dfs
+    function collect(folder: RawTrackRecord, basepath: string) {
+        const subfolders = folder.children?.filter(f => f.type == 'folder') ?? [];
+        subfolders.sort((f1, f2) => f1.title.localeCompare(f2.title));
+        for (const subfolder of subfolders) {
+            collect(subfolder, basepath + '/' + subfolder.title);
+        }
+        const items = folder.children?.filter(f => f.type != 'folder') ?? [];
+        items.sort((i1, i2) => i1.title.localeCompare(i2.title));
+        for (const item of items) {
             results.push({
                 type: item.type,
                 path: basepath + '/' + item.title,
@@ -916,7 +946,7 @@ async function handleWorkCommand(parameters: string[]) {
             }
         }
     } else if (parameters[1] == 'add') {
-        await handleAddTrack(ctx, parameters.slice(2));
+        handleAddTrack(ctx, parameters.slice(2));
     } else if (parameters[1] == 'extra') {
         await handleDownloadExtraFile(ctx, parameters.slice(2));
     } else if (parameters[1] == 'dry') {
@@ -1136,12 +1166,16 @@ async function handleMigrateCommand(parameters: string[]) {
             if (metadata.tracks.length == 0) {
                 return logError(`${workId}: no track`);
             }
+            if (metadata.retired) { return; }
             
             const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
             const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
             const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
             // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
             for (const editionId of metadata.languageEditions) {
+                if (+workId.substring(2) > +editionId.substring(2)) {
+                    logInfo(`${workId}: main work id larger than edition work id? ${editionId}`);
+                }
                 const editionRawTracksPath = makepath(workId, `raw-tracks-${editionId}.json`);
                 const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
                 rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
@@ -1271,7 +1305,7 @@ async function handleMigrateCommand(parameters: string[]) {
         await writeMetadata(metadata);
 
     // unuse workid: disable auto generated subtitle, 
-    } else if (parameters[0] == 'use' && parameters[1]) {
+    } else if (parameters[0] == 'unuse' && parameters[1]) {
         // TODO do I need this?
 
     // subtitle workid: display subtitle
@@ -1302,6 +1336,7 @@ async function handleMigrateCommand(parameters: string[]) {
             const metadataPath = makepath(workId, 'metadata.json');
             if (!npfs.existsSync(metadataPath)) { return; }
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            if (metadata.retired) { return; }
             if (metadata.tracks.length == 0) { return; }
             // completed work count is same check as validation, but no error message and early return
             const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
@@ -1349,6 +1384,7 @@ async function handleMigrateCommand(parameters: string[]) {
         }
 
     // stat: work count, max tag count, max track count
+    // TODO mp3/wav/flac count
     } else if (parameters[0] == 'stat') {
         let hasFileStructureWorkCount = 0;
         let hasTrackWorkCount = 0;
@@ -1361,13 +1397,17 @@ async function handleMigrateCommand(parameters: string[]) {
         let maxTrackHolders: WorkMetadata[] = [];
         let storageTotalBytes = 0; // audio total bytes, not subtitle
         let storageTotalCompletedBytes = 0;
-        let maxBytesHolders: [WorkMetadata, number][] = []; // byte count will not be same, this stores top 10, desc
+        let maxBytesHolders: [WorkMetadata, number][] = []; // byte count will not be same, this stores top 5, desc
         let maxAverageBytesHolders: [WorkMetadata, number][] = []; // same
+        let incompleteMaxSize: [WorkMetadata, number] = null;
+        let incompleteMinSize: [WorkMetadata, number] = null;
+        // TODO monthly spread, weekday spread, hour spread
         await Promise.all(roughWorkIds.map(async workId => {
             const metadataPath = makepath(workId, 'metadata.json');
             if (!npfs.existsSync(metadataPath)) { return; }
             hasFileStructureWorkCount += 1;
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            if (metadata.retired) { return; }
 
             // subtitle: a has-subtitle tag
             // 2: 1 for score, TODO temporary 1 for wip flag
@@ -1427,12 +1467,20 @@ async function handleMigrateCommand(parameters: string[]) {
 
             maxBytesHolders.push([metadata, totalBytes]);
             maxBytesHolders.sort((m1, m2) => m2[1] - m1[1]);
-            maxBytesHolders = maxBytesHolders.slice(0, 10);
+            maxBytesHolders = maxBytesHolders.slice(0, 5);
             const averageBytes = totalBytes / metadata.tracks.length;
             maxAverageBytesHolders.push([metadata, averageBytes]);
             maxAverageBytesHolders.sort((m1, m2) => m2[1] - m1[1]);
-            maxAverageBytesHolders = maxAverageBytesHolders.slice(0, 10);
-            if (hasMismatch) { return; }
+            maxAverageBytesHolders = maxAverageBytesHolders.slice(0, 5);
+            if (hasMismatch) {
+                if (!incompleteMaxSize || totalBytes > incompleteMaxSize[1]) {
+                    incompleteMaxSize = [metadata, totalBytes];
+                }
+                if (!incompleteMinSize || totalBytes < incompleteMinSize[1]) {
+                    incompleteMinSize = [metadata, totalBytes];
+                }
+                return;
+            }
 
             completedWorkCount += 1;
             if (metadata.subtitleFormat) { completedHasSubtitleWorkCount += 1; }
@@ -1444,12 +1492,14 @@ async function handleMigrateCommand(parameters: string[]) {
         logInfo(`max track count ${maxTrackCount}, holders: ${maxTrackHolders.map(h => h.id).join(', ')}`);
         logInfo(`max tag count ${maxTagCount}, holders: ${maxTagHolders.map(h => h.id).join(', ')}`);
         logInfo(`byte progres: ${getDisplaySize(storageTotalCompletedBytes)}/${getDisplaySize(storageTotalBytes)}`);
-        logInfo(`all work avg size ${getDisplaySize(storageTotalBytes / hasFileStructureWorkCount)}`);
+        logInfo(`all work avg size ${getDisplaySize(storageTotalBytes / hasTrackWorkCount)}`);
         logInfo(`completed work avg size ${getDisplaySize(storageTotalCompletedBytes / completedWorkCount)}`);
         // logInfo(`max total size works:`);
         // maxBytesHolders.forEach(([m, s]) => console.log(`  ${m.id}: ${getDisplaySize(s)}`));
         // logInfo(`max avg size works:`);
         // maxAverageBytesHolders.forEach(([m, s]) => console.log(`  ${m.id}: ${getDisplaySize(s)}`));
+        logInfo(`incomplete max size: ${incompleteMaxSize[0].id} ${getDisplaySize(incompleteMaxSize[1])}`);
+        logInfo(`incomplete min size: ${incompleteMinSize[0].id} ${getDisplaySize(incompleteMinSize[1])}`);
 
     // following are investigate/interesting topics:
     // shortid: short ids and avg length?
@@ -1466,6 +1516,87 @@ async function handleMigrateCommand(parameters: string[]) {
             }
         }
         logInfo(`short id avg length ${totalLength / roughWorkIds.length}`);
+    
+    // metadata base schema test
+    } else if (parameters[0] == "shortid2") {
+
+        const testIds = new Array<void>(1000).fill()
+            .map(() => Math.floor(Math.random() * 90000000 + 10000000))
+            .filter((e, i, a) => a.indexOf(e) == i)
+            .map(id => `RJ${id}`);
+
+        // load full file name, e.g. M0 and M21, with its containing work ids
+        const directories: Record<string, string[]> = {};
+        // work on each work ids, in real world will only add one work or several works at a time
+        for (const workId of testIds) {
+            for (let shortIdLength = workId.length; shortIdLength > 0; shortIdLength -= 1) {
+                const shortId = workId.substring(workId.length - shortIdLength);
+                if (Array.isArray(directories[`M${shortId}`])) {
+                    logInfo(`M${shortId} += ${workId}`);
+                    directories[`M${shortId}`].push(workId);
+                    break;
+                } else if (shortIdLength == 1) { // this creation only happen at length 1
+                    // oh, if your M0 splitted into M10 and M20, then next ...30 should be add to M30 not M0
+                    // search from next newlength until full length
+                    // TODO
+                    // autotrack.ts: M18 += RJ99204018
+                    // autotrack.ts: M18 => M218 = [RJ27649218]
+                    // autotrack.ts: M18 => M018 = [RJ86716018]
+                    // autotrack.ts: M18 => M718 = [RJ73081718]
+                    // autotrack.ts: M18 => M918 = [RJ74367918]
+                    // autotrack.ts: M18 => M318 = [RJ41684318]
+                    // autotrack.ts: M18 => M518 = [RJ52671518]
+                    // autotrack.ts: M18 => M118 = [RJ12622118]
+                    // autotrack.ts: M18 => M118 += RJ94858118
+                    // autotrack.ts: M18 => M018 += RJ99204018
+                    // autotrack.ts: M55 += RJ70146355
+                    // autotrack.ts: M06 += RJ12324006
+                    // autotrack.ts: M62 += RJ23431062
+                    // autotrack.ts: M19 += RJ11384219
+                    // autotrack.ts: M18 = [RJ35155618]
+                    let found = false;
+                    for (let newShortIdLength = shortIdLength; newShortIdLength < workId.length; newShortIdLength += 1) {
+                        if (Object.keys(directories).some(d => d.substring(2) == workId.substring(workId.length - newShortIdLength))) {
+                            // if found, should add as newshortidlength + 1
+                            found = true;
+                            console.log(`M${workId.substring(workId.length - newShortIdLength - 1)} = [${workId}]`);
+                            directories[`M${workId.substring(workId.length - newShortIdLength - 1)}`] = [workId];
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        // if not found then add a real length 1
+                        console.log(`M${shortId} = [${workId}]`);
+                        directories[`M${shortId}`] = [workId];
+                    }
+                    break;
+                }
+            }
+            // may need split twice, so need a while here
+            let tooLargeCollections = Object.entries(directories).filter(([, v]) => v.length > 8).map(([k]) => k);
+            while (tooLargeCollections.length) {
+                for (const filename of tooLargeCollections) {
+                    // split one level
+                    const originalShortIdLength = filename.length - 1;
+                    for (const workId of directories[filename]) {
+                        const shortId = workId.substring(workId.length - (originalShortIdLength + 1));
+                        if (Array.isArray(directories[`M${shortId}`])) {
+                            console.log(`${filename} => M${shortId} += ${workId}`);
+                            directories[`M${shortId}`].push(workId);
+                        } else {
+                            console.log(`${filename} => M${shortId} = [${workId}]`);
+                            directories[`M${shortId}`] = [workId];
+                        }
+                    }
+                    delete directories[filename];
+                }
+                tooLargeCollections = Object.entries(directories).filter(([, v]) => v.length > 8).map(([k]) => k);
+            }
+        }
+        for (const [shortId, workIds] of Object.entries(directories).sort(([k1], [k2]) => +k1.substring(1) - +k2.substring(1))) {
+            console.log(`${shortId}: ${workIds.join(', ')}`);
+        }
+
     // tagdb: for now, only collect occurance of provider tags and actors and print them in order
     // TODO try prefer japaness chinese character, try avoid english, chinese chinese and katakana/harakana
     } else if (parameters[0] == "tagdb") {
