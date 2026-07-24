@@ -1,19 +1,20 @@
 import pathlib, json, io, tarfile, math, base64, datetime
 from PIL import Image
 
+# formatted encoded text line width
+LINE_WIDTH = 128
 # backup data directory archive files (workinfo.json and trackinfo.json) into... ?!github!?
 def backup_raw_metadata(overwrite=False, stat=False, detailstat=False):
     sizes = []
     max_size = 0
-    for directory_path in pathlib.Path('/result').iterdir():
+    for directory_path in pathlib.Path('/activework').iterdir():
         if not directory_path.name.startswith('RJ'):
             continue
         work_path = directory_path
         with open(work_path / 'metadata.json') as f:
             metadata = json.load(f)
-        # TODO this fix should not be needed after that fix, but this variable is commonly used so keep
-        work_id = f'RJ{int(metadata['id'][2:]):08}'
-        output_path = pathlib.Path('/work/tempbackup') / f'A{work_id[2:]}.txt'
+        work_id = metadata['id']
+        output_path = pathlib.Path('/archivework') / 'metadata' / f'A{work_id[2:]}.txt'
         if not overwrite and output_path.exists():
             continue
 
@@ -32,13 +33,12 @@ def backup_raw_metadata(overwrite=False, stat=False, detailstat=False):
         cover_image_encoded_text = base64.b85encode(cover_image_content)
 
         # paths
-        json_files = [
-            work_path / f'raw-metadata.json', # TODO update after naming convention that this should include main work id
-            work_path / f'raw-tracks.json', # TODO update after naming convention that this should include main work id
-        ]
+        json_files = []
+        json_files.append(work_path / f'{work_id}-workinfo.json')
+        json_files.append(work_path / f'{work_id}-trackinfo.json')
         for edition_id in metadata['languageEditions']:
-            json_files.append(work_path / f'raw-metadata-{edition_id}.json')
-            json_files.append(work_path / f'raw-tracks-{edition_id}.json')
+            json_files.append(work_path / f'{edition_id}-workinfo.json')
+            json_files.append(work_path / f'{edition_id}-trackinfo.json')
         has_missing = False
         for path in json_files:
             if not path.exists():
@@ -57,29 +57,12 @@ def backup_raw_metadata(overwrite=False, stat=False, detailstat=False):
                         # what do you mean by this default include whitespace for comma and colon?
                         minified_content = json.dumps(json.load(f), ensure_ascii=False, separators=(',', ':')).encode('utf-8')
                     arcname = path.name
-                    # TODO update after naming convention that this should include main work id
-                    if path.name == 'raw-metadata.json':
-                        arcname = f'{work_id}-workinfo.json'
-                    elif path.name == 'raw-tracks.json':
-                        arcname = f'{work_id}-trackinfo.json'
-                    elif path.name.startswith('raw-metadata-'):
-                        if len(path.name) == 26:
-                            # also need temporary fix for \d{6} language edition id
-                            arcname = f'RJ00{path.name[15:21]}-workinfo.json'
-                        else:
-                            arcname = f'RJ{path.name[15:23]}-workinfo.json'
-                    elif path.name.startswith('raw-tracks-'):
-                        if len(path.name) == 24:
-                            arcname = f'RJ00{path.name[13:19]}-trackinfo.json'
-                        else:
-                            arcname = f'RJ{path.name[13:21]}-trackinfo.json'
-                    info = tarfile.TarInfo(name=arcname).replace(mode=0o644, mtime=mtime)
+                    info = tarfile.TarInfo(name=path.name).replace(mode=0o644, mtime=mtime)
                     info.size = len(minified_content)
                     with io.BytesIO(minified_content) as file_content:
                         tar.addfile(info, fileobj=file_content)
             json_bundle_encoded_text = base64.b85encode(tar_stream.getvalue())
 
-        LINE_WIDTH = 128
         b = b''
         for position in range(0, len(cover_image_encoded_text), LINE_WIDTH):
             b += cover_image_encoded_text[position:position + LINE_WIDTH] + b'\n'
@@ -99,14 +82,14 @@ def backup_raw_metadata(overwrite=False, stat=False, detailstat=False):
         print(f'total {total_size / 1000:.3f}kb avg {total_size / len(sizes) / 1000:.3f}kb')
 
 def restore_raw_metadata():
-    for file_path in pathlib.Path('/backup').iterdir():
+    for file_path in pathlib.Path('/archivework/metadata').iterdir():
         if not file_path.name.startswith('A') or file_path.suffix != '.txt':
             continue
-        work_id = f'RJ{int(file_path.stem[1:]):08}' # validate int and format back to \d{8}
-        output_directory = pathlib.Path('/work/temprestore') / work_id
-        if output_directory.exists():
-            continue
-        output_directory.mkdir()
+        work_id = f'RJ{int(file_path.stem[1:]):08}' # validate int and format back
+        output_directory = pathlib.Path('/activework') / work_id
+        # if output_directory.exists():
+        #     continue
+        # output_directory.mkdir()
         with open(file_path) as f:
             original_content = f.read()
         part1, part2 = original_content.split('\n\n')
@@ -114,14 +97,14 @@ def restore_raw_metadata():
         json_bundle_encoded_text = part2.replace('\n', '')
 
         # cover image
-        with open(output_directory / 'cover.avif', 'wb') as f:
-            print(f'{work_id}: write cover.avif')
-            f.write(base64.b85decode(cover_image_encoded_text))
+        # with open(output_directory / 'cover.avif', 'wb') as f:
+        #     print(f'{work_id}: write cover.avif')
+        #     f.write(base64.b85decode(cover_image_encoded_text))
         # json bundle
         with io.BytesIO(base64.b85decode(json_bundle_encoded_text)) as fileobj:
             with tarfile.open(mode='r:xz', fileobj=fileobj) as tar:
                 for member in tar.getmembers():
-                    if not member.name.endswith('-workinfo.json') and not member.name.endswith('-rawtrack.json'):
+                    if not member.name.endswith('-workinfo.json') and not member.name.endswith('-trackinfo.json'):
                         raise ValueError(f'{work_id}: unexpected arcname {arcname}')
                     extract_fileobj = tar.extractfile(member)
                     with open(output_directory / member.name, 'w') as output_fileobj:
@@ -305,7 +288,9 @@ def check_restore_metadata():
                     json.dump(extract_metadata, f, ensure_ascii=False, indent=2)
             print(f'compare pass {pair_count} pairs of values')
 
-# make_archives(overwrite=True, stat=True)
-# restore_archives()
+backup_raw_metadata(overwrite=True, stat=True)
+# restore_raw_metadata()
 # backup_metadata()
-check_restore_metadata()
+# check_restore_metadata()
+
+# docker run -it --rm --name asmr3 -v .:/work -v $ACTIVE_WORK_DIR:/activework -v ../archive/asmr:/archivework -h ASMR -w /work my/python
