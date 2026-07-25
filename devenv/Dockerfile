@@ -143,7 +143,6 @@ cp -r /tmp/node-v${NODE_VERSION}-linux-x64/include/. /usr/local/include
 for dir in /usr/local/include/node/openssl/archs/*/
 do
   if [ $dir != '/usr/local/include/node/openssl/archs/linux-x86_64/' ]; then
-    echo remove $dir
     rm -rf $dir
   fi
 done
@@ -162,11 +161,11 @@ FROM my/shell AS python
 # for this copy usage, 0.11.26 is enough, others will come with distro and python
 COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
 
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
 uv python install 3.14.6
 echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.zshrc
-RUNEOF
+EORUN
 
 # ==========================================
 # docker build --target rust --tag my/rust .
@@ -186,7 +185,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 
-RUN <<RUNEOF
+RUN <<EORUN
 set -ex
 # wget is too small compare to rust installed size
 apt-get install -y wget
@@ -198,7 +197,7 @@ rm rustup-init
 rustup --version
 rustc --version
 cargo --version
-RUNEOF
+EORUN
 
 # ========================================
 # extract zip, 7z and rar
