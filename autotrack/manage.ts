@@ -35,8 +35,20 @@ function getCurrentTime() {
     return `${v.year}${v.month.toString().padStart(2, '0')}${v.day.toString().padStart(2, '0')}T${
         v.hour.toString().padStart(2, '0')}${v.minute.toString().padStart(2, '0')}${v.second.toString().padStart(2, '0')}Z`;
 }
+// parse YYYYMMDDThhmmssZ
+function parseMetadataTime(value: string) {
+    return Temporal.ZonedDateTime.from({
+        year: +value.substring(0, 4),
+        month: +value.substring(4, 6),
+        day: +value.substring(6, 8),
+        hour: +value.substring(9, 11),
+        minute: +value.substring(11, 13),
+        second: +value.substring(13, 15),
+        timeZone: 'UTC',
+    });
+}
 
-function getDisplaySize(size: number | undefined) {
+function getDisplayFileSize(size: number | undefined) {
     let displaySize = `${size}b`;
     if (size) {
         if (size > 1073741824) {
@@ -86,15 +98,15 @@ function createProgressPipe(totalSize: number): stream.Duplex {
             let message = '  ';
             message += getDisplayTemporalDuration(now.since(startTime));
             message += ' ';
-            message += getDisplaySize(transferredBytes);
+            message += getDisplayFileSize(transferredBytes);
             message += '/'
-            message += getDisplaySize(totalSize);
+            message += getDisplayFileSize(totalSize);
 
             const sample = samples.find(s => Temporal.Duration.compare(now.since(s.time), { minutes: 1 }) < 0);
             if (completed) {
                 const speed = transferredBytes / now.since(startTime).total('seconds');
                 message += ' ';
-                message += getDisplaySize(speed); // display overall speed by the way
+                message += getDisplayFileSize(speed); // display overall speed by the way
                 message += '/s'
                 // nothing to display in last message eta part
             } else if (!sample || Temporal.Duration.compare(now.since(sample.time), { seconds: 5 }) < 0) {
@@ -103,7 +115,7 @@ function createProgressPipe(totalSize: number): stream.Duplex {
             } else {
                 const speed = (transferredBytes - sample.value) / now.since(sample.time).total('seconds');
                 message += ' ';
-                message += getDisplaySize(speed);
+                message += getDisplayFileSize(speed);
                 message += '/s'
                 const estimateRemainingTime = (totalSize - transferredBytes) / speed;
                 message += ' ETA ';
@@ -507,12 +519,12 @@ function handleDisplayMetadata(ctx: CommandContext) {
         .replaceAll('lrc', styleText('yellow', 'lrc'));
     for (const [rawRecord, index] of ctx.allRawTracks[ctx.id].map((v, i) => [v, i] as const)) {
         console.log(`    ${styleText('cyanBright', (index + 1).toString())}: ${getDisplayPath(rawRecord.path)
-            } ${styleText('gray', `[${getDisplaySize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
+            } ${styleText('gray', `[${getDisplayFileSize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
     }
     for (const editionId of ctx.meta.languageEditions) {
         for (const [rawRecord, index] of ctx.allRawTracks[editionId].map((v, i) => [v, i] as const)) {
             console.log(`    ${styleText('cyanBright', `${editionId}/${index + 1}`)}: ${getDisplayPath(rawRecord.path)
-                } ${styleText('gray', `[${getDisplaySize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
+                } ${styleText('gray', `[${getDisplayFileSize(rawRecord.size)} ${getDisplayDuration(rawRecord.duration)}]`)}`);
         }
     }
 }
@@ -862,11 +874,11 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
         if (networkTaskCount == 0 || totalSize == 0) {
             logInfo('up to date');
         } else {
-            logInfo(`will download ${networkTaskCount} files ${getDisplaySize(totalSize)}`);
+            logInfo(`will download ${networkTaskCount} files ${getDisplayFileSize(totalSize)}`);
         }
     } else {
         const totalElapsedTime = Temporal.Now.plainDateTimeISO().since(overallStartTime);
-        logInfo(`download ${networkTaskCount} files ${getDisplaySize(totalSize)} elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
+        logInfo(`download ${networkTaskCount} files ${getDisplayFileSize(totalSize)} elapsed ${getDisplayTemporalDuration(totalElapsedTime)}`);
     }
 }
 
@@ -1367,124 +1379,137 @@ async function handleMigrateCommand(parameters: string[]) {
             }
         }
 
-    // stat: work count, max tag count, max track count
-    // TODO mp3/wav/flac count
+    // stat: all kinds of statistics
     } else if (parameters[0] == 'stat') {
-        return logError('not sure whether work with new workid naming convention');
-        let hasFileStructureWorkCount = 0;
-        let hasTrackWorkCount = 0;
-        let hasTrackHasSubtitleWorkCount = 0;
-        let completedWorkCount = 0;
-        let completedHasSubtitleWorkCount = 0;
-        let maxTagCount = 0;
-        let maxTagHolders: WorkMetadata[] = [];
-        let maxTrackCount = 0;
-        let maxTrackHolders: WorkMetadata[] = [];
-        let storageTotalBytes = 0; // audio total bytes, not subtitle
-        let storageTotalCompletedBytes = 0;
-        let maxBytesHolders: [WorkMetadata, number][] = []; // byte count will not be same, this stores top 5, desc
-        let maxAverageBytesHolders: [WorkMetadata, number][] = []; // same
-        let incompleteMaxSize: [WorkMetadata, number] = null;
-        let incompleteMinSize: [WorkMetadata, number] = null;
-        // TODO monthly spread, weekday spread, hour spread
+        const displayHolders = parameters[1] == 'holders';
+
+        // major work count need file structure, has track, and not retired
+        // all other information respect these condition, this is work as avg base
+        let workCount = 0;
+        let hasSubtitleWorkCount = 0;
+        // work with specific properties count
+        let filesCompletedWorkCount = 0;
+        let filesCompletedHasSubtitleWorkCount = 0;
+        let workCountPerAudioType = { mp3: 0, wav: 0, flac: 0 };
+        let monthlySpread: Map<string, number> = new Map(); // YYYYMM => count
+        let weekdaySpread: Map<number, number> = new Map(); // weekday => count
+        let hourlySpread: Map<number, number> = new Map();  // hour => count
+        // work level properties
+        let maxTagCountHolders: [WorkMetadata, number][] = [];
+        let totalTrackCount = 0;
+        let maxTrackCountHolders: [WorkMetadata, number][] = [];
+        // size statistics, don't care whether file exists
+        let audioTotalBytes = 0;
+        let maxAudioTotalBytesHolders: [WorkMetadata, number][] = [];
+        let maxAudioAverageBytesHolders: [WorkMetadata, number][] = [];
+
+        const updateHolders = (holders: [WorkMetadata, number][], metadata: WorkMetadata, value: number) => {
+            holders.push([metadata, value]);
+            holders.sort((m1, m2) => m2[1] - m1[1]);
+            holders.splice(0, holders.length, ...holders.slice(0, 10));
+        };
         await Promise.all(roughWorkIds.map(async workId => {
             const metadataPath = makepath(workId, 'metadata.json');
-            if (!npfs.existsSync(metadataPath)) { return; }
-            hasFileStructureWorkCount += 1;
+            // this is now an error not a count
+            if (!npfs.existsSync(metadataPath)) { return logError(`${workId}: missing metadata.json`); }
             const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            // retired work is not in major work count
             if (metadata.retired) { return; }
+            // this is now an error not a count
+            if (metadata.tracks.length == 0) { return logError(`${workId}: no tracks`); }
+            workCount += 1;
+            if (metadata.tracks.some(t => t.subtitleProviderPath)) { hasSubtitleWorkCount += 1; }
 
-            // subtitle: a has-subtitle tag
-            // 2: 1 for score, TODO temporary 1 for wip flag
-            const tagElementCount = metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 2 + (metadata.subtitleFormat ? 1 : 0);
-            if (tagElementCount > maxTagCount) {
-                maxTagCount = tagElementCount;
-                maxTagHolders = [metadata];
-            } else if (tagElementCount == maxTagCount) {
-                maxTagHolders.push(metadata);
-            }
+            (workCountPerAudioType as any)[metadata.audioFormat] += 1;
+            const month = metadata.addTime.substring(0, 6);
+            monthlySpread.set(month, monthlySpread.has(month) ? monthlySpread.get(month) + 1 : 1);
+            const addTime = parseMetadataTime(metadata.addTime);
+            hourlySpread.set(addTime.hour, hourlySpread.has(addTime.hour) ? hourlySpread.get(addTime.hour) + 1 : 1);
+            weekdaySpread.set(addTime.dayOfWeek, weekdaySpread.has(addTime.dayOfWeek) ? weekdaySpread.get(addTime.dayOfWeek) + 1 : 1);
 
-            if (metadata.tracks.length == 0) { return; }
-            hasTrackWorkCount += 1;
-            if (metadata.subtitleFormat) { hasTrackHasSubtitleWorkCount += 1; }
-            if (metadata.tracks.length > maxTrackCount) {
-                maxTrackCount = metadata.tracks.length;
-                maxTrackHolders = [metadata];
-            } else if (metadata.tracks.length == maxTrackCount) {
-                maxTrackHolders.push(metadata);
-            }
+            updateHolders(maxTagCountHolders, metadata,
+                // tag count: provider tags + actors + my tags + 1 for score + optional 1 for "has subtitle" tag
+                metadata.providerTags.length + metadata.actors.length + metadata.tags.length + 1 + (metadata.subtitleFormat ? 1 : 0));
+            totalTrackCount += metadata.tracks.length;
+            updateHolders(maxTrackCountHolders, metadata, metadata.tracks.length);
 
             // completed work count is same check as validation, but no error message and early return
-            const mainRawTracksPath = makepath(workId, 'raw-tracks.json');
+            const mainRawTracksPath = makepath(workId, `${metadata.id}-trackinfo.json`);
             const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
             const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
             // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
             for (const editionId of metadata.languageEditions) {
-                const editionRawTracksPath = makepath(workId, `raw-tracks-${editionId}.json`);
+                const editionRawTracksPath = makepath(workId, `${editionId}-trackinfo.json`);
                 const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
                 rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
             }
-            let hasMismatch = false;
+
             let totalBytes = 0;
+            let filesCompleted = true;
             for (const track of metadata.tracks) {
                 const audioPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
-                const rawAudio = rawTracks[metadata.audioWorkId].find(r => r.path == track.providerPath);
-                if (!rawAudio) { hasMismatch = true; continue; }
-                totalBytes += rawAudio.size;
-                storageTotalBytes += rawAudio.size;
-                if (!npfs.existsSync(audioPath)) {
-                    hasMismatch = true;
-                    continue;
+                const rawAudio = rawTracks[(metadata.audioWorkId ?? metadata.id)].find(r => r.path == track.providerPath);
+                if (!rawAudio) {
+                    return logError(`${workId} track ${track.index}: invalid provider path? ${track.providerPath}`);
                 }
-                storageTotalCompletedBytes += rawAudio.size;
+                totalBytes += rawAudio.size;
+
+                // following are completed check
+                if (!npfs.existsSync(audioPath)) { filesCompleted = false; }
                 const stat = await fs.stat(audioPath);
-                if (!rawAudio || stat.size != rawAudio.size) { return; }
+                if (!rawAudio || stat.size != rawAudio.size) { filesCompleted = false; }
                 if (metadata.subtitleFormat && track.subtitleProviderPath) {
                     const subtitlePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
-                    if (!npfs.existsSync(subtitlePath)) { return; }
+                    if (!npfs.existsSync(subtitlePath)) { filesCompleted = false; }
                     if (track.subtitleProviderPath != '書き取り') {
                         const stat = await fs.stat(subtitlePath);
-                        const rawSubtitle = rawTracks[metadata.subtitleWorkId].find(r => r.path == track.subtitleProviderPath);
-                        if (!rawSubtitle || stat.size != rawSubtitle.size) { return; }
+                        const rawSubtitle = rawTracks[(metadata.subtitleWorkId ?? metadata.id)].find(r => r.path == track.subtitleProviderPath);
+                        if (!rawSubtitle || stat.size != rawSubtitle.size) { filesCompleted = false; }
                     }
                 }
             }
 
-            maxBytesHolders.push([metadata, totalBytes]);
-            maxBytesHolders.sort((m1, m2) => m2[1] - m1[1]);
-            maxBytesHolders = maxBytesHolders.slice(0, 5);
-            const averageBytes = totalBytes / metadata.tracks.length;
-            maxAverageBytesHolders.push([metadata, averageBytes]);
-            maxAverageBytesHolders.sort((m1, m2) => m2[1] - m1[1]);
-            maxAverageBytesHolders = maxAverageBytesHolders.slice(0, 5);
-            if (hasMismatch) {
-                if (!incompleteMaxSize || totalBytes > incompleteMaxSize[1]) {
-                    incompleteMaxSize = [metadata, totalBytes];
-                }
-                if (!incompleteMinSize || totalBytes < incompleteMinSize[1]) {
-                    incompleteMinSize = [metadata, totalBytes];
-                }
-                return;
-            }
+            audioTotalBytes += totalBytes;
+            updateHolders(maxAudioTotalBytesHolders, metadata, totalBytes);
+            updateHolders(maxAudioAverageBytesHolders, metadata, totalBytes / metadata.tracks.length);
 
-            completedWorkCount += 1;
-            if (metadata.subtitleFormat) { completedHasSubtitleWorkCount += 1; }
+            if (filesCompleted) {
+                filesCompletedWorkCount += 1;
+                if (metadata.subtitleFormat) { filesCompletedHasSubtitleWorkCount += 1; }
+            }
         }));
-        logInfo(`work count rough: ${roughWorkIds.length}`);
-        logInfo(`work count file structure: ${hasFileStructureWorkCount}`);
-        logInfo(`work count has track: ${hasTrackWorkCount} (has subtitle: ${hasTrackHasSubtitleWorkCount})`);
-        logInfo(`work count complete: ${completedWorkCount} (has subtitle: ${completedHasSubtitleWorkCount})`);
-        logInfo(`max track count ${maxTrackCount}, holders: ${maxTrackHolders.map(h => h.id).join(', ')}`);
-        logInfo(`max tag count ${maxTagCount}, holders: ${maxTagHolders.map(h => h.id).join(', ')}`);
-        logInfo(`byte progres: ${getDisplaySize(storageTotalCompletedBytes)}/${getDisplaySize(storageTotalBytes)}`);
-        logInfo(`all work avg size ${getDisplaySize(storageTotalBytes / hasTrackWorkCount)}`);
-        logInfo(`completed work avg size ${getDisplaySize(storageTotalCompletedBytes / completedWorkCount)}`);
-        // logInfo(`max total size works:`);
-        // maxBytesHolders.forEach(([m, s]) => console.log(`  ${m.id}: ${getDisplaySize(s)}`));
-        // logInfo(`max avg size works:`);
-        // maxAverageBytesHolders.forEach(([m, s]) => console.log(`  ${m.id}: ${getDisplaySize(s)}`));
-        logInfo(`incomplete max size: ${incompleteMaxSize[0].id} ${getDisplaySize(incompleteMaxSize[1])}`);
-        logInfo(`incomplete min size: ${incompleteMinSize[0].id} ${getDisplaySize(incompleteMinSize[1])}`);
+
+        logInfo(`work count ${workCount}`);
+        logInfo(`files completed work count ${filesCompletedWorkCount}`);
+        logInfo(`has subtitle ${hasSubtitleWorkCount} completed has subtitle ${filesCompletedHasSubtitleWorkCount}`);
+        logInfo(`mp3 ${workCountPerAudioType.mp3} wav ${workCountPerAudioType.wav} flac ${workCountPerAudioType.flac}`);
+        if (displayHolders) {
+            logInfo('monthly spread:');
+            const monthlyRecords = Array.from(monthlySpread.entries());
+            monthlyRecords.sort((r1, r2) => r1[0].localeCompare(r2[0]));
+            monthlyRecords.forEach(([m, v]) => console.log(`  ${m}: ${v.toString().padStart(2, ' ')} ${new Array(v).fill('-').join('')}`));
+            logInfo('weekday spread:');
+            const weekdayRecords = Array.from(weekdaySpread.entries());
+            weekdayRecords.sort((r1, r2) => r1[0] - r2[0]);
+            weekdayRecords.forEach(([m, v]) => console.log(`  ${m}: ${v.toString().padStart(2, ' ')} ${new Array(v).fill('-').join('')}`));
+            logInfo('hourly spread (utc+8):');
+            const hourlyRecords = Array.from(hourlySpread.entries());
+            hourlyRecords.sort((r1, r2) => r1[0] - r2[0]);
+            hourlyRecords.forEach(([m, v]) => console.log(`  ${((m + 8) % 24).toString()
+                .padStart(2, '0')}: ${v.toString().padStart(2, ' ')} ${new Array(v).fill('-').join('')}`));
+        }
+        logInfo(`total track count ${totalTrackCount} avg track count ${Math.floor(totalTrackCount / workCount * 100) / 100}`);
+        logInfo(`max track count ${maxTrackCountHolders[0][0].id} ${maxTrackCountHolders[0][1]}`);
+        if (displayHolders) { maxTrackCountHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${c}`)); }
+        logInfo(`max tag count ${maxTagCountHolders[0][0].id} ${maxTagCountHolders[0][1]}`);
+        if (displayHolders) { maxTagCountHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${c}`)); }
+
+        logInfo(`audio total size ${getDisplayFileSize(audioTotalBytes)}`);
+        logInfo(`audio avg size ${getDisplayFileSize(audioTotalBytes / workCount)}`);
+        logInfo(`max audio size ${maxAudioTotalBytesHolders[0][0].id} ${getDisplayFileSize(maxAudioTotalBytesHolders[0][1])}`);
+        if (displayHolders) { maxAudioTotalBytesHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${getDisplayFileSize(c)}`)); }
+        logInfo(`max audio avg size ${maxAudioAverageBytesHolders[0][0].id} ${getDisplayFileSize(maxAudioAverageBytesHolders[0][1])}`);
+        if (displayHolders) { maxAudioAverageBytesHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${getDisplayFileSize(c)}`)); }
 
     // following are investigate/interesting topics:
     // shortid: short ids and avg length?
@@ -1524,48 +1549,6 @@ async function handleMigrateCommand(parameters: string[]) {
         const allActors = Object.entries(actorCounts).sort((t1, t2) => t1[0].localeCompare(t2[0]));
         for (const [tag, times] of allTags) { console.log(`${tag}: ${times}`); }
         for (const [tag, times] of allActors) { console.log(`${tag}: ${times}`); }
-
-    } else if (parameters[0] == 'newworkid') {
-        // 1. directory name
-        for (const roughWorkId of roughWorkIds) {
-            if (roughWorkId.length == 8) {
-                await fs.rename(makepath(roughWorkId), makepath(`RJ00${roughWorkId.substring(2)}`));
-            }
-        }
-        // 2. metadata.id, metadata.languageEditions, metadata.audioWorkId, metadata.subtitleWorkId
-        for (const workId of roughWorkIds) {
-            const metadataPath = makepath(workId, 'metadata.json');
-            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-            if (metadata.id.length == 8) {
-                metadata.id = `RJ00${metadata.id.substring(2)}`;
-            }
-            metadata.languageEditions = metadata.languageEditions.map(e => e.length == 8 ? `RJ00${e.substring(2)}` : e);
-            if (metadata.audioWorkId) {
-                metadata.audioWorkId = metadata.audioWorkId.length == 8 ? 'RJ00' + metadata.audioWorkId.substring(2) : metadata.audioWorkId;
-                if (metadata.audioWorkId == metadata.id) {
-                    delete metadata.audioWorkId;
-                }
-            }
-            if (metadata.subtitleWorkId) {
-                metadata.subtitleWorkId = metadata.subtitleWorkId.length == 8 ? 'RJ00' + metadata.subtitleWorkId.substring(2) : metadata.subtitleWorkId;
-                if (metadata.subtitleWorkId == metadata.id) {
-                    delete metadata.subtitleWorkId;
-                }
-            }
-            await writeMetadata(metadata);
-        }
-        // 3. raw metadata file names
-        for (const workId of roughWorkIds) {
-            const metadataPath = makepath(workId, 'metadata.json');
-            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-            await fs.rename(makepath(metadata.id, 'raw-metadata.json'), makepath(metadata.id, `${metadata.id}-workinfo.json`));
-            await fs.rename(makepath(metadata.id, 'raw-tracks.json'), makepath(metadata.id, `${metadata.id}-trackinfo.json`));
-            for (const editionId of metadata.languageEditions) {
-                const legacyEditionId = editionId.startsWith('RJ00') ? 'RJ' + editionId.substring(4) : editionId;
-                await fs.rename(makepath(metadata.id, `raw-metadata-${legacyEditionId}.json`), makepath(metadata.id, `${editionId}-workinfo.json`));
-                await fs.rename(makepath(metadata.id, `raw-tracks-${legacyEditionId}.json`), makepath(metadata.id, `${editionId}-trackinfo.json`));
-            }
-        }
 
     } else {
         logInfo('USAGE: autotrack.ts migrate validate | subtitle WORKID');
