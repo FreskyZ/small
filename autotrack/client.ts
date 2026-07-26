@@ -143,8 +143,10 @@ createSummaryElements();
 // your javascript api will translate this?
 const MaxTagCount = +summaryElements.container.dataset.maxTag;
 const MaxTrackCount = +summaryElements.container.dataset.maxTrack;
+const MaxCommentCount = +summaryElements.container.dataset.maxComment;
 delete summaryElements.container.dataset.maxTag;
 delete summaryElements.container.dataset.maxTrack;
+delete summaryElements.container.dataset.maxComment;
 
 // detail container for the active work
 const detailElements = {
