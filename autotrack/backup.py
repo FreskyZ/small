@@ -1,4 +1,4 @@
-import pathlib, json, io, tarfile, math, base64, datetime
+import pathlib, json, io, tarfile, math, base64, datetime, sys
 from PIL import Image # uv add Pillow
 
 # formatted encoded text line width
@@ -136,6 +136,7 @@ def check_restore():
                 extract_metadata = json.load(extract_fileobj)
 
                 work_id = pathlib.Path(member.name).stem
+                print(f'work id {work_id}')
                 original_metadata_path = pathlib.Path('/activework') / work_id / 'metadata.json'
                 with open(original_metadata_path) as f:
                     original_metadata = json.load(f)
@@ -171,10 +172,11 @@ def check_restore():
                         assert_eq(extract_track['name'], original_track['name'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
                     assert_eq(extract_track['duration'], original_track['duration'], f'{member.name} track {original_track['index']}')
-                    if 'comment' in original_track:
-                        assert_eq(extract_track['comment'], original_track['comment'], f'{member.name} track {original_track['index']}')
+                    if 'comments' in original_track:
+                        assert_eq(extract_track['comments'], original_track['comments'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
                     assert_eq(extract_track['providerPath'], original_track['providerPath'], f'{member.name} track {original_track['index']}')
+                    assert_eq(extract_track['providerSize'], original_track['providerSize'], f'{member.name} track {original_track['index']}')
                     if 'subtitleProviderPath' in original_track:
                         assert_eq(extract_track['subtitleProviderPath'], original_track['subtitleProviderPath'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
@@ -241,7 +243,11 @@ def check_restore():
                     #     json.dump(json.loads(extract_content), output_fileobj, ensure_ascii=False, indent=2)
     print(f'raw metadata: match bytes {total_ok_bytes} characters {total_ok_characters} lines {total_ok_lines}')
 
-make_backup()
-# check_restore()
+if len(sys.argv) > 1 and sys.argv[1] == 'backup':
+    make_backup()
+elif len(sys.argv) > 1 and sys.argv[1] == 'check-restore':
+    check_restore()
+else:
+    print('USAGE: backup.py backup | check-restore')
 
 # docker run -it --rm --name asmr3 -v .:/work -v $ACTIVE_WORK_DIR:/activework -v ../archive/asmr:/archivework -h ASMR -w /work my/python
