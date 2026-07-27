@@ -72,15 +72,21 @@ def transcribe(input_path, chunks, model):
             current_time += sentence_time
     loginfo(f'{len(timed_sentences)} sentences')
     vss_version = os.environ['AT_VSS_VERSION'] if 'AT_VSS_VERSION' in os.environ else '1'
-    subtitle_path = pathlib.Path('/work/output') / input_path.with_suffix(f'.mp3.vss.{vss_version}').name
+    subtitle_path = pathlib.Path(f'/data/{work_id}') / input_path.with_suffix(f'.mp3.vss').name
     loginfo(f'write {subtitle_path}')
     with open(subtitle_path, 'w') as f:
         for start_time, end_time, sentence in timed_sentences:
             f.write(f'{start_time:.3f},{end_time:.3f},{sentence}\n')
 
+if len(sys.argv) < 2:
+    print('USAGE: transcribe.py WORKID')
+    exit(1)
+work_id = sys.argv[1]
+print(f'work id {work_id}')
+
 loginfo('load model')
 model = Qwen3ASRModel.from_pretrained(
-    '/work/models/Qwen3-ASR-1.7B',
+    '/data/AT/Models/Qwen3-ASR-1.7B',
     dtype=torch.bfloat16,
     device_map='cuda:0',
     max_new_tokens=512,
@@ -88,7 +94,7 @@ model = Qwen3ASRModel.from_pretrained(
     attn_implementation="flash_attention_2",
 )
 loginfo('load model complete')
-for file_path in pathlib.Path('/work/input').iterdir():
+for file_path in pathlib.Path(f'/data/{work_id}/').iterdir():
     if file_path.suffix == '.mp3':
         audio_duration = get_audio_duration(file_path)
         if audio_duration > 3600:

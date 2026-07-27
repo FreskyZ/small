@@ -9,10 +9,19 @@ and later extended to represent 经络 in traditional chinese medicine, and late
 - cover.jpg: cover image
 - track{index}.{audioformat}: audio tracks, e.g. track1.mp3
 - track{index}.{audioformat}.{subtitleformat}: subtitle files, e.g. track1.mp3.vtt
-- raw-metadata.json: archive
-- raw-tracks.json: archive
-- raw-metadata-{editionid}.json: language edition works archive
-- raw-tracks-{editionid}.json: language edition works archive
+- {workid}-workinfo.json: raw metadata archive
+- {workid}-trackinfo.json: raw metadata archive
+
+current workflow
+
+- autotrack.ts WORKID use a new work id to add a new work,
+  this will download raw metadata, cover image and create initial metadata
+- autotrack.ts WORKID add 1:10 ... to add tracks, this will not actually download files
+- autotrack.ts WORKID dry to check files to download
+- autotrack.ts WORKID commit to actually download files
+- autotrack.ts WORKID subtitle for most subtitle works, convert subtitle format to archive(?) format
+- wslc run -it --rm --name asr1 --gpus all -v .:/data -h ASR -w /work my/asr && uv run transcribe.py
+- backup.py backup to convert jpg cover image to avif cover image?
 
 ### Subtitle Formats
 
@@ -333,12 +342,12 @@ although github actions is very unreliable in recent years, github is still a re
 
 to avoid direct sexsual content in github, although I think this level of such content is very ok for github and for a no one
 care repository, also considering raw track files are very large and contain a lot of redundent information, that have a full
-work title in all records, and have multiple duplicate url encoded titles in all records, and most works use less than 10 tracks
-while most works have tens of records and some works have hundreds of records, and the solution is to compress the files, no
-password needed because they are already public information, from provider, and from provider provider
+work title in all records, and have multiple duplicate url encoded titles in all records, and most works include less than 10
+tracks while most works have tens of records and some works have hundreds, and the solution is to bundle and compress the files,
+no password needed because they are already public information from provider and provider provider
 
 binary files do not work well with git, base64 them into text and split into normal width lines may be good, and makes them
-somewhat looks like a git tracked minified js library, not good enough but will work, oh, can use base85 to reduce more file size
+somewhat looks like a git tracked minified js library, not good enough but will work UPDATE use base85 to reduce more file size
 
 collect stat:
 
@@ -364,31 +373,26 @@ additional stat that appears later
 
 - direct bundle result in 100kb binary, json minify get 98kb (this is all work total, not avg)
 - remove redundent top level properties and change provider path and subtitle provider path to index get 60kb
+- UPDATE after data structure updates after backup strategy stabilize, the text file is about 90kb, which is acceptable
 
 file structure considerations
 
-- metadata is mutable, raw metadata files (include raw tracks) are immutable, should not put one work's raw
-  metadata and metadata in one file to avoid frequently update a file that most of the part is not changed
+- metadata is mutable, raw metadata files (include raw track records) are immutable, should not put one work's
+  raw metadata and metadata in one file to avoid frequently update a file that most of the part is not changed
 - as concluted that cover image and json files should not be in one compressed file, base85 encode their content
   separately and split into lines separately and put them in one text file separated by additional one empty line
-- distinguish main work and edition work's raw metadata files with different naming convention is not convenient,
-  unify them to same, also update real file structure later
+- it's not convenient to distinguish main work and edition work's raw metadata files with different
+  naming conventions, make them same
 - name archive file A12345678.txt, A for archive, avoid RJ to reduce discoverability by plain search?
-  distinguish \d{6} work id and \d{8} work id is inconvenient, unify them to \d{8}, update real structure later
-- avoid properties in metadata that is directly available in raw metadata, like provider link and provider tags,
-  check each property
-  - work title and track names may contain direct content, discard them?
-  - change times to timestamps to reduce their discoverability a little
-  - change my tags to index in fixed list
-  - leave comments in work and track and management comments as they generally don't contain direct content
-  - change provider path and subtitle provider path to sequence of index in each level, *after* sort each level
-    item name, because some work have strange order in existing raw tracks, I guess they may be returning a random
-    result, sort them should be more reasonable (do not modify archived raw track data)
-  - audio format and subtitle format check extension in path
-  - subtitle work change to an index in language edition list, that is sorted list in all ids in this archive file
-- can use a custom format similar to yml for metadata to reduce size UPDATE not good
-- can use a custom format with some csv without meaningful properties for metadata to reduce size
-  UPDATE not good, hard to understand the result text file and the encoding and decoding code
-- can put them in something like hash file structure?
-  e.g. put file names 12xxxx in folder 12, 34xxxx in folder 34
-  e.g. put id 12345678 in file M8.txt, put id 23456789 in M9.txt UPDATE not good, complex to implement
+  distinguish \d{6} work id and \d{8} work id is inconvenient, unify them to \d{8}
+- avoid properties in metadata that is directly available in raw metadata, like provider link and provider tags
+- about main metadata backup format
+  - use a custom format similar to yml to reduce size UPDATE not good
+  - use a custom format similar to yml without meaningful property name to reduce size UPDATE not good
+  - use a custom format similar to csv to reduce size UPDATE not good
+  - use something like hash file structure?
+    e.g. put file names 12xxxx in folder 12, 34xxxx in folder 34
+    e.g. put id 12345678 in file M8.txt, put id 23456789 in M9.txt UPDATE not good, complex to implement
+- all of the above approaches are hard to understand and may cause error in the conversion process
+  and the result is bundle all metadata files in one compressed file, the result is about 100kb which is ok
+

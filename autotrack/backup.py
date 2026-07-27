@@ -90,8 +90,6 @@ def make_backup(detailstat=False):
         metadata.pop('actors')
         metadata.pop('providerTags')
         metadata.pop('languageEditions')
-        metadata.pop('audioFormat')
-        metadata.pop('subtitleFormat', 0)
 
         metadata_entry = tarfile.TarInfo(name=f'{work_id}.json')
         metadata_entry = metadata_entry.replace(mode=0o644, mtime=mtime)
