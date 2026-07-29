@@ -25,14 +25,11 @@ interface TrackRecord {
     comments?: string[],
     // not actually used, but to determine whether this track has subtitle
     subtitleProviderPath?: number,
+    workInProgress?: true,
     // client side properties
-    cues: Cue[],
-}
-interface Cue {
+    subtitleText: string,
     // start and end time in seconds
-    start: number,
-    end: number,
-    text: string,
+    subtitleRecords: { start: number, end: number, text: string }[],
 }
 
 // get all work summary data that build by management script
@@ -159,8 +156,6 @@ const detailElements = {
     tags: [] as HTMLSpanElement[],
     addTime: null as HTMLSpanElement,
     accessTime: null as HTMLSpanElement,
-    // TODO make this multiple?
-    comment: null as HTMLSpanElement,
 };
 function createDetailElements() {
     // line 1: id, provider link, provider provider link,
@@ -216,13 +211,6 @@ function createDetailElements() {
     detailElements.accessTime.classList.add('time');
     line3Element.appendChild(detailElements.accessTime);
     detailElements.container.appendChild(line3Element);
-    // line 4: comment
-    const line4Element = document.createElement('div');
-    line4Element.classList.add('line4');
-    detailElements.comment = document.createElement('span');
-    detailElements.comment.classList.add('comment');
-    line4Element.appendChild(detailElements.comment);
-    detailElements.container.appendChild(line4Element);
 }
 createDetailElements();
 
@@ -232,19 +220,20 @@ const trackElements = {
         container: HTMLDivElement,
         title: HTMLSpanElement,
         duration: HTMLSpanElement,
-        // TODO make this multiple?
-        comment: HTMLDivElement,
     }[],
-    // it's not good to put in player-container because that's fixed,
-    // it's not very good to put here but put here for now
-    subtitleContainer: null as HTMLDivElement,
+    comments: [] as HTMLDivElement[],
 }
 function createTrackElements() {
     trackElements.tracks = new Array<void>(MaxTrackCount).fill().map((_, plainIndex) => {
         const container = document.createElement('div');
         container.classList.add('track-container');
-        container.addEventListener('click', () =>
-            render({ activeTrackPlainIndex: state.activeTrackPlainIndex == plainIndex ? -1 : plainIndex }));
+        container.addEventListener('click', () => {
+            if (container.classList.contains('wip')) {
+                alert('track work in progress');
+            } else {
+                render({ activeTrackPlainIndex: state.activeTrackPlainIndex == plainIndex ? -1 : plainIndex });
+            }
+        });
         const title = document.createElement('span');
         title.classList.add('title');
         container.appendChild(title);
@@ -252,15 +241,14 @@ function createTrackElements() {
         duration.classList.add('duration');
         container.appendChild(duration);
         trackElements.container.appendChild(container);
-        // note comment is not child of track container but parallel to track container
+        return { container, title, duration };
+    });
+    trackElements.comments = new Array<void>(MaxCommentCount).fill().map(() => {
         const comment = document.createElement('div');
         comment.classList.add('comment');
         trackElements.container.appendChild(comment);
-        return { container, title, duration, comment };
+        return comment;
     });
-    trackElements.subtitleContainer = document.createElement('div');
-    trackElements.subtitleContainer.classList.add('subtitle-container');
-    trackElements.container.appendChild(trackElements.subtitleContainer);
 }
 createTrackElements();
 
@@ -268,7 +256,9 @@ createTrackElements();
 const playerElements = {
     container: document.querySelector<HTMLDivElement>('div#player-container'),
     audio: null as HTMLAudioElement,
-    activeSubtitle: null as HTMLDivElement,
+    // oh, currently max sentence count is near 800, which nearly need a virtual scroll,
+    // actually I'm not that care about the active subtitle, so a plain textarea is enough
+    subtitle: null as HTMLDivElement,
     buttons: [] as HTMLButtonElement[],
 };
 function createPlayerElements() {
@@ -277,9 +267,9 @@ function createPlayerElements() {
     audio.autoplay = true;
     playerElements.container.appendChild(audio);
 
-    playerElements.activeSubtitle = document.createElement('div');
-    playerElements.activeSubtitle.classList.add('active-subtitle');
-    playerElements.container.appendChild(playerElements.activeSubtitle);
+    playerElements.subtitle = document.createElement('div');
+    playerElements.subtitle.classList.add('subtitle-container');
+    playerElements.container.appendChild(playerElements.subtitle);
 
     const buttonContainer = document.createElement('div');
     buttonContainer.classList.add('button-container');
@@ -309,80 +299,24 @@ function createPlayerElements() {
         trackElements.tracks[state.activeTrackPlainIndex].duration.innerText = `-${minutes}:${seconds.toString().padStart(2, '0')}`;
         const percent = Math.floor(audio.currentTime / audio.duration * 9950) / 100 + 0.5;
         trackElements.tracks[state.activeTrackPlainIndex].container.style.background = `linear-gradient(to right, #666, #666 ${percent}%, #444 ${percent}%)`;
-        playerElements.activeSubtitle.innerText = allworks
-            .find(w => w.id == state.activeWorkId)
-            ?.tracks?.[state.activeTrackPlainIndex]
-            ?.cues?.find(c => c.start < audio.currentTime && c.end > audio.currentTime)?.text ?? '';
+        const work = allworks.find(w => w.id == state.activeWorkId);
+        const track = work?.tracks?.[state.activeTrackPlainIndex];
+        // this seems easier?
+        if (work && track && work.subtitleFormat == 'vss') {
+            const newInnerText = track.subtitleRecords.map(c => {
+                const negativeTime = track.duration - c.start;
+                const minutes = Math.floor(negativeTime / 60);
+                const seconds = Math.floor(negativeTime - minutes * 60);
+                const current = c.start < audio.currentTime && c.end > audio.currentTime;
+                return `-${minutes}:${seconds.toString().padStart(2, '0')} ${current ? '>> ' : ''}${c.text}${current ? ' <<' : ''}`;
+            }).join('\n');
+            if (playerElements.subtitle.innerText != newInnerText) { playerElements.subtitle.innerText = newInnerText; }
+        }
     });
     audio.addEventListener('pause', () => playerElements.buttons[2].innerText = '|>');
     audio.addEventListener('play', () => playerElements.buttons[2].innerText = '||');
 }
 createPlayerElements();
-
-// NOTE copy this function to management script and parse all subtitle files
-function parseSubtitle(subtitleFormat: string, rawtext: string): Cue[] {
-    const results: Cue[] = [];
-    if (subtitleFormat == 'vtt') {
-        // vtt: split line, recognize --> and the 2 timestamps around it, and take the next line as text
-        const lines = rawtext.split('\n');
-        for (let rowIndex = 0; rowIndex < lines.length; rowIndex += 1) {
-            if (lines[rowIndex].includes('-->')) {
-                const splitted = lines[rowIndex].split('-->');
-                const leftMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[0]);
-                if (!leftMatch) {
-                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at left part? "${lines[rowIndex]}"`);
-                    continue;
-                }
-                const rightMatch = /(?:\d\d:)?\d\d:\d\d\.\d{3}/.exec(splitted[1]);
-                if (!rightMatch) {
-                    console.log(`subtitle: line#${rowIndex} has arrow but does not contain timestamp at right part? "${lines[rowIndex]}"`);
-                    continue;
-                }
-                if (rowIndex + 1 >= lines.length) {
-                    console.log(`subtitle: line#${rowIndex} has arrow but not have next line?`);
-                    continue;
-                }
-                let start = leftMatch[0].length == 9
-                    ? +leftMatch[0].substring(0, 2) * 60 + +leftMatch[0].substring(3, 5) + +leftMatch[0].substring(6, 9) / 1000
-                    : +leftMatch[0].substring(0, 2) * 3600 + +leftMatch[0].substring(3, 5) * 60 + +leftMatch[0].substring(6, 8) + +leftMatch[0].substring(9, 12) / 1000;
-                let end = rightMatch[0].length == 9
-                    ? +rightMatch[0].substring(0, 2) * 60 + +rightMatch[0].substring(3, 5) + +rightMatch[0].substring(6, 9) / 1000
-                    : +rightMatch[0].substring(0, 2) * 3600 + +rightMatch[0].substring(3, 5) * 60 + +rightMatch[0].substring(6, 8) + +rightMatch[0].substring(9, 12) / 1000;
-                results.push({ start, end, text: lines[rowIndex + 1] });
-            }
-        }
-    } else if (subtitleFormat == 'lrc') {
-        // split line, recognize [\d\d:\d\d.\d\d] and later part if payload, every payload begins at this line's time and ends at next line's time
-        const lines = rawtext.split('\n');
-        let incompleteRecord: Cue = null;
-        for (const line of lines) {
-            const match = /^\[(\d\d):(\d\d\.\d\d)\]/.exec(line.trim());
-            if (match) {
-                const time = +match[1] * 60 + +match[2];
-                if (incompleteRecord) { incompleteRecord.end = time; }
-                const text = line.trim().substring(10).trim();
-                if (text) {
-                    incompleteRecord = { start: time, end: time, text };
-                    results.push(incompleteRecord);
-                } else {
-                    // don't forget to clear, or else [time1]text1\n[time2]\n[time3], time3 will be assigned to text1
-                    incompleteRecord = null;
-                }
-            }
-        }
-    } else if (subtitleFormat == 'vss') {
-        return rawtext.trim().split('\n').filter(x => x).map<Cue>(r => {
-            const [start, end, text] = r.split(',').map(x => x.trim());
-            return { start: +start, end: +end, text };
-        });
-    } else if (subtitleFormat == 'txt') {
-        // txt don't have time associated texts, it only displays in the textarea
-        return [];
-    } else {
-        return [{ start: 0, end: 86400, text: 'you forget to add other subtitle format support in front end!' }];
-    }
-    return results;
-}
 
 // input newstate here so you can diff them to make render more efficient
 async function render(newState: Partial<PageState>) {
@@ -418,7 +352,6 @@ async function render(newState: Partial<PageState>) {
             detailElements.container.classList.remove('visible');
             // tracks
             trackElements.container.classList.remove('visible');
-            trackElements.subtitleContainer.classList.remove('visible');
             // player
             playerElements.container.classList.remove('visible');
         } else {
@@ -457,21 +390,35 @@ async function render(newState: Partial<PageState>) {
             addTag(`${work.score >= 0 ? '+' : '-'}${work.score}`, 'my-score');
             detailElements.addTime.innerText = `add: ${work.addTime}`;
             detailElements.accessTime.innerText = `access: ${work.lastAccessTime}`;
-            detailElements.comment.innerText = work.comments ? `--"${work.comments.join(';')}"` : '';
             // tracks
             trackElements.container.classList.add('visible');
             trackElements.tracks.forEach(t => t.container.classList.remove('visible'));
-            trackElements.tracks.forEach(t => t.comment.classList.remove('visible'));
+            trackElements.comments.forEach(c => c.classList.remove('visible'));
+            let commentIndex = 0;
+            let trackContainerChildIndex = 1;
+            for (const comment of work.comments ?? []) {
+                trackElements.comments[commentIndex].classList.add('visible');
+                trackElements.comments[commentIndex].innerText = `--"${comment}"`;
+                trackElements.comments[commentIndex].style.order = trackContainerChildIndex.toString();
+                commentIndex += 1;
+                trackContainerChildIndex += 1;
+            }
             // note that track plain index is not track index
             for (const [track, trackPlainIndex] of work.tracks.map((t, i) => [t, i] as const)) {
                 trackElements.tracks[trackPlainIndex].container.classList.add('visible');
+                if (track.workInProgress) { trackElements.tracks[trackPlainIndex].container.classList.add('wip'); }
                 trackElements.tracks[trackPlainIndex].title.innerText = `${track.index}. ${track.name ?? `トラック${track.index}`}`;
                 const minutes = Math.floor(track.duration / 60);
                 const seconds = Math.floor(track.duration - 60 * minutes);
                 trackElements.tracks[trackPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-                if (track.comments) {
-                    trackElements.tracks[trackPlainIndex].comment.classList.add('visible');
-                    trackElements.tracks[trackPlainIndex].comment.innerText = `--"${track.comments.join(';')}"`;
+                trackElements.tracks[trackPlainIndex].container.style.order = trackContainerChildIndex.toString();
+                trackContainerChildIndex += 1;
+                for (const comment of track.comments ?? []) {
+                    trackElements.comments[commentIndex].classList.add('visible');
+                    trackElements.comments[commentIndex].innerText = `--"${comment}"`;
+                    trackElements.comments[commentIndex].style.order = trackContainerChildIndex.toString();
+                    commentIndex += 1;
+                    trackContainerChildIndex += 1;
                 }
             }
         }
@@ -490,7 +437,6 @@ async function render(newState: Partial<PageState>) {
             trackElements.tracks[oldPlainIndex].duration.innerText = `${minutes}:${seconds.toString().padStart(2, '0')}`;
         }
         if (state.activeTrackPlainIndex < 0) {
-            trackElements.subtitleContainer.classList.remove('visible');
             playerElements.container.classList.remove('visible');
             playerElements.audio.src = '';
         } else {
@@ -500,26 +446,31 @@ async function render(newState: Partial<PageState>) {
             playerElements.audio.src = `./${work.id}/track${track.index}.${work.audioFormat}`;
             trackElements.tracks[state.activeTrackPlainIndex].container.classList.add('active');
             if (track.subtitleProviderPath) {
-                playerElements.activeSubtitle.classList.add('visible');
-                if (!Array.isArray(track.cues)) {
+                playerElements.subtitle.classList.add('visible');
+                if (!Array.isArray(track.subtitleText)) {
                     const response = await fetch(`./${work.id}/track${track.index}.${work.audioFormat}.${work.subtitleFormat}`);
                     if (!response.ok) {
-                        track.cues = [{ start: 0, end: track.duration, text: `failed to load subtitle: ${response.status}` }];
+                        track.subtitleText = `failed to load subtitle: ${response.status}`;
+                        track.subtitleRecords = [];
                     } else {
-                        track.cues = parseSubtitle(work.subtitleFormat, await response.text());
+                        track.subtitleText = await response.text();
+                        track.subtitleRecords = work.subtitleFormat == 'vss'
+                            ? track.subtitleText.trim().split('\n').filter(x => x).map(r => {
+                                const [start, end, text] = r.split(',').map(x => x.trim());
+                                return { start: +start, end: +end, text };
+                            }) : [];
                     }
                 }
-                trackElements.subtitleContainer.classList.add('visible');
-                trackElements.subtitleContainer.scroll(0, 0);
-                trackElements.subtitleContainer.innerText = track.cues.map(c => {
+
+                playerElements.subtitle.scroll(0, 0);
+                playerElements.subtitle.innerText = track.subtitleRecords.map(c => {
                     const negativeTime = track.duration - c.start;
                     const minutes = Math.floor(negativeTime / 60);
                     const seconds = Math.floor(negativeTime - minutes * 60);
                     return `-${minutes}:${seconds.toString().padStart(2, '0')} ${c.text}`;
-                }).join('\n');
+                }).join('\n') || track.subtitleText;
             } else {
-                playerElements.activeSubtitle.classList.remove('visible');
-                trackElements.subtitleContainer.classList.remove('visible');
+                playerElements.subtitle.classList.remove('visible');
             }
         }
     }

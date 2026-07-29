@@ -119,29 +119,20 @@ div#detail-container>div>span.time {
     font-size: 10px;
     margin-right: 8px;
 }
-div#detail-container>div.line4 {
-    display: flex;
-    justify-content: flex-end;
-}
-div#detail-container>div>span.comment {
-    margin-right: 8px;
-    font-size: 14px;
-    font-family: sans-serif;
-    font-style: italic;
-    color: #aaa;
-}
 
 /* tracks */
 div#tracks-container {
     /* add a large padding to avoid player block elements */
-    padding-bottom: 100px;
+    padding-bottom: 240px;
+    display: flex;
+    flex-flow: column;
 }
 div#tracks-container:not(.visible) {
     display: none;
 }
 div.track-container {
     border-radius: 4px;
-    margin: 6px 8px;
+    margin: 4px 8px;
     padding: 4px 8px;
     background: #444;
     color: #ccc;
@@ -155,11 +146,17 @@ div.track-container.active {
 div.track-container.visible {
     display: flex;
 }
+div.track-container.wip {
+    cursor: not-allowed;
+}
 div.track-container:not(.visible) {
     display: none;
 }
 div.track-container>span.title {
     line-height: 24px;
+}
+div.track-container.wip>span.title {
+    color: #999;
 }
 div.track-container>span.duration {
     font-size: 12px;
@@ -181,17 +178,6 @@ div#tracks-container>div.comment {
 div#tracks-container>div.comment:not(.visible) {
     display: none;
 }
-div#tracks-container>div.subtitle-container {
-    margin: 8px;
-    color: #aaa;
-    font-size: 12px;
-    max-height: 200px;
-    overflow-x: hidden;
-    overflow-y: auto;
-}
-div#tracks-container>div.subtitle-container:not(.visible) {
-    display: none;
-}
 
 /* player */
 div#player-container {
@@ -210,6 +196,7 @@ div#player-container>div.button-container {
     gap: 8px;
     background-color: #444c;
     border-radius: 4px;
+    backdrop-filter: blur(2px);
 }
 div#player-container>div.button-container>button {
     height: 28px;
@@ -218,7 +205,22 @@ div#player-container>div.button-container>button {
 div#player-container>div.button-container>button:nth-child(3) {
     width: 60px;
 }
-div#player-container>div.active-subtitle {
+div#player-container>div.subtitle-container {
+    padding: 8px;
+    margin-bottom: 4px;
+    color: #aaa;
+    font-size: 12px;
+    max-height: 120px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    background-color: #4448;
+    border-radius: 4px;
+    backdrop-filter: blur(2px);
+}
+div#player-container>div.subtitle-container:not(.visible) {
+    display: none;
+}
+/* div#player-container>div.active-subtitle {
     font-size: 12px;
     color: #ccc;
     line-height: 16px;
@@ -230,4 +232,4 @@ div#player-container>div.active-subtitle {
 }
 div#player-container>div.active-subtitle:not(.visible) {
     display: none;
-}
+} */

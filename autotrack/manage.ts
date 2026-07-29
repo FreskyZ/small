@@ -337,14 +337,14 @@ interface WorkMetadata {
     score: number,
     // main work id or edition id
     audioWorkId?: string,
-    // TODO similar to subtitleformat, this is result audio format
-    // and will convert mp3, wav, flac to ogg? and record here?
-    // but before I actually converted all audio files, this is still consistent as provider path and file path
+    // this is result audio format, not redundent information from track.providerpath,
+    // provider path accept mp3, wav and flac, result format currently only allow ogg,
+    // before conversion complete and run WORKID ogg command to mark audio format, this is empty
     audioFormat?: string,
     // empty for no subtitle, main work id or edition id
     subtitleWorkId?: string,
     // this is result subtitle format, not redundent information from track.subtitleproviderpath,
-    // see convertProviderSubtitle, before conversion or external operation complete, this contain nothing
+    // see convertProviderSubtitle, before conversion or external operation complete, this is empty
     subtitleFormat?: string,
     // no need to use tree structure because most of the time I only use one directory,
     // even if really need same name files from multiple directory I can prepend something
@@ -701,7 +701,6 @@ function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: nu
     }
     // assign these after validation
     if (audioWorkId != ctx.id) { ctx.meta.audioWorkId = audioWorkId; }
-    ctx.meta.audioFormat = audioFormat;
 
     logInfo(`add track ${trackIndex} audio ${audioProviderPath}${subtitleWorkId ? ` subtitle ${subtitleProviderPath}` : ''}`);
     ctx.meta.tracks.push({
@@ -1003,7 +1002,8 @@ async function handleProcessSubtitle(ctx: CommandContext, parameters: string[]) 
     let hasDisplayedMarkASRMessage = false;
     let existingProviderSubtitleFormat: string;
     for (const track of ctx.meta.tracks) {
-        const providerSubtitlePathBase = makepath(ctx.id, `track${track.index}.${ctx.meta.audioFormat}`);
+        const audioRecord = ctx.allRawRecords[ctx.meta.audioWorkId ?? ctx.id][track.providerPath - 1];
+        const providerSubtitlePathBase = makepath(ctx.id, `track${track.index}${path.extname(audioRecord.path)}`);
         if (track.subtitleProviderPath == -1) {
             // TODO is this assign vss ok? is this assign needed?
             existingProviderSubtitleFormat = 'vss';
@@ -1059,6 +1059,7 @@ async function handleProcessSubtitle(ctx: CommandContext, parameters: string[]) 
         }
     }
 
+    // ATTENTION TODO cannot decide whether vss file should use .mp3.vss or .ogg.vss, should change them to .vss
     // if no track has subtitleproviderpath, do nothing
     if (ctx.meta.tracks.some(t => t.subtitleProviderPath)) {
         // if all tracks with subtitleproviderpath has existing matching file, mark metadat.subtitleformat
@@ -1533,7 +1534,9 @@ async function handleMigrateCommand(parameters: string[]) {
         let audioTotalDuration = 0; // in seconds
         let maxAudioTotalDurationHolders: [WorkMetadata, number][] = [];
         let maxAudioAverageDurationHolders: [WorkMetadata, number][] = [];
+        let maxSubtitleCountHolders: [WorkMetadata, number][] = [];
         // because I'm simply dividing file size by duration, actual boundary is more relaxed
+        // UPDATE what do you mean by ogg 9kbps still listens similar (7kbps listens not good)
         let bitrateCounts = {
             'mp3 >320kbps': 0, // actual boundary is 330
             'mp3 320kbps': 0,
@@ -1596,6 +1599,7 @@ async function handleMigrateCommand(parameters: string[]) {
 
             let totalBytes = 0;
             let totalDuration = 0;
+            let maxSubtitleCount = 0;
             // stat's completed flag need both provider files exist and processed files exist
             let filesCompleted = true;
             for (const track of metadata.tracks) {
@@ -1649,7 +1653,12 @@ async function handleMigrateCommand(parameters: string[]) {
                         }
                     }
                     const subtitleFilePath = makepath(workId, `track${track.index}.${metadata.audioFormat}.${metadata.subtitleFormat}`);
-                    if (!npfs.existsSync(subtitleFilePath)) { filesCompleted = false; }
+                    if (!npfs.existsSync(subtitleFilePath)) {
+                        filesCompleted = false;
+                    } else {
+                        const subtitleCount = (await fs.readFile(subtitleFilePath, 'utf-8')).split('\n').length;
+                        maxSubtitleCount = Math.max(maxSubtitleCount, subtitleCount);
+                    }
                 }
             }
 
@@ -1659,6 +1668,7 @@ async function handleMigrateCommand(parameters: string[]) {
             audioTotalDuration += totalDuration;
             updateHolders(maxAudioTotalDurationHolders, metadata, totalDuration);
             updateHolders(maxAudioAverageDurationHolders, metadata, totalDuration / metadata.tracks.length);
+            updateHolders(maxSubtitleCountHolders, metadata, maxSubtitleCount);
 
             if (filesCompleted) {
                 filesCompletedWorkCount += 1;
@@ -1707,44 +1717,10 @@ async function handleMigrateCommand(parameters: string[]) {
         if (displayHolders) { maxAudioTotalDurationHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${getDisplayDuration(c)}`)); }
         logInfo(`max audio avg duration ${maxAudioAverageDurationHolders[0][0].id} ${getDisplayDuration(maxAudioAverageDurationHolders[0][1])}`);
         if (displayHolders) { maxAudioAverageDurationHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${getDisplayDuration(c)}`)); }
+        logInfo(`max subtitle count ${maxSubtitleCountHolders[0][0].id} ${maxSubtitleCountHolders[0][1]}`);
+        if (displayHolders) { maxSubtitleCountHolders.forEach(([m, c]) => console.log(`  ${m.id}: ${c}`)); }
 
         if (displayHolders) { Object.entries(bitrateCounts).forEach(([k, v]) => console.log(`  ${k}: ${v}`)); }
-
-    // migrate existing vtt,srt,lrc subtitle to vss
-    } else if (parameters[0] == "subtitle") {
-        for (const workId of roughWorkIds) {
-            const metadataPath = makepath(workId, 'metadata.json');
-            if (!npfs.existsSync(metadataPath)) {
-                return logError(`${workId}: incomplete file structure`);
-            }
-            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-            if (metadata.subtitleFormat == 'vtt' || metadata.subtitleFormat == 'srt' || metadata.subtitleFormat == 'lrc') {
-                logInfo(`${workId}: migrate ${metadata.subtitleFormat} to vss`);
-
-                const mainRawTracksPath = makepath(workId, `${metadata.id}-trackinfo.json`);
-                const mainNotFlatRawRecords = JSON.parse(await fs.readFile(mainRawTracksPath, 'utf-8')) as RawTrackRecord[];
-                const rawTracks = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatRawRecords }) };
-                // there are normally 1, uncommonly 2, rarely 3 editions, no need to parallel
-                for (const editionId of metadata.languageEditions) {
-                    const editionRawTracksPath = makepath(workId, `${editionId}-trackinfo.json`);
-                    const editionNotFlatRawRecords = JSON.parse(await fs.readFile(editionRawTracksPath, 'utf-8')) as RawTrackRecord[];
-                    rawTracks[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatRawRecords });
-                }
-                const ctx: CommandContext = { id: workId, meta: metadata, allRawRecords: rawTracks, rawMetadata: null };
-                ctx.meta.subtitleFormat = undefined;
-                await handleProcessSubtitle(ctx, []);
-                await writeMetadata(metadata);
-
-            } else if (metadata.subtitleFormat == 'vss') {
-                logInfo(`${workId}: good vss, but you may need to check asr generated legacy files`);
-            } else if (metadata.subtitleFormat == 'pdf') {
-                logInfo(`${workId}: another pdf?`);
-            } else if (metadata.subtitleFormat == 'txt') {
-                logInfo(`${workId}: good txt`);
-            } else if (metadata.subtitleFormat) {
-                logError(`${workId}: ? ${metadata.subtitleFormat}`);
-            }
-        }
 
     // after migrating comments from single string to array, keep this for easy inspection of all existing comments
     } else if (parameters[0] == "comment") {
@@ -1758,6 +1734,63 @@ async function handleMigrateCommand(parameters: string[]) {
             metadata.managementComments?.forEach(c => console.log(`${workId}: ${c}`));
             metadata.tracks.forEach(t => t.comments?.forEach(c => console.log(`${workId}: track ${t.index} ${c}`)));
         }
+
+    // migrate file structure
+    } else if (parameters[0] == "filename") {
+        // manually include extra files
+        for (const workId of roughWorkIds) {
+            const metadataPath = makepath(workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) {
+                return logError(`${workId}: incomplete file structure`);
+            }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+
+            const mainFileInfoPath = makepath(workId, `${metadata.id}-trackinfo.json`);
+            const mainNotFlatFileInfos = JSON.parse(await fs.readFile(mainFileInfoPath, 'utf-8')) as RawTrackRecord[];
+            const filemap = { [workId]: flattenRawTracks({ type: 'folder', title: '(root)', children: mainNotFlatFileInfos }) };
+            for (const editionId of metadata.languageEditions) {
+                const editionFileInfoPath = makepath(workId, `${editionId}-trackinfo.json`);
+                const editionNotFlatFileInfos = JSON.parse(await fs.readFile(editionFileInfoPath, 'utf-8')) as RawTrackRecord[];
+                filemap[editionId] = flattenRawTracks({ type: 'folder', title: '(root)', children: editionNotFlatFileInfos });
+            }
+
+            // rename {workid}-trackinfo.json to {workid}-fileinfo.json
+            // await fs.rename(makepath(workId, `${workId}-trackinfo.json`), makepath(workId, `${workId}-fileinfo.json`));
+            // for (const editionId of metadata.languageEditions) {
+            //     await fs.rename(makepath(workId, `${editionId}-trackinfo.json`), makepath(workId, `${editionId}-fileinfo.json`));
+            // }
+
+            // rename track{trackindex}.mp3 to {workid}-file{fileindex}.mp3
+            // rename track{trackindex}.mp3.vtt to {workid}-file{fileindex}.vtt
+            for (const track of metadata.tracks) {
+
+            }
+
+            const providerSubtitleFormat = metadata.tracks[0]?.subtitleProviderPath
+                ? path.extname(filemap[metadata.subtitleWorkId ?? workId][metadata.tracks[0].subtitleProviderPath - 1]?.path ?? '') : null;
+
+            const knownFiles = [
+                'cover.jpg',
+                'cover.avif',
+                'metadata.json',
+                `${workId}-workinfo.json`,
+                `${workId}-trackinfo.json`,
+            ].concat(metadata.languageEditions.map(editionId => [
+                `${editionId}-workinfo.json`,
+                `${editionId}-trackinfo.json`,
+            ]).flat()).concat(metadata.tracks.map(track => [
+                `track${track.index}.${metadata.audioFormat}`,
+                track.subtitleProviderPath ? `track${track.index}.${metadata.audioFormat}${providerSubtitleFormat}` : null,
+                // specially exclude all vss file, they are not extra file
+                track.subtitleProviderPath ? `track${track.index}.${metadata.audioFormat}.vss` : null,
+            ].filter(x => x)).flat());
+            for (const filename of await fs.readdir(makepath(workId))) {
+                if (!knownFiles.includes(filename)) {
+                    console.log(`${workId}: extra file ${filename}`);
+                }
+            }
+        }
+
 
     // following are investigate/interesting topics:
     // shortid: short ids and avg length?
@@ -1812,5 +1845,3 @@ if (command == 'page') {
 } else {
     printUsage();
 }
-
-// docker run -it --rm --name at1 -v .:/work -v $WORKDIR:/result -h AT -w /work my/node
