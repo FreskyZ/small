@@ -1,9 +1,12 @@
-import pathlib, json, io, tarfile, math, base64, datetime, sys
+import pathlib, json, io, tarfile, math, base64, datetime, sys, re, subprocess, random
+import pypdf          # uv add pypdf
 from PIL import Image # uv add Pillow
+                      # apt install ffmpeg
 
 # formatted encoded text line width
 LINE_WIDTH = 128
 
+# TODO split backup raw metadata and metadata
 # backup metadata files into base64 (similar) encoded tar archive
 # and then format them into text file and save into... ?! github !?
 def make_backup(detailstat=False):
@@ -19,7 +22,7 @@ def make_backup(detailstat=False):
             metadata = json.load(f)
         work_id = metadata['id']
 
-        # 1. cover image encoded text
+        # 1. cover image encoded text TODO separate into a command
         # convert jpg image to avif image if not exist
         # this part is here because it is easier to use in python
         cover_image_path = work_path / 'cover.avif'
@@ -241,11 +244,116 @@ def check_restore():
                     #     json.dump(json.loads(extract_content), output_fileobj, ensure_ascii=False, indent=2)
     print(f'raw metadata: match bytes {total_ok_bytes} characters {total_ok_characters} lines {total_ok_lines}')
 
+# except transcribe? include transcribe? into one manage.py NO transcribe.py imports too slow, and they run in different container
+
+# TODO messages should include work id, to work with batch conversion
+def convert_cover_image(work_id, work_path):
+    cover_image_path = work_path / 'cover.avif'
+    if not cover_image_path.exists():
+        raw_cover_image_path = work_path / 'cover.jpg'
+        if not raw_cover_image_path.exists():
+            print(f'{work_id}: cover.jpg missing, skip this work')
+            #continue
+        print(f'{work_id}: convert cover.jpg to cover.avif')
+        with Image.open(work_path / 'cover.jpg') as image:
+            image.save(cover_image_path, 'AVIF')
+    with open(cover_image_path, 'rb') as f:
+        cover_image_encoded_text = base64.b85encode(f.read())
+
+# for now the only one work extract result contain a lot of non text content,
+# although all visible text content do exist in result, it is not usable, leave this here for future investigation,
+# the only one work is manually copied visible content in pdf reader to fix
+def convert_pdf_subtitle(work_id, work_path):
+    for path in pathlib.Path(f'/activework/{work_id}').iterdir():
+        if path.name.startswith('track') and path.name.endswith('.pdf'):
+            print(f'read {path}')
+            reader = PdfReader(path)
+            text = ''
+            for page in reader.pages:
+                text += page.extract_text()
+            with open(path.with_suffix('.txt'), 'w') as f:
+                print(f'write {path.with_suffix('.txt')} text length {len(text)}')
+                f.write(text)
+
+# for now only provider path is in returned array
+def flatten_fileinfo(root):
+    results = []
+    def collect(folder, basepath):
+        for subfolder in sorted((f for f in folder['children'] if f['type'] == 'folder'), key=lambda f: f['title']):
+            collect(subfolder, basepath + '/' + subfolder['title'])
+        for item in sorted((f for f in folder['children'] if f['type'] != 'folder'), key=lambda f: f['title']):
+            results.append(basepath + '/' + item['title'])
+    collect(root, '')
+    return results
+
+task_count = 0
+def convert_audio_format(work_id, work_path):
+    with open(work_path / 'metadata.json') as f:
+        metadata = json.load(f)
+    files = {}
+    for meid in [work_id] + metadata['languageEditions']:
+        with open(work_path / f'{meid}-fileinfo.json') as f:
+            fileinfo = json.load(f)
+        files[meid] = flatten_fileinfo({ 'type': 'folder', 'title': '', 'children': fileinfo })
+    audio_work_id = metadata['audioWorkId'] if 'audioWorkId' in metadata else work_id
+
+    for track in metadata['tracks']:
+        audio_file = files[audio_work_id][track['providerPath'] - 1]
+        audio_suffix = pathlib.Path(audio_file).suffix
+        provider_file_local_path = work_path / f'{audio_work_id}-file{track['providerPath']}{audio_suffix}'
+        modern_file_path = work_path / f'track{track['index']}.ogg'
+        if not provider_file_local_path.exists():
+            print(f'{work_id}: track {track['index']} provider file local path not exist, skip, {provider_file_local_path}')
+            continue
+        # if modern_file_path.exists():
+        #     print(f'{work_id}: track {track['index']} modern file path exist, {modern_file_path}, skip')
+        #     continue
+        # ATTENTION TODO process 1/10 of the files and experience the parameter
+        if random.random() < 0.9:
+            continue
+        # ar 24000: audio sample rate, 48khz is cd quality, but 24khz is already good and half the size
+        # -q:a 5: Sets audio quality (0-10, 5 is default, higher values mean better quality)
+        # -vn: Disables video stream (optional for audio-only files but helps avoid potential issues)
+        # UPDATE: for libvorbis, -b:a parameter is not respected, for -q:a 5, it use about 160kbps vbr (variable bitrate)
+        # ffmpeg -i /data/RJ12345678/RJ12345678-file10.wav -ar 24000 -q:a 5 -vn -v quiet -c:a libvorbis /data/RJ12345678/track5.ogg
+        parameters = ['ffmpeg', '-i', str(provider_file_local_path), \
+            '-b:a', '32000', '-vn', '-v', 'quiet', '-c:a', 'libopus', '-y', str(modern_file_path)]
+        global task_count
+        task_count += 1
+        print(f'{work_id}: run {' '.join(parameters)}')
+        child = subprocess.run(parameters, capture_output=True)
+        if child.stdout:
+            print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
+        if child.stderr:
+            # by the way, the default verbose output, configuration, library, etc. content are all stderr
+            print('\n'.join([f'  ffmpeg: {r}' for r in child.stderr.decode().strip().split('\n')]))
+        if child.returncode:
+            print(f'{work_id}: ffmpeg return code {child.returncode}, abort, remember to clean {chunk_path}')
+            continue
+        print(f'{work_id}: create {modern_file_path}')
+
+def migrate():
+    for directory_path in pathlib.Path('/data').iterdir():
+        if directory_path.name.startswith('RJ'):
+            # if directory_path.name in ('RJ00114194', 'RJ00132269', 'RJ00194640'):
+            convert_audio_format(directory_path.name, directory_path)
+    print(task_count)
+
+if len(sys.argv) < 1:
+    print('USAGE:')
+    print('    convert.py avif WORKID      convert cover.jpg to cover.avif')
+    print('    convert.py pdf WORKID       convert track(\\d+)\\.pdf to track$1.txt')
+    print('    convert.py opus WORKID      convert track(\\d+)\\.(mp3|wav|flac) to track$1.ogg')
+    print('    convert.py migrate          convert all works')
+    # local-backup
+    exit(1)
+work_id = sys.argv[1]
+
 if len(sys.argv) > 1 and sys.argv[1] == 'backup':
     make_backup()
 elif len(sys.argv) > 1 and sys.argv[1] == 'check-restore':
     check_restore()
+elif len(sys.argv) > 1 and sys.argv[1] == 'migrate':
+    migrate()
 else:
-    print('USAGE: backup.py backup | check-restore')
-
-# docker run -it --rm --name asmr3 -v .:/work -v $ACTIVE_WORK_DIR:/activework -v ../archive/asmr:/archivework -h ASMR -w /work my/python
+    print('USAGE: manage.py backup | check-restore')
