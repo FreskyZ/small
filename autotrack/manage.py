@@ -5,15 +5,11 @@ from PIL import Image # uv add Pillow
 
 # formatted encoded text line width
 LINE_WIDTH = 128
-
-# TODO split backup raw metadata and metadata
 # backup metadata files into base64 (similar) encoded tar archive
 # and then format them into text file and save into... ?! github !?
-def make_backup(detailstat=False):
+def backup_raw_metadata(stat=False):
     # (work id, raw metadata backup text file size)[]
     raw_metadata_file_sizes = []
-    metadata_tar_fileobj = io.BytesIO()
-    metadata_tar = tarfile.open(f'metadata.tar.xz', 'w:xz', fileobj=metadata_tar_fileobj)
     for directory_path in pathlib.Path('/activework').iterdir():
         if not directory_path.name.startswith('RJ'):
             continue
@@ -22,28 +18,21 @@ def make_backup(detailstat=False):
             metadata = json.load(f)
         work_id = metadata['id']
 
-        # 1. cover image encoded text TODO separate into a command
-        # convert jpg image to avif image if not exist
-        # this part is here because it is easier to use in python
+        # 1. cover image encoded text
         cover_image_path = work_path / 'cover.avif'
         if not cover_image_path.exists():
-            raw_cover_image_path = work_path / 'cover.jpg'
-            if not raw_cover_image_path.exists():
-                print(f'{work_id}: cover.jpg missing, skip this work')
-                continue
-            print(f'{work_id}: convert cover.jpg to cover.avif')
-            with Image.open(work_path / 'cover.jpg') as image:
-                image.save(cover_image_path, 'AVIF')
+            print(f'{work_id}: cover image missing, skip this work')
+            continue
         with open(cover_image_path, 'rb') as f:
             cover_image_encoded_text = base64.b85encode(f.read())
 
         # collect raw metadata files
         raw_metadata_files = [] # paths
         raw_metadata_files.append(work_path / f'{work_id}-workinfo.json')
-        raw_metadata_files.append(work_path / f'{work_id}-trackinfo.json')
+        raw_metadata_files.append(work_path / f'{work_id}-fileinfo.json')
         for edition_id in metadata['languageEditions']:
             raw_metadata_files.append(work_path / f'{edition_id}-workinfo.json')
-            raw_metadata_files.append(work_path / f'{edition_id}-trackinfo.json')
+            raw_metadata_files.append(work_path / f'{edition_id}-fileinfo.json')
         files_completed = True
         for path in raw_metadata_files:
             if not path.exists():
@@ -66,7 +55,9 @@ def make_backup(detailstat=False):
                     # what do you mean by this default add whitespace for comma and colon?
                     minified_content = json.dumps(raw_metadata, ensure_ascii=False, separators=(',', ':'))
                     encoded_content = minified_content.encode('utf-8')
-                    info = tarfile.TarInfo(name=path.name).replace(mode=0o644, mtime=mtime)
+                    # TODO temp
+                    arcname = path.name.replace('fileinfo', 'trackinfo') if path.name.endswith('fileinfo.json') else path.name
+                    info = tarfile.TarInfo(name=arcname).replace(mode=0o644, mtime=mtime)
                     info.size = len(encoded_content)
                     with io.BytesIO(encoded_content) as entry_fileobj:
                         tar.addfile(info, fileobj=entry_fileobj)
@@ -81,9 +72,27 @@ def make_backup(detailstat=False):
             b += json_bundle_encoded_text[position:position + LINE_WIDTH] + b'\n'
         raw_metadata_file_sizes.append((work_id, len(b)))
         raw_metadata_backup_path = pathlib.Path('/archivework') / 'metadata' / f'A{work_id[2:]}.txt'
-        print(f'write {raw_metadata_backup_path} size {len(b) / 1000:.2f}kb')
+        if stat:
+            print(f'write {raw_metadata_backup_path} size {len(b) / 1000:.2f}kb')
         with open(raw_metadata_backup_path, 'wb') as raw_metadata_backup_file:
             raw_metadata_backup_file.write(b)
+
+    if stat:
+        for work_id, size in sorted(raw_metadata_file_sizes, key=lambda s: s[1]):
+            print(f'{work_id:>10} {f'{size / 1000:.3f}':>7}kb {'-' * math.floor(size / max_size * 100)}')
+    raw_metadata_total_size = sum(map(lambda s: s[1], raw_metadata_file_sizes))
+    print(f'raw metadata total {raw_metadata_total_size / 1000:.3f}kb avg {raw_metadata_total_size / len(raw_metadata_file_sizes) / 1000:.3f}kb')
+
+def backup_metadata():
+    metadata_tar_fileobj = io.BytesIO()
+    metadata_tar = tarfile.open(f'metadata.tar.xz', 'w:xz', fileobj=metadata_tar_fileobj)
+    for directory_path in pathlib.Path('/activework').iterdir():
+        if not directory_path.name.startswith('RJ'):
+            continue
+        work_path = directory_path
+        with open(work_path / 'metadata.json') as f:
+            metadata = json.load(f)
+        work_id = metadata['id']
 
         # 4. metadata entry in metadata bundle
         # cleanup redundent properties that can be retrieved from other source or calculated
@@ -94,6 +103,8 @@ def make_backup(detailstat=False):
         metadata.pop('providerTags')
         metadata.pop('languageEditions')
 
+        # for all tar file entries, use metadata.addTime as mtime
+        mtime = datetime.datetime.strptime(metadata['addTime'], '%Y%m%dT%H%M%SZ').replace(tzinfo=datetime.UTC).timestamp()
         metadata_entry = tarfile.TarInfo(name=f'{work_id}.json')
         metadata_entry = metadata_entry.replace(mode=0o644, mtime=mtime)
         minified_metadata_content = json.dumps(metadata, ensure_ascii=False, separators=(',', ':'))
@@ -111,12 +122,6 @@ def make_backup(detailstat=False):
     print(f'write /archivework/metadata.txt size {len(b) / 1000:.2f}kb')
     with open('/archivework/metadata.txt', 'wb') as metadata_backup_file:
         metadata_backup_file.write(b)
-
-    if detailstat:
-        for work_id, size in sorted(raw_metadata_file_sizes, key=lambda s: s[1]):
-            print(f'{work_id:>10} {f'{size / 1000:.3f}':>7}kb {'-' * math.floor(size / max_size * 100)}')
-    raw_metadata_total_size = sum(map(lambda s: s[1], raw_metadata_file_sizes))
-    print(f'raw metadata total {raw_metadata_total_size / 1000:.3f}kb avg {raw_metadata_total_size / len(raw_metadata_file_sizes) / 1000:.3f}kb')
 
 def assert_eq(lhs, rhs, message_header, comp=None):
     # why do lambda without paren syntax error?
@@ -177,7 +182,6 @@ def check_restore():
                         assert_eq(extract_track['comments'], original_track['comments'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
                     assert_eq(extract_track['providerPath'], original_track['providerPath'], f'{member.name} track {original_track['index']}')
-                    assert_eq(extract_track['providerSize'], original_track['providerSize'], f'{member.name} track {original_track['index']}')
                     if 'subtitleProviderPath' in original_track:
                         assert_eq(extract_track['subtitleProviderPath'], original_track['subtitleProviderPath'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
@@ -228,7 +232,8 @@ def check_restore():
                     extract_content = json.load(extract_fileobj)
                     # need json format to compare text content
                     extract_content = json.dumps(extract_content, ensure_ascii=False, indent=2)
-                    current_file_path = output_directory / member.name
+                    # TODO temp
+                    current_file_path = output_directory / (member.name.replace('trackinfo', 'fileinfo') if member.name.endswith('trackinfo.json') else member.name)
                     with open(current_file_path) as current_file:
                         current_content = current_file.read()
                     if extract_content == current_content:
@@ -244,27 +249,27 @@ def check_restore():
                     #     json.dump(json.loads(extract_content), output_fileobj, ensure_ascii=False, indent=2)
     print(f'raw metadata: match bytes {total_ok_bytes} characters {total_ok_characters} lines {total_ok_lines}')
 
-# except transcribe? include transcribe? into one manage.py NO transcribe.py imports too slow, and they run in different container
-
-# TODO messages should include work id, to work with batch conversion
-def convert_cover_image(work_id, work_path):
+def convert_cover_image(work_path):
+    work_id = work_path.name
     cover_image_path = work_path / 'cover.avif'
-    if not cover_image_path.exists():
-        raw_cover_image_path = work_path / 'cover.jpg'
-        if not raw_cover_image_path.exists():
-            print(f'{work_id}: cover.jpg missing, skip this work')
-            #continue
-        print(f'{work_id}: convert cover.jpg to cover.avif')
-        with Image.open(work_path / 'cover.jpg') as image:
-            image.save(cover_image_path, 'AVIF')
-    with open(cover_image_path, 'rb') as f:
-        cover_image_encoded_text = base64.b85encode(f.read())
+    if cover_image_path.exists():
+        print(f'{work_id}: cover.avif exists, skip')
+        return
+    raw_cover_image_path = work_path / 'cover.jpg'
+    if not raw_cover_image_path.exists():
+        print(f'{work_id}: cover.jpg missing, skip')
+        return
+    print(f'{work_id}: convert cover.jpg to cover.avif')
+    with Image.open(work_path / 'cover.jpg') as image:
+        image.save(cover_image_path, 'AVIF')
+    print(f'{work_id}: create cover.avif complete')
 
-# for now the only one work extract result contain a lot of non text content,
-# although all visible text content do exist in result, it is not usable, leave this here for future investigation,
-# the only one work is manually copied visible content in pdf reader to fix
-def convert_pdf_subtitle(work_id, work_path):
-    for path in pathlib.Path(f'/activework/{work_id}').iterdir():
+# for now only one work have pdf subtitle, and the extraction result contains lot of non text content,
+# although all expected result is inside the result, it is not usable, leave it here for future investigation
+# that work is fixed by manually copying content in a pdf reader
+# if this will be used in the future, update to read metadata to find pdf files instead of iterating
+def convert_pdf_subtitle(work_path):
+    for path in work_path.iterdir():
         if path.name.startswith('track') and path.name.endswith('.pdf'):
             print(f'read {path}')
             reader = PdfReader(path)
@@ -272,10 +277,10 @@ def convert_pdf_subtitle(work_id, work_path):
             for page in reader.pages:
                 text += page.extract_text()
             with open(path.with_suffix('.txt'), 'w') as f:
-                print(f'write {path.with_suffix('.txt')} text length {len(text)}')
+                print(f'{work_path.name}: write {path.with_suffix('.txt')} text length {len(text)}')
                 f.write(text)
 
-# for now only provider path is in returned array
+# for now returned array of objects only contain provider path
 def flatten_fileinfo(root):
     results = []
     def collect(folder, basepath):
@@ -286,8 +291,8 @@ def flatten_fileinfo(root):
     collect(root, '')
     return results
 
-task_count = 0
-def convert_audio_format(work_id, work_path):
+def convert_audio_format(work_path):
+    work_id = work_path.name
     with open(work_path / 'metadata.json') as f:
         metadata = json.load(f)
     files = {}
@@ -301,59 +306,123 @@ def convert_audio_format(work_id, work_path):
         audio_file = files[audio_work_id][track['providerPath'] - 1]
         audio_suffix = pathlib.Path(audio_file).suffix
         provider_file_local_path = work_path / f'{audio_work_id}-file{track['providerPath']}{audio_suffix}'
-        modern_file_path = work_path / f'track{track['index']}.ogg'
+        modern_file_path = work_path / f'track{track['index']}.opus'
         if not provider_file_local_path.exists():
             print(f'{work_id}: track {track['index']} provider file local path not exist, skip, {provider_file_local_path}')
             continue
-        # if modern_file_path.exists():
-        #     print(f'{work_id}: track {track['index']} modern file path exist, {modern_file_path}, skip')
-        #     continue
-        # ATTENTION TODO process 1/10 of the files and experience the parameter
-        if random.random() < 0.9:
+        if modern_file_path.exists():
+            print(f'{work_id}: track {track['index']} modern file path exist, {modern_file_path}, skip')
             continue
-        # ar 24000: audio sample rate, 48khz is cd quality, but 24khz is already good and half the size
-        # -q:a 5: Sets audio quality (0-10, 5 is default, higher values mean better quality)
-        # -vn: Disables video stream (optional for audio-only files but helps avoid potential issues)
-        # UPDATE: for libvorbis, -b:a parameter is not respected, for -q:a 5, it use about 160kbps vbr (variable bitrate)
-        # ffmpeg -i /data/RJ12345678/RJ12345678-file10.wav -ar 24000 -q:a 5 -vn -v quiet -c:a libvorbis /data/RJ12345678/track5.ogg
-        parameters = ['ffmpeg', '-i', str(provider_file_local_path), \
-            '-b:a', '32000', '-vn', '-v', 'quiet', '-c:a', 'libopus', '-y', str(modern_file_path)]
-        global task_count
-        task_count += 1
+        # ATTENTION TODO process 1/10 of the files and experience the parameter
+        # if random.random() < 0.9:
+        #     continue
+
+        # ffmpeg -v error -i /data/RJ12345678/RJ12345678-file10.wav -b:a 32000 -c:a libopus /data/RJ12345678/track5.ogg
+        parameters = ['ffmpeg', '-v', 'error', '-i', str(provider_file_local_path), \
+            '-c:a', 'libopus', '-b:a', '32000', str(modern_file_path)]
         print(f'{work_id}: run {' '.join(parameters)}')
         child = subprocess.run(parameters, capture_output=True)
         if child.stdout:
             print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
         if child.stderr:
-            # by the way, the default verbose output, configuration, library, etc. content are all stderr
             print('\n'.join([f'  ffmpeg: {r}' for r in child.stderr.decode().strip().split('\n')]))
         if child.returncode:
-            print(f'{work_id}: ffmpeg return code {child.returncode}, abort, remember to clean {chunk_path}')
+            print(f'{work_id}: ffmpeg return code {child.returncode}, abort')
             continue
         print(f'{work_id}: create {modern_file_path}')
 
-def migrate():
-    for directory_path in pathlib.Path('/data').iterdir():
-        if directory_path.name.startswith('RJ'):
-            # if directory_path.name in ('RJ00114194', 'RJ00132269', 'RJ00194640'):
-            convert_audio_format(directory_path.name, directory_path)
-    print(task_count)
+def migrate(parameters):
+    # 1. convert all UPDATE convert partial
+    # for directory_path in pathlib.Path('/activework').iterdir():
+    #     if not directory_path.name.startswith('RJ'):
+    #         continue
+    #     convert_audio_format(directory_path.name, directory_path)
+    # 2. read .ogg file's codec, remove vorbis codec, rename opus codec files to .opus
+    # for directory_path in pathlib.Path('/activework').iterdir():
+    #     if not directory_path.name.startswith('RJ'):
+    #         continue
+    #     for file_path in directory_path.iterdir():
+    #         if file_path.name.startswith('track'):
+    #             if file_path.suffix == '.ogg':
+    #                 # ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 track1.ogg
+    #                 ffmpeg_parameters = ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+    #                     '-show_entries', 'stream=codec_name', '-of', 'csv=print_section=0', str(file_path)]
+    #                 print(f'{file_path}: run ffprobe codec_name')
+    #                 child = subprocess.run(ffmpeg_parameters, capture_output=True)
+    #                 if child.stdout:
+    #                     print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
+    #                 if child.stderr:
+    #                     print('\n'.join([f'  ffprobe: {r}' for r in child.stderr.decode().strip().split('\n')]))
+    #                 if child.returncode:
+    #                     print(f'{file_path}: ffprobe return code {child.returncode}, skip')
+    #                     continue
+    #                 codec = child.stdout.decode().strip()
+    #                 if codec == 'vorbis':
+    #                     print(f'{file_path}: delete codec_name=vorbis')
+    #                     file_path.unlink()
+    #                 elif codec == 'opus':
+    #                     print(f'{file_path}: will rename to {file_path.with_suffix('.opus')}')
+    #                     file_path.move(file_path.with_suffix('.opus'))
+    #                 else:
+    #                     print(f'{file_path}: unrecognized codec? {codec}')
+    #             elif file_path.name.endswith('.mp3.vss') or file_path.name.endswith('.wav.vss'):
+    #                 # by the way, rename .wav.vss and .mp3.vss to .vss
+    #                 new_file_path = file_path.with_name(file_path.name[:-8] + '.vss')
+    #                 print(f'{file_path}: rename to {new_file_path}')
+    #                 file_path.move(new_file_path)
+    # 3. read bitrates, listen and compare very low and very high conversion results
+    #    192 and 320 is normal for mp3, 2304 and 3072 is normal for wav
+    # 4. a few files may be incomplete because I ctrl+c, check by ffprobe duration
+    # UPDATE: this is super ok, now you need to compare actual duration and expected duration
+    for directory_path in pathlib.Path('/activework').iterdir():
+        if not directory_path.name.startswith('RJ'):
+            continue
+        for file_path in directory_path.iterdir():
+            if file_path.name.startswith('track') and file_path.suffix == '.opus':
+                # ffmpeg -v error -i input.opus -f null -
+                ffmpeg_parameters = ['ffmpeg', '-v', 'error', '-i', str(file_path), '-f', 'null', '-']
+                print(f'run {' '.join(ffmpeg_parameters)}')
+                child = subprocess.run(ffmpeg_parameters, capture_output=True)
+                if child.stdout:
+                    print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
+                if child.stderr:
+                    print('\n'.join([f'  ffmpeg: {r}' for r in child.stderr.decode().strip().split('\n')]))
+                if child.returncode:
+                    print(f'{file_path}: ffmpeg return code {child.returncode}')
+                    continue
 
-if len(sys.argv) < 1:
-    print('USAGE:')
-    print('    convert.py avif WORKID      convert cover.jpg to cover.avif')
-    print('    convert.py pdf WORKID       convert track(\\d+)\\.pdf to track$1.txt')
-    print('    convert.py opus WORKID      convert track(\\d+)\\.(mp3|wav|flac) to track$1.ogg')
-    print('    convert.py migrate          convert all works')
-    # local-backup
-    exit(1)
-work_id = sys.argv[1]
+def get_work_id(input_parameter):
+    matches = [d for d in pathlib.Path('/activework').iterdir() if d.name.endswith(input_parameter)]
+    if len(matches) == 0:
+        print('manage.py: invalid work id')
+        exit(1)
+    elif len(matches) > 1:
+        print('manage.py: ambiguous short id')
+        exit(1)
+    print(f'manage.py: work id {matches[0].name}')
+    return matches[0]
 
-if len(sys.argv) > 1 and sys.argv[1] == 'backup':
-    make_backup()
+if len(sys.argv) > 1 and sys.argv[1] == 'raw-metadata':
+    backup_raw_metadata(stat=len(sys.argv) > 2 and sys.argv[2] == 'stat')
+elif len(sys.argv) > 1 and sys.argv[1] == 'metadata':
+    backup_metadata()
 elif len(sys.argv) > 1 and sys.argv[1] == 'check-restore':
     check_restore()
+elif len(sys.argv) > 2 and sys.argv[1] == 'avif':
+    convert_cover_image(get_work_id(sys.argv[2]))
+elif len(sys.argv) > 2 and sys.argv[1] == 'opus':
+    convert_audio_format(get_work_id(sys.argv[2]))
 elif len(sys.argv) > 1 and sys.argv[1] == 'migrate':
-    migrate()
+    migrate(sys.argv[2:])
 else:
-    print('USAGE: manage.py backup | check-restore')
+    print('USAGE:')
+    print('    manage.py avif WORKID      convert provider image files to avif codec')
+    print('    manage.py opus WORKID      convert provider audio files to opus codec')
+    print('    manage.py pdfsub WORKID    convert provider pdf subtitle files to txt')
+    print('    manage.py mod WORKID       TODO avif + opus')
+    print('    manage.py raw-metadata     backup raw metadata')
+    print('    manage.py metadata         backup metadata')
+    print('    manage.py check-restore    check backup restore, does not actually restore')
+    print('    manage.py local-backup     TODO local backup')
+    print('    manage.py migrate          various migrate operations')
+    exit(1)

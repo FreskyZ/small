@@ -6,22 +6,46 @@ and later extended to represent 经络 in traditional chinese medicine, and late
 ### Storage File Structure
 
 - metadata.json: main metadata use by client
-- cover.jpg: cover image
-- track{index}.{audioformat}: audio tracks, e.g. track1.mp3
-- track{index}.{audioformat}.{subtitleformat}: subtitle files, e.g. track1.mp3.vtt
+- cover.avif: cover image
+- track{index}.{audioformat}: audio tracks, e.g. track1.opus
+- track{index}.{subtitleformat}: subtitle files, e.g. track1.vss
+- cover.jpg: raw cover image archive
 - {workid}-workinfo.json: raw metadata archive
-- {workid}-trackinfo.json: raw metadata archive
+- {workid}-fileinfo.json: raw metadata archive
+- {workid}-file{fileindex}.{samesuffix}: raw file archive
+
+design principle
+
+- the name of workinfo follow it's provider api path
+- the name of fileinfo should be more aligned with workinfo comparing to its api path "tracks"
+- use same naming convention for main work raw metadata and edition work raw metadata should make it easier to process
+- although raw archive file names have a work id integrated and can be put in same directory, group them by main work seems better
+- for actual files use same naming convention as raw metadata to indicate it's a raw file,
+  this also unifies track audio and subtitle raw file and extra interesting raw file's naming convention
 
 current workflow
 
-- autotrack.ts WORKID use a new work id to add a new work,
-  this will download raw metadata, cover image and create initial metadata
-- autotrack.ts WORKID add 1:10 ... to add tracks, this will not actually download files
-- autotrack.ts WORKID dry to check files to download
-- autotrack.ts WORKID commit to actually download files
-- autotrack.ts WORKID subtitle for most subtitle works, convert subtitle format to archive(?) format
-- wslc run -it --rm --name asr1 --gpus all -v .:/data -h ASR -w /work my/asr && uv run transcribe.py
-- backup.py backup to convert jpg cover image to avif cover image?
+- docker, $WORKDIR is main directory for works
+  manage.ts: docker run -it --rm --name asmr1 -v .:/work -v $WORKDIR:/result -h ASMR -w /work my/node
+  backup.py: docker run -it --rm --name asmr3 -v .:/work -v $WORKDIR:/activework -v ./asmr:/archivework -h ASMR -w /work my/python
+  transcribe.py: wslc run -it --rm --name asr1 --gpus all -v .:/data -h ASR -w /work my/asr
+- manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata
+- manage.ts WORKID add 1:10 (sub RJ12345678/2:20:2): add tracks and optionally subtitles,
+  this will NOT actually download files
+- manage.ts WORKID dry: check files to download
+  manage.ts WORKID commit: actually download files
+  manage.ts WORKID extra 1: download extra files
+- manage.py WORKID avif: convert cover image to avif
+  manage.py WORKID opus: convert audio files to opus
+  manage.ts WORKID audio: mark audio file conversion complete
+- manage.ts WORKID subtitle: for most works, convert vtt/lrc subtitles to vss format,
+  - manage.py WORKID pdfsub: convert pdf subtitles to txt format
+  - manage.ts WORKID subtitle: mark subtitle file conversion complete
+- transcribe.py WORKID: auto transcribe tracks
+  - manage.ts WORKID mark-asr: mark tracks to use asr, and mark subtitle file conversion complete
+- manage.py raw-metadata: backup raw metadata
+- manage.py metadata: backup metadata
+- backup.py local-backup: create a local backup
 
 ### Subtitle Formats
 
@@ -69,7 +93,8 @@ and https://github.com/dotnet/aspnetcore/blob/main/src/Middleware/StaticFiles/sr
 I use url with main branch because I assume this code will not change in future, if it is not true you may have to
 use your intelligence to find them again?
 
-UPDATE what do you mean by flac is not default included?
+UPDATE what do you mean by .flac is not default included?
+UPDATE .ogg is default included, .opus is not default included
 
 ### Auto Transcription
 
@@ -396,3 +421,58 @@ file structure considerations
 - all of the above approaches are hard to understand and may cause error in the conversion process
   and the result is bundle all metadata files in one compressed file, the result is about 100kb which is ok
 
+### Audio Codec
+
+ai tells me the new audio codec that has similar position as webp in image codec area (like 10+ years old widely
+supported new, not avif's less than 10 years old new) is opus
+
+and tells me to use `-ar 48000 -q:a 5 -c:a libvorbis` as ffmpeg parameter, which is very incorrect, while ar means
+audio sample rate, it is normally always 48khz in normal audio files, while q:a quality parameter 5 seems a middle
+value, it is higher than default value 3, and 1 is still very good for my files and kind of large, 80kbps I guess,
+the c:a encoder parameter may be a matching magic value if you are not familiar with this area, but it is literally
+incorrect, vorbis is old format and opus supersedes vorbis format, you need to explicitly know the name of libopus
+to make ai compare them to find the relationship, to work with libopus, change the q parameter to a more explicit b
+parameter for bitrate value, and 32kbps is still good for my files (16kbps is bad if you try)
+
+- vorbis home page https://xiph.org/vorbis/
+- vorbis wiki https://en.wikipedia.org/wiki/Vorbis
+- vorbis spec https://xiph.org/vorbis/doc/Vorbis_I_spec.html
+- opus home page https://www.opus-codec.org/,
+  vorbis and opus are both developed by xiph.org, opus has a button at vorbis/xiph web page header
+- opus wiki https://en.wikipedia.org/wiki/Opus_(audio_format)
+- opus spec https://datatracker.ietf.org/doc/html/rfc6716
+- also see ogg+opus spec https://datatracker.ietf.org/doc/html/rfc7845
+  section 9 say recommended mime type is audio/ogg, recommended filename extension is .opus
+
+the deprecation statement can be found at
+https://wiki.xiph.org/index.php?title=OpusFAQ&oldid=13856#Does_Opus_make_all_those_other_lossy_codecs_obsolete?
+technically deprecation should be enough for saying vorbis is superseded by opus
+
+### AI Writing
+
+why do you put this section here? this document is completely written by human not ai, but as this document
+is very topic unlimited, you can talk about ai writing as ai is already generating a lot of techincal documents
+
+the traits that make document looks like ai generated:
+
+- inconsistent naming: the same concept or same entity have different name in one paragraph
+- redundent helper words: e.g. it is important to note that this may potentially help to improve
+- verb replace with noun version: e.g. "perform an anlysis of" vs analyze
+- marketing adjectives (I call thisadvertisement wording): seamless, cutting-edge, powerful, etc.
+- very long sentence: although I personally don't use period, the actual sentence length is not long
+- soft phrasal verbs: e.g. spin up, reach out, dive into
+
+see also simpified English: https://www.asd-ste100.org/
+
+### ffmpeg Commands
+
+that use in this project
+
+- TODO
+
+document
+
+- -v parameter: https://ffmpeg.org/ffmpeg.html#Generic-options
+- -of parameter: https://ffmpeg.org/ffprobe.html#toc-Writers
+
+TODO ffprobe -v error -i input.opus -select_streams a:0 -of json -show_entries stream does not include bitrate, you need format=bit_rate, why

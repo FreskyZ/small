@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>ACBT</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+  </style>
+</head>
+<body>
+  <header>
+    <h2>Audio Codec Blind Test</h2>
+  </header>
+  <div id="audio-container" style="display:flex;flex-flow:column">
+    <!-- cannot use default controls, they display load progress that easily distinguishes flac and opus -->
+    <audio id="audio1" style="width:1000px"></audio>
+    <span id="source1"></span>
+    <div id="control1">
+        <button onclick="document.querySelector('#audio1').play()">PLAY</button>
+        <button onclick="document.querySelector('#audio1').pause()">PAUSE</button>
+        <button onclick="document.querySelector('#audio1').currentTime -= 60">&lt;1min</button>
+        <button onclick="document.querySelector('#audio1').currentTime -= 5">&lt;5s</button>
+        <button onclick="document.querySelector('#audio1').currentTime += 5">5s&gt;</button>
+        <button onclick="document.querySelector('#audio1').currentTime += 60">1min&gt;</button>
+        <button onclick="document.querySelector('#audio1').currentTime += 600">10min&gt;</button>
+        <span class="progress"></span>
+    </div>
+    <audio id="audio2" style="width:1000px"></audio>
+    <span id="source2"></span>
+    <div id="control2">
+        <button onclick="document.querySelector('#audio2').play()">PLAY</button>
+        <button onclick="document.querySelector('#audio2').pause()">PAUSE</button>
+        <button onclick="document.querySelector('#audio2').currentTime -= 60">&lt;1min</button>
+        <button onclick="document.querySelector('#audio2').currentTime -= 5">&lt;5s</button>
+        <button onclick="document.querySelector('#audio2').currentTime += 5">5s&gt;</button>
+        <button onclick="document.querySelector('#audio2').currentTime += 60">1min&gt;</button>
+        <button onclick="document.querySelector('#audio2').currentTime += 600">10min&gt;</button>
+        <span class="progress"></span>
+    </div>
+    <button id="reveal">REVEAL</button>
+  </div>
+  <script type="module">
+    const audio1 = document.querySelector('audio#audio1');
+    const audio2 = document.querySelector('audio#audio2');
+    const source1 = "./WORKID/WORKID-file1.mp3";
+    const source2 = "./WORKID/track1.opus";
+    audio1.addEventListener('timeupdate', () => {
+        document.querySelector('div#control1>span.progress').innerText = `${Math.floor(audio1.currentTime)}/${Math.floor(audio1.duration)}`;
+    });
+    audio2.addEventListener('timeupdate', () => {
+        //                                   because conversion result have different duration at fraction part ATTENTION vvvvvv use SAME duration
+        document.querySelector('div#control2>span.progress').innerText = `${Math.floor(audio2.currentTime)}/${Math.floor(audio1.duration)}`;
+    });
+    const audio1Source = Math.random() < 0.5 ? source1 : source2;
+    const audio2Source = audio1Source == source1 ? source2 : source1;
+    audio1.src = audio1Source;
+    audio2.src = audio2Source;
+    document.querySelector('span#source1').innerText = audio1Source;
+    document.querySelector('span#source2').innerText = audio2Source;
+    let sourceVisible = false;
+    document.querySelector('span#source1').style.display = 'none';
+    document.querySelector('span#source2').style.display = 'none';
+    document.querySelector('button#reveal').addEventListener('click', () => {
+        sourceVisible = !sourceVisible;
+        document.querySelector('span#source1').style.display = sourceVisible ? '' : 'none';
+        document.querySelector('span#source2').style.display = sourceVisible ? '' : 'none';
+    });
+  </script>
+</body>
+</html>

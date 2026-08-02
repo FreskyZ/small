@@ -84,6 +84,12 @@ const state: PageState = {
     activeTrackPlainIndex: -1,
 };
 
+// TODO
+const notificationElements = {
+    mask: document.querySelector<HTMLDivElement>('div#notification-mask'),
+    container: document.querySelector<HTMLDivElement>('div#notification-container'),
+};
+
 // setup all elements
 const pagerElements = {
     container: document.querySelector<HTMLDivElement>('div#pager'),
@@ -406,7 +412,11 @@ async function render(newState: Partial<PageState>) {
             // note that track plain index is not track index
             for (const [track, trackPlainIndex] of work.tracks.map((t, i) => [t, i] as const)) {
                 trackElements.tracks[trackPlainIndex].container.classList.add('visible');
-                if (track.workInProgress) { trackElements.tracks[trackPlainIndex].container.classList.add('wip'); }
+                if (track.workInProgress) {
+                    trackElements.tracks[trackPlainIndex].container.classList.add('wip');
+                } else {
+                    trackElements.tracks[trackPlainIndex].container.classList.remove('wip');
+                }
                 trackElements.tracks[trackPlainIndex].title.innerText = `${track.index}. ${track.name ?? `トラック${track.index}`}`;
                 const minutes = Math.floor(track.duration / 60);
                 const seconds = Math.floor(track.duration - 60 * minutes);
@@ -448,7 +458,7 @@ async function render(newState: Partial<PageState>) {
             if (track.subtitleProviderPath) {
                 playerElements.subtitle.classList.add('visible');
                 if (!Array.isArray(track.subtitleText)) {
-                    const response = await fetch(`./${work.id}/track${track.index}.${work.audioFormat}.${work.subtitleFormat}`);
+                    const response = await fetch(`./${work.id}/track${track.index}.${work.subtitleFormat}`);
                     if (!response.ok) {
                         track.subtitleText = `failed to load subtitle: ${response.status}`;
                         track.subtitleRecords = [];

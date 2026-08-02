@@ -4,7 +4,7 @@ import path from 'node:path';
 import stream from 'node:stream';
 import { styleText } from 'node:util';
 import { finished } from 'node:stream/promises';
-import * as ts from 'typescript';
+import ts from 'typescript';
 
 const config = JSON.parse(await fs.readFile('config.json', 'utf-8')) as {
     dataDirectory: string,
@@ -1317,7 +1317,7 @@ async function handleMakePage() {
             const metadataPath = makepath(directoryName, 'metadata.json');
             if (npfs.existsSync(metadataPath)) {
                 const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-                if (!metadata.retired && metadata.tracks.length) {
+                if (!metadata.retired && metadata.audioFormat && metadata.tracks.length) {
                     metadatas.push(metadata);
                 }
             }
@@ -1548,6 +1548,9 @@ async function handleMigrateCommand(parameters: string[]) {
             if (maybeForgetToRemoveTracks.length > 2) {
                 logError(`${workId}: may be forget to remove track index from track name`);
             }
+
+            // TODO validate other files not belong to track with naming convention {workid}-file{index}.{samesuffix}
+
         }));
 
     // stat: all kinds of statistics
@@ -1640,7 +1643,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 } else if (+workId.substring(2) > +editionId.substring(2)) {
                     return logError(`${workId}: main work id larger than edition work id? ${editionId}`);
                 }
-                const fileinfoPath = makepath(workId, `${editionId}-trackinfo.json`);
+                const fileinfoPath = makepath(workId, `${editionId}-fileinfo.json`);
                 const fileinfo = JSON.parse(await fs.readFile(fileinfoPath, 'utf-8')) as FileInfoNode[];
                 files[editionId] = flattenFileInfo({ type: 'folder', title: '(root)', children: fileinfo });
             }
@@ -1658,16 +1661,15 @@ async function handleMigrateCommand(parameters: string[]) {
                 }
                 totalBytes += audioFile.size;
                 totalDuration += audioFile.duration;
+                const bitrate = totalBytes * 8 / totalDuration / 1000; // kbps
                 const providerAudioFormat = path.extname(audioFile.providerPath).substring(1);
                 if (providerAudioFormat == 'mp3') {
-                    const bitrate = totalBytes * 8 / totalDuration / 1000; // kbps
                     if (bitrate > 330) { bitrateCounts['mp3 >320kbps'] += 1; }
                     else if (bitrate > 288) { bitrateCounts['mp3 320kbps'] += 1; }
                     else if (bitrate > 224) { bitrateCounts['mp3 256kbps'] += 1; }
                     else if (bitrate > 190) { bitrateCounts['mp3 192kbps'] += 1; }
                     else { bitrateCounts['mp3 <192kbps'] += 1; }
                 } else if (providerAudioFormat == 'wav') {
-                    const bitrate = totalBytes * 8 / totalDuration / 1000; // kbps
                     if (bitrate > 3100) { bitrateCounts['wav >3072kbps'] += 1; }
                     else if (bitrate > 2700) { bitrateCounts['wav 3072kbps'] += 1; }
                     else if (bitrate > 1900) { bitrateCounts['wav 2304kbps'] += 1; }
@@ -1675,7 +1677,12 @@ async function handleMigrateCommand(parameters: string[]) {
                     else if (bitrate > 1400) { bitrateCounts['wav 1411kbps'] += 1; }
                     else { bitrateCounts['wav <1411kbps'] += 1; }
                 }
-                // console.log(`bitrate ${workId}/track${track.index}.${path.extname(audioRecord.path).substring(1)} ${Math.round(totalBytes * 8 / totalDuration) / 1000}kbps`);
+                if ((providerAudioFormat == 'mp3' && (bitrate < 180 || bitrate > 350))
+                    || (providerAudioFormat == 'wav' && (bitrate < 2000 || bitrate > 4000))
+                    || providerAudioFormat == 'flac'
+                ) {
+                    // console.log(`bitrate ${workId}/${ctx.meta.audioWorkId ?? ctx.id}-file${track.providerPath}.${providerAudioFormat} ${bitrate}kbps`);
+                }
                 
                 // for stat, only need to check converted audio/subtitle file exist
                 const modernAudioFileLocalPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
@@ -1831,9 +1838,29 @@ async function handleMigrateCommand(parameters: string[]) {
 
             // 3. remove metadata.audioFormat from all files
             delete metadata.audioFormat;
-            await writeMetadata(metadata);
-            // 4. convert all audio files, by the way, task count is 1552
 
+            // 4. convert all audio files, by the way, task count is 1552
+            //    to test the parameters, only part of the files are converted,
+            //    for works with result .ogg file, mark metadata.audioformat while mark other track's workinprogress flag to make client side work to test the effect
+
+            const hasogg = metadata.tracks.some(t => npfs.existsSync(makepath(workId, `track${t.index}.opus`)));
+            if (hasogg) {
+                metadata.audioFormat = 'opus';
+                for (const track of metadata.tracks) {
+                    if (!npfs.existsSync(makepath(workId, `track${track.index}.opus`))) {
+                        track.workInProgress = true;
+                    } else {
+                        delete track.workInProgress;
+                        logInfo(`${workId} track ${track.index}`);
+                    }
+                }
+                await writeMetadata(metadata);
+            } else {
+                for (const track of metadata.tracks) {
+                    track.workInProgress = true;
+                }
+                await writeMetadata(metadata);
+            }
 
             // const knownFiles = [
             //     'cover.jpg',
