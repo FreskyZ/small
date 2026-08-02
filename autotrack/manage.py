@@ -1,4 +1,4 @@
-import pathlib, json, io, tarfile, math, base64, datetime, sys, re, subprocess, random
+import pathlib, json, io, tarfile, math, base64, datetime, sys, re, subprocess, random, time
 import pypdf          # uv add pypdf
 from PIL import Image # uv add Pillow
                       # apt install ffmpeg
@@ -284,13 +284,18 @@ def convert_pdf_subtitle(work_path):
 def flatten_fileinfo(root):
     results = []
     def collect(folder, basepath):
-        for subfolder in sorted((f for f in folder['children'] if f['type'] == 'folder'), key=lambda f: f['title']):
+        # byte sequence compare is the only reliable string compare cross languages and libraries
+        for subfolder in sorted((f for f in folder['children'] if f['type'] == 'folder'), key=lambda f: f['title'].encode('utf-8')):
             collect(subfolder, basepath + '/' + subfolder['title'])
-        for item in sorted((f for f in folder['children'] if f['type'] != 'folder'), key=lambda f: f['title']):
+        for item in sorted((f for f in folder['children'] if f['type'] != 'folder'), key=lambda f: f['title'].encode('utf-8')):
             results.append(basepath + '/' + item['title'])
     collect(root, '')
     return results
 
+# the typical speed for this conversion is like 70x to 100x
+# this makes current overall conversion time like 5 hours, which makes a lot of motivation to parallel them
+# but after the major conversion every work takes only about 1 minute to run, which reduces a lot of motivation
+# currently their battle result is lazy to implement parallel
 def convert_audio_format(work_path):
     work_id = work_path.name
     with open(work_path / 'metadata.json') as f:
@@ -313,15 +318,14 @@ def convert_audio_format(work_path):
         if modern_file_path.exists():
             print(f'{work_id}: track {track['index']} modern file path exist, {modern_file_path}, skip')
             continue
-        # ATTENTION TODO process 1/10 of the files and experience the parameter
-        # if random.random() < 0.9:
-        #     continue
 
-        # ffmpeg -v error -i /data/RJ12345678/RJ12345678-file10.wav -b:a 32000 -c:a libopus /data/RJ12345678/track5.ogg
-        parameters = ['ffmpeg', '-v', 'error', '-i', str(provider_file_local_path), \
-            '-c:a', 'libopus', '-b:a', '32000', str(modern_file_path)]
+        # ffmpeg -v error -i /data/RJ12345678/RJ12345678-file10.wav -b:a 32000 -c:a libopus /data/RJ12345678/track5.opus
+        parameters = ['ffmpeg', '-v', 'error', '-i', \
+            str(provider_file_local_path), '-c:a', 'libopus', '-b:a', '32000', str(modern_file_path)]
         print(f'{work_id}: run {' '.join(parameters)}')
+        start_time = time.time()
         child = subprocess.run(parameters, capture_output=True)
+        end_time = time.time()
         if child.stdout:
             print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
         if child.stderr:
@@ -329,67 +333,75 @@ def convert_audio_format(work_path):
         if child.returncode:
             print(f'{work_id}: ffmpeg return code {child.returncode}, abort')
             continue
-        print(f'{work_id}: create {modern_file_path}')
+        operation_time = end_time - start_time
+        multiplier = math.floor(track['duration'] / operation_time)
+        print(f'{work_id}: create {modern_file_path} operation time {operation_time}s, speed {multiplier}x')
+
+def get_audio_codec(path):
+    # ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 track1.opus
+    ffmpeg_parameters = ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+        '-show_entries', 'stream=codec_name', '-of', 'csv=print_section=0', str(path)]
+    print(f'{path}: run ffprobe codec_name')
+    child = subprocess.run(ffmpeg_parameters, capture_output=True)
+    if child.stdout:
+        print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
+    if child.stderr:
+        print('\n'.join([f'  ffprobe: {r}' for r in child.stderr.decode().strip().split('\n')]))
+    if child.returncode:
+        print(f'{path}: ffprobe return code {child.returncode}, skip')
+        return
+    return child.stdout.decode().strip()
+
+def get_audio_duration(path, log=False):
+    if log: print(f'{path}: run ffprobe -i {path}')
+    # ffprobe -v error -i /work/input/track1.mp3 -show_entries format=duration -of csv="p=0"
+    child = subprocess.run(['ffprobe', '-v', 'error', '-i', str(path), '-show_entries', 'format=duration', '-of', 'csv=p=0'], capture_output=True)
+    if child.stdout:
+        if log: print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
+    if child.stderr:
+        # by the way, the default verbose version, configuration, library, etc. content are all stderr
+        if log: print('\n'.join([f'  ffprobe: {r}' for r in child.stderr.decode().strip().split('\n')]))
+    if child.returncode:
+        print(f'{path}: ffprobe return code {child.returncode}, abort')
+        return 0
+    # our advanced python will raise error on not a number, which is expected here
+    return float(child.stdout.decode().strip())
+
+# this don't raise error or half cut files, they work smoothly as an audio file with less duration
+# so need to check duration not use this
+def NOT_OK_check_completeness(path):
+    # ffmpeg -v error -i input.opus -f null -
+    ffmpeg_parameters = ['ffmpeg', '-v', 'error', '-i', str(path), '-f', 'null', '-']
+    print(f'run {' '.join(ffmpeg_parameters)}')
+    child = subprocess.run(ffmpeg_parameters, capture_output=True)
+    if child.stdout:
+        print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
+    if child.stderr:
+        print('\n'.join([f'  ffmpeg: {r}' for r in child.stderr.decode().strip().split('\n')]))
+    if child.returncode:
+        print(f'{path}: ffmpeg return code {child.returncode}')
 
 def migrate(parameters):
-    # 1. convert all UPDATE convert partial
-    # for directory_path in pathlib.Path('/activework').iterdir():
-    #     if not directory_path.name.startswith('RJ'):
-    #         continue
-    #     convert_audio_format(directory_path.name, directory_path)
-    # 2. read .ogg file's codec, remove vorbis codec, rename opus codec files to .opus
-    # for directory_path in pathlib.Path('/activework').iterdir():
-    #     if not directory_path.name.startswith('RJ'):
-    #         continue
-    #     for file_path in directory_path.iterdir():
-    #         if file_path.name.startswith('track'):
-    #             if file_path.suffix == '.ogg':
-    #                 # ffprobe -v error -select_streams a:0 -show_entries stream=codec_name -of default=noprint_wrappers=1:nokey=1 track1.ogg
-    #                 ffmpeg_parameters = ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
-    #                     '-show_entries', 'stream=codec_name', '-of', 'csv=print_section=0', str(file_path)]
-    #                 print(f'{file_path}: run ffprobe codec_name')
-    #                 child = subprocess.run(ffmpeg_parameters, capture_output=True)
-    #                 if child.stdout:
-    #                     print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
-    #                 if child.stderr:
-    #                     print('\n'.join([f'  ffprobe: {r}' for r in child.stderr.decode().strip().split('\n')]))
-    #                 if child.returncode:
-    #                     print(f'{file_path}: ffprobe return code {child.returncode}, skip')
-    #                     continue
-    #                 codec = child.stdout.decode().strip()
-    #                 if codec == 'vorbis':
-    #                     print(f'{file_path}: delete codec_name=vorbis')
-    #                     file_path.unlink()
-    #                 elif codec == 'opus':
-    #                     print(f'{file_path}: will rename to {file_path.with_suffix('.opus')}')
-    #                     file_path.move(file_path.with_suffix('.opus'))
-    #                 else:
-    #                     print(f'{file_path}: unrecognized codec? {codec}')
-    #             elif file_path.name.endswith('.mp3.vss') or file_path.name.endswith('.wav.vss'):
-    #                 # by the way, rename .wav.vss and .mp3.vss to .vss
-    #                 new_file_path = file_path.with_name(file_path.name[:-8] + '.vss')
-    #                 print(f'{file_path}: rename to {new_file_path}')
-    #                 file_path.move(new_file_path)
-    # 3. read bitrates, listen and compare very low and very high conversion results
-    #    192 and 320 is normal for mp3, 2304 and 3072 is normal for wav
-    # 4. a few files may be incomplete because I ctrl+c, check by ffprobe duration
-    # UPDATE: this is super ok, now you need to compare actual duration and expected duration
-    for directory_path in pathlib.Path('/activework').iterdir():
-        if not directory_path.name.startswith('RJ'):
-            continue
-        for file_path in directory_path.iterdir():
-            if file_path.name.startswith('track') and file_path.suffix == '.opus':
-                # ffmpeg -v error -i input.opus -f null -
-                ffmpeg_parameters = ['ffmpeg', '-v', 'error', '-i', str(file_path), '-f', 'null', '-']
-                print(f'run {' '.join(ffmpeg_parameters)}')
-                child = subprocess.run(ffmpeg_parameters, capture_output=True)
-                if child.stdout:
-                    print('\n'.join([f'  ffmpeg: {r}' for r in child.stdout.decode().strip().split('\n')]))
-                if child.stderr:
-                    print('\n'.join([f'  ffmpeg: {r}' for r in child.stderr.decode().strip().split('\n')]))
-                if child.returncode:
-                    print(f'{file_path}: ffmpeg return code {child.returncode}')
-                    continue
+    if len(parameters) > 0 and parameters[0] == 'opus':
+        # convert audio for all works
+        for directory_path in pathlib.Path('/activework').iterdir():
+            if not directory_path.name.startswith('RJ'):
+                continue
+            convert_audio_format(directory_path)
+    elif len(parameters) > 0 and parameters[0] == 'validate':
+        # validate converted file duration
+        for directory_path in pathlib.Path('/activework').iterdir():
+            if not directory_path.name.startswith('RJ'):
+                continue
+            work_path = directory_path
+            with open(work_path / 'metadata.json') as f:
+                metadata = json.load(f)
+            for track in metadata['tracks']:
+                audio_path = work_path / f'track{track['index']}.opus'
+                if audio_path.exists():
+                    duration = get_audio_duration(audio_path)
+                    if abs(round(duration) - round(track['duration'])) > 1:
+                        print(f'{work_path.name}: track {track['index']}: duration mismatch, expect {track['duration']} actual {duration}')
 
 def get_work_id(input_parameter):
     matches = [d for d in pathlib.Path('/activework').iterdir() if d.name.endswith(input_parameter)]

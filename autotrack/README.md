@@ -476,3 +476,32 @@ document
 - -of parameter: https://ffmpeg.org/ffprobe.html#toc-Writers
 
 TODO ffprobe -v error -i input.opus -select_streams a:0 -of json -show_entries stream does not include bitrate, you need format=bit_rate, why
+
+### String Compare
+
+to change track's metadata's provider file info reference from path to index, manage.ts sort the folder and file
+names by String.prototype.localeCompare before dfs flatten file info list, this is an abyss, that you cannot find
+the actual implementation in v8 to know how it works with cjk content, that you cannot align the implementation in
+python and in rust (not used in this project yet)
+
+links
+
+- cpython, don't forget str object is called unicodeobject in cpython source code 
+  https://github.com/python/cpython/blob/04a1fcfdabb3a9d61cc247dfec13d601ce3398e9/Objects/unicodeobject.c#L11281
+- rust, confident that this link will not invalidate so not use perma link,
+  if this is not perma anymore, just open docs.rs/std and open source code for impl PartialOrd for str
+  https://github.com/rust-lang/rust/blob/main/library/core/src/str/traits.rs#L21
+- ecma262 https://tc39.es/ecma262/multipage/text-processing.html#sec-string.prototype.localecompare,
+  the method in ecma262 is overwritten by ecma402 https://tc39.es/ecma402/#sup-String.prototype.localeCompare,
+  and you only find implementation-defined in both specs
+- v8, this corresponding to ecma262 I guess
+  https://github.com/v8/v8/blob/bf3d02947968c33781ad7a74e5e0234d9ac5d748/src/builtins/builtins-string.cc#L142,
+  this corresponding to ecma402 I guess
+  https://github.com/v8/v8/blob/bf3d02947968c33781ad7a74e5e0234d9ac5d748/src/builtins/builtins-intl.cc#L67
+  this goes inside into icu and I reject to investigate
+  https://github.com/v8/v8/blob/bf3d02947968c33781ad7a74e5e0234d9ac5d748/src/objects/intl-objects.cc#L1074
+
+the result is sort as byte sequence
+
+- nodejs: Buffer.compare(Buffer.from(string1), Buffer.from(string2))
+- python: string1.encode('utf-8') > string2.encode('utf-8')
