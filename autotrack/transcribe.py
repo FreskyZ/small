@@ -10,7 +10,7 @@ def loginfo(content):
 def get_audio_duration(path):
     # if long, need cut into chunks
     loginfo(f'run ffprobe -i {path}')
-    # ffprobe -i /work/input/track1.opus -show_entries format=duration -v quiet -of csv="p=0"
+    # ffprobe -i track1.opus -show_entries format=duration -v quiet -of csv="p=0"
     child = subprocess.run(['ffprobe', '-i', str(path), '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=p=0'], capture_output=True)
     if child.stdout:
         print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
@@ -36,7 +36,7 @@ def split_chunk(input_path, audio_duration, chunk_size):
     chunks = []
     for chunk_index, (start_time, end_time) in enumerate(chunk_ranges):
         chunk_path = pathlib.Path('/tmp') / (input_path.stem + f'-c{start_time}.opus')
-        # ffmpeg -i /work/data/track2.opus -ss 165 -t 210 -acodec copy -v quiet /work/data/track2-c165.opus
+        # ffmpeg -i track2.opus -ss 165 -t 210 -acodec copy -v quiet track2-c165.opus
         parameters = ['ffmpeg', '-i', str(input_path), '-ss', str(start_time)]
         if chunk_index != len(chunk_ranges) - 1:
             parameters.extend(('-t', str(end_time - start_time)))
@@ -86,7 +86,7 @@ print(f'work id {work_id}')
 
 loginfo('load model')
 model = Qwen3ASRModel.from_pretrained(
-    '/data/AT/Models/Qwen3-ASR-1.7B',
+    '/models/Qwen3-ASR-1.7B',
     dtype=torch.bfloat16,
     device_map='cuda:0',
     max_new_tokens=512,

@@ -6,12 +6,15 @@ import { styleText } from 'node:util';
 import { finished } from 'node:stream/promises';
 import ts from 'typescript';
 
+// if you come back from config.json file missing,
+// the providerbaseuri is the obvious website url you visit,
+// the providerapibaseuri is the easy to find api base url in f12
 const config = JSON.parse(await fs.readFile('config.json', 'utf-8')) as {
     dataDirectory: string,
     providerBaseUri: string,
     providerApiBaseUri: string,
 };
-console.log(`autotrack.ts: data directory ${config.dataDirectory}`);
+config.dataDirectory = '/data';
 // console.log(`autotrack.ts: provider base uri ${config.providerBaseUri}`);
 // console.log(`autotrack.ts: provider api base uri ${config.providerApiBaseUri}`);
 

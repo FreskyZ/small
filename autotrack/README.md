@@ -29,12 +29,11 @@ naming conventions
 current workflow
 
 - start containers, you seems need a compose file for these, but docker and wslc don't stay in one compose project
-  manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work
-    -v $WORKDIR:/data -v $LOCALBACK:/data-archive -h ASMRTS -w /work/program my/node
+  manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work -v $DATADIR:/data -h ASMRTS -w /work my/node
   manage.py: docker run -it --rm --name asmrpy1 -v $REPO/autotrack:/work
-    -v $WORKDIR:/data -v $LOCALBACK:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMRPY -w /work my/python
+    -v $DATADIR:/data -v $DATAARC:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMRPY -w /work my/python
     the python project files are not tracked in this repository: uv add Pillow && uv add pypdf && apt install ffmpeg
-  transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $WORKDIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
+  transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $DATADIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
 - manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata
 - manage.ts WORKID add: add tracks and optionally subtitles, this will NOT actually download files
 - manage.ts WORKID dry: check files to download
@@ -538,4 +537,3 @@ the traits that make document looks like ai generated:
 - soft phrasal verbs: e.g. spin up, reach out, dive into
 
 see also simpified English: https://www.asd-ste100.org/
-
