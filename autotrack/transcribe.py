@@ -10,7 +10,7 @@ def loginfo(content):
 def get_audio_duration(path):
     # if long, need cut into chunks
     loginfo(f'run ffprobe -i {path}')
-    # ffprobe -i /work/input/track1.mp3 -show_entries format=duration -v quiet -of csv="p=0"
+    # ffprobe -i /work/input/track1.opus -show_entries format=duration -v quiet -of csv="p=0"
     child = subprocess.run(['ffprobe', '-i', str(path), '-show_entries', 'format=duration', '-v', 'quiet', '-of', 'csv=p=0'], capture_output=True)
     if child.stdout:
         print('\n'.join([f'  ffprobe: {r}' for r in child.stdout.decode().strip().split('\n')]))
@@ -35,8 +35,8 @@ def split_chunk(input_path, audio_duration, chunk_size):
             break
     chunks = []
     for chunk_index, (start_time, end_time) in enumerate(chunk_ranges):
-        chunk_path = pathlib.Path('/tmp') / (input_path.stem + f'-c{start_time}.mp3')
-        # ffmpeg -i /work/data/track2.mp3 -ss 165 -t 210 -acodec copy -v quiet /work/data/track2-c165.mp3
+        chunk_path = pathlib.Path('/tmp') / (input_path.stem + f'-c{start_time}.opus')
+        # ffmpeg -i /work/data/track2.opus -ss 165 -t 210 -acodec copy -v quiet /work/data/track2-c165.opus
         parameters = ['ffmpeg', '-i', str(input_path), '-ss', str(start_time)]
         if chunk_index != len(chunk_ranges) - 1:
             parameters.extend(('-t', str(end_time - start_time)))
@@ -72,7 +72,7 @@ def transcribe(input_path, chunks, model):
             current_time += sentence_time
     loginfo(f'{len(timed_sentences)} sentences')
     vss_version = os.environ['AT_VSS_VERSION'] if 'AT_VSS_VERSION' in os.environ else '1'
-    subtitle_path = pathlib.Path(f'/data/{work_id}') / input_path.with_suffix(f'.mp3.vss').name
+    subtitle_path = pathlib.Path(f'/data/{work_id}') / input_path.with_suffix(f'.vss').name
     loginfo(f'write {subtitle_path}')
     with open(subtitle_path, 'w') as f:
         for start_time, end_time, sentence in timed_sentences:
@@ -95,12 +95,12 @@ model = Qwen3ASRModel.from_pretrained(
 )
 loginfo('load model complete')
 for file_path in pathlib.Path(f'/data/{work_id}/').iterdir():
-    if file_path.suffix == '.mp3':
+    if file_path.name.startswith('track') and file_path.suffix == '.opus':
         audio_duration = get_audio_duration(file_path)
         if audio_duration > 3600:
             loginfo('audio duration too long, skip')
             continue
-        if audio_duration < 15:
+        if audio_duration < 30:
             loginfo('audio duration too short, no need to transcribe')
             continue
         chunks = split_chunk(file_path, audio_duration, 60)

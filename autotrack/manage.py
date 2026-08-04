@@ -181,9 +181,9 @@ def check_restore():
                     if 'comments' in original_track:
                         assert_eq(extract_track['comments'], original_track['comments'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
-                    assert_eq(extract_track['providerPath'], original_track['providerPath'], f'{member.name} track {original_track['index']}')
-                    if 'subtitleProviderPath' in original_track:
-                        assert_eq(extract_track['subtitleProviderPath'], original_track['subtitleProviderPath'], f'{member.name} track {original_track['index']}')
+                    assert_eq(extract_track['audioFileIndex'], original_track['audioFileIndex'], f'{member.name} track {original_track['index']}')
+                    if 'subtitleFileIndex' in original_track:
+                        assert_eq(extract_track['subtitleFileIndex'], original_track['subtitleFileIndex'], f'{member.name} track {original_track['index']}')
                         pair_count += 1
                     pair_count += 3
                 pair_count += 7

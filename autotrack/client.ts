@@ -24,7 +24,7 @@ interface TrackRecord {
     duration: number,
     comments?: string[],
     // not actually used, but to determine whether this track has subtitle
-    subtitleProviderPath?: number,
+    subtitleFileIndex?: number,
     workInProgress?: true,
     // client side properties
     subtitleText: string,
@@ -388,7 +388,7 @@ async function render(newState: Partial<PageState>) {
                 tagIndex += 1;
             };
             if (work.subtitleFormat) {
-                addTag(work.tracks.some(t => t.subtitleProviderPath == -1) ? '自动字幕付' : '字幕付', 'provider-tag');
+                addTag(work.tracks.some(t => t.subtitleFileIndex == -1) ? '自动字幕付' : '字幕付', 'provider-tag');
             }
             work.providerTags.forEach(v => addTag(v, 'provider-tag'));
             work.actors.forEach(v => addTag(v, 'actor'));
@@ -455,7 +455,7 @@ async function render(newState: Partial<PageState>) {
             playerElements.container.classList.add('visible');
             playerElements.audio.src = `./${work.id}/track${track.index}.${work.audioFormat}`;
             trackElements.tracks[state.activeTrackPlainIndex].container.classList.add('active');
-            if (track.subtitleProviderPath) {
+            if (track.subtitleFileIndex) {
                 playerElements.subtitle.classList.add('visible');
                 if (!Array.isArray(track.subtitleText)) {
                     const response = await fetch(`./${work.id}/track${track.index}.${work.subtitleFormat}`);

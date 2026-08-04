@@ -14,38 +14,43 @@ and later extended to represent 经络 in traditional chinese medicine, and late
 - {workid}-fileinfo.json: raw metadata archive
 - {workid}-file{fileindex}.{samesuffix}: raw file archive
 
-design principle
+naming conventions
 
 - the name of workinfo follow it's provider api path
-- the name of fileinfo should be more aligned with workinfo comparing to its api path "tracks"
-- use same naming convention for main work raw metadata and edition work raw metadata should make it easier to process
-- although raw archive file names have a work id integrated and can be put in same directory, group them by main work seems better
-- for actual files use same naming convention as raw metadata to indicate it's a raw file,
-  this also unifies track audio and subtitle raw file and extra interesting raw file's naming convention
+- the name of fileinfo should be more accurate that most of records are not
+  audio track, and more aligned with workinfo comparing to its api path called tracks
+- use same convention for main work and language edition work's raw metadata should make it easier to process
+- split raw file and actual audio and subtitle file to allow for more clear format conversion workflow
+  - for now audio files are always converted/modernized to opus, normal subtitle files
+  - vtt/srt and lrc are always converted to vss (csv like very simple subtitle)
+- although raw metadata/file archive are suitable to put in one directory for all works,
+  group them by main work seems more clear file structure
 
 current workflow
 
-- docker, $WORKDIR is main directory for works
-  manage.ts: docker run -it --rm --name asmr1 -v .:/work -v $WORKDIR:/result -h ASMR -w /work my/node
-  backup.py: docker run -it --rm --name asmr3 -v .:/work -v $WORKDIR:/activework -v ./asmr:/archivework -h ASMR -w /work my/python
-  transcribe.py: wslc run -it --rm --name asr1 --gpus all -v .:/data -h ASR -w /work my/asr
+- start containers, you seems need a compose file for these, but docker and wslc don't stay in one compose project
+  manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work
+    -v $WORKDIR:/data -v $LOCALBACK:/data-archive -h ASMRTS -w /work/program my/node
+  manage.py: docker run -it --rm --name asmrpy1 -v $REPO/autotrack:/work
+    -v $WORKDIR:/data -v $LOCALBACK:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMRPY -w /work my/python
+    the python project files are not tracked in this repository: uv add Pillow && uv add pypdf && apt install ffmpeg
+  transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $WORKDIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
 - manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata
-- manage.ts WORKID add 1:10 (sub RJ12345678/2:20:2): add tracks and optionally subtitles,
-  this will NOT actually download files
+- manage.ts WORKID add: add tracks and optionally subtitles, this will NOT actually download files
 - manage.ts WORKID dry: check files to download
   manage.ts WORKID commit: actually download files
-  manage.ts WORKID extra 1: download extra files
+  manage.ts WORKID extra: download extra files
 - manage.py WORKID avif: convert cover image to avif
   manage.py WORKID opus: convert audio files to opus
   manage.ts WORKID audio: mark audio file conversion complete
-- manage.ts WORKID subtitle: for most works, convert vtt/lrc subtitles to vss format,
+- manage.ts WORKID subtitle: for most works, convert vtt/lrc subtitles to vss format
   - manage.py WORKID pdfsub: convert pdf subtitles to txt format
-  - manage.ts WORKID subtitle: mark subtitle file conversion complete
-- transcribe.py WORKID: auto transcribe tracks
+  - manage.ts WORKID subtitle: for not most works, mark subtitle file conversion complete
+- transcribe.py WORKID: auto transcribe
   - manage.ts WORKID mark-asr: mark tracks to use asr, and mark subtitle file conversion complete
-- manage.py raw-metadata: backup raw metadata
-- manage.py metadata: backup metadata
-- backup.py local-backup: create a local backup
+- manage.py raw-metadata: backup raw metadata in /meta-archive
+- manage.py metadata: backup metadata in /meta-archive
+- manage.py backup-data: backup metadata, audio and subtitle files in /data-archive
 
 ### Subtitle Formats
 
@@ -421,18 +426,59 @@ file structure considerations
 - all of the above approaches are hard to understand and may cause error in the conversion process
   and the result is bundle all metadata files in one compressed file, the result is about 100kb which is ok
 
-### Audio Codec
+### ffmpeg Commands
 
-ai tells me the new audio codec that has similar position as webp in image codec area (like 10+ years old widely
-supported new, not avif's less than 10 years old new) is opus
+see https://ffmpeg.org/ffprobe.html,
+there is no useful anchor links in this web page, you need to scroll the page on your own
 
-and tells me to use `-ar 48000 -q:a 5 -c:a libvorbis` as ffmpeg parameter, which is very incorrect, while ar means
-audio sample rate, it is normally always 48khz in normal audio files, while q:a quality parameter 5 seems a middle
-value, it is higher than default value 3, and 1 is still very good for my files and kind of large, 80kbps I guess,
-the c:a encoder parameter may be a matching magic value if you are not familiar with this area, but it is literally
-incorrect, vorbis is old format and opus supersedes vorbis format, you need to explicitly know the name of libopus
-to make ai compare them to find the relationship, to work with libopus, change the q parameter to a more explicit b
-parameter for bitrate value, and 32kbps is still good for my files (16kbps is bad if you try)
+- ffprobe -hide_banner -i input.mp3
+  generic file information, remember to hide banner or else the banner is very long, not for script
+- ffprobe -v error -i input.mp3 -show_entries format:stream -output_format json
+  generic file information, output in a more script friendly way
+- ffmpeg -v error -i input.wav -b:a 32000 -c:a libopus output.opus
+  convert audio codec
+- ffmpeg -v error -i track1.opus -ss 165 -t 210 -c:a copy track1-c165.opus
+  split chunks by specific start time and duration
+
+about -loglevel/-v
+
+use -v error to suppress default output include banner and user friendly part, not include show_entries output
+
+about -show_entries
+
+- use stream to show stream level properties, use format to show file level properties
+- use simple 'stream' and 'format' to show all properties of this level,
+  use 'stream=duration,sample_rate', 'format=format_name,size', etc. to include specific properties,
+  use colon to separate stream and format parameters 'stream=duration,sample_rate:format=format_name,size'
+- mp3 and wav codec have stream=bit_rate stream level bit rate information,
+  opus don't, it default only display file level avg bit rate at format=bit_rate option,
+  that's because opus don't encode frames as same size chunks, and don't save avg bit rate information in
+  metadata, and ffprobe default don't iterate through all frames for this information, as indicated by ai,
+  you can -show_entries frame=pkt_size to see they are different
+
+about -output_format/-of
+
+the default output format is reasonable for script to parse but not that reasonable because it is not common,
+expecially compare to json and csv output format
+
+- json is json, don't forget stream level properties have an array to support multiple streams
+- csv is csv, use 'csv=print_section=0' to specific options for this output format, disable print_section
+  for single value properties effectively make output only contain the value itself, and you can use script
+  to directly get output string or may be convert it to numbers
+
+about libopus
+
+ai tells me the audio codec in web audio area that has similar position as webp in web image area is opus,
+like they are all 10+ years old and widely supported but not avif's less than 10 years old new
+
+and tells me to use something like -ar 48000 -q:a 5 -c:a libvorbis to create *ogg* files, I don't know about
+vorbis previously so think it's reasonable the library name is not same as the file extension and codec name,
+until I open ffmpeg codecs document https://ffmpeg.org/ffmpeg-codecs.html and find there is a libopus and ask
+ai what's the difference between libopus and libvoribs that I know libvoribs is deprecated and libopus is the
+correct answer, and that -ar 48000 is not that reasonable option to control file quality and size and normal
+files all use 48khz sample rate, that q:a quality number option is only for libvorbis and does not work quite
+reliably and libopus don't use this parameter and use a clear -b:a bitrate option to specify quality level,
+as you may know 96kbps is common default choice for opus file quality, 32kbps is good enough for this project
 
 - vorbis home page https://xiph.org/vorbis/
 - vorbis wiki https://en.wikipedia.org/wiki/Vorbis
@@ -442,40 +488,11 @@ parameter for bitrate value, and 32kbps is still good for my files (16kbps is ba
 - opus wiki https://en.wikipedia.org/wiki/Opus_(audio_format)
 - opus spec https://datatracker.ietf.org/doc/html/rfc6716
 - also see ogg+opus spec https://datatracker.ietf.org/doc/html/rfc7845
-  section 9 say recommended mime type is audio/ogg, recommended filename extension is .opus
+  section 9 recommend mime type audio/ogg, recommend filename extension .opus
 
 the deprecation statement can be found at
 https://wiki.xiph.org/index.php?title=OpusFAQ&oldid=13856#Does_Opus_make_all_those_other_lossy_codecs_obsolete?
 technically deprecation should be enough for saying vorbis is superseded by opus
-
-### AI Writing
-
-why do you put this section here? this document is completely written by human not ai, but as this document
-is very topic unlimited, you can talk about ai writing as ai is already generating a lot of techincal documents
-
-the traits that make document looks like ai generated:
-
-- inconsistent naming: the same concept or same entity have different name in one paragraph
-- redundent helper words: e.g. it is important to note that this may potentially help to improve
-- verb replace with noun version: e.g. "perform an anlysis of" vs analyze
-- marketing adjectives (I call thisadvertisement wording): seamless, cutting-edge, powerful, etc.
-- very long sentence: although I personally don't use period, the actual sentence length is not long
-- soft phrasal verbs: e.g. spin up, reach out, dive into
-
-see also simpified English: https://www.asd-ste100.org/
-
-### ffmpeg Commands
-
-that use in this project
-
-- TODO
-
-document
-
-- -v parameter: https://ffmpeg.org/ffmpeg.html#Generic-options
-- -of parameter: https://ffmpeg.org/ffprobe.html#toc-Writers
-
-TODO ffprobe -v error -i input.opus -select_streams a:0 -of json -show_entries stream does not include bitrate, you need format=bit_rate, why
 
 ### String Compare
 
@@ -504,4 +521,21 @@ links
 the result is sort as byte sequence
 
 - nodejs: Buffer.compare(Buffer.from(string1), Buffer.from(string2))
-- python: string1.encode('utf-8') > string2.encode('utf-8')
+- python: key=lambda x: x.encode('utf-8')
+
+### AI Writing
+
+why do you put this section here? this document is completely written by human not ai, but as this document
+is very topic unlimited, you can talk about ai writing as ai is already generating a lot of techincal documents
+
+the traits that make document looks like ai generated:
+
+- inconsistent naming: the same concept or same entity have different name in one paragraph
+- redundent helper words: e.g. it is important to note that this may potentially help to improve
+- verb replace with noun version: e.g. "perform an anlysis of" vs analyze
+- marketing adjectives (I call thisadvertisement wording): seamless, cutting-edge, powerful, etc.
+- very long sentence: although I personally don't use period, the actual sentence length is not long
+- soft phrasal verbs: e.g. spin up, reach out, dive into
+
+see also simpified English: https://www.asd-ste100.org/
+

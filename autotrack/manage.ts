@@ -317,14 +317,14 @@ interface WorkMetadata {
     providerProviderLink?: string,
     actors: string[],
     providerTags: string[],
-    // work ids for language editions, variable names use eid (edition work id)
+    // work ids for language editions
     // // this concept was named subwork, but that conflict with concept of subtitle which also abbreviated sub,
     // // so name this back to language editions same as raw workinfo, which seems to be a standard name of concept
     // // in publishing areas (doujin asmr works are also published work)
     languageEditions: string[],
-    // custom properties
-    // note that title is customizable to remove unnecessary decorations
+    // title is customizable to remove unnecessary decorations
     title: string,
+    // YYYYMMDDThhmmssZ
     addTime: string,
     lastAccessTime: string,
     tags: string[],
@@ -337,22 +337,22 @@ interface WorkMetadata {
     // score generally works as one access time +1,
     // but if you feel very good can +2, and feel not good -1
     score: number,
-    // main work id or edition id
+    // main work id or edition id, default to main work id
     audioWorkId?: string,
-    // this is result audio format, not redundent information from track.providerpath,
-    // provider path accept mp3, wav and flac, result format currently only allow opus,
-    // before conversion complete and run command to mark audio format, this is empty
+    // this is result audio format, not redundent information from provider files,
+    // currently can only be opus, has value means audio codec modernization is complete
     audioFormat?: string,
-    // empty for no subtitle, main work id or edition id
+    // empty for no subtitle, main work id or edition id, default to main work id
     subtitleWorkId?: string,
-    // this is result subtitle format, not redundent information from track.subtitleproviderpath,
-    // see convertProviderSubtitle, before conversion or external operation complete, this is empty
+    // this is result subtitle format, not redundent information from provider files,
+    // currently can be vss or txt, has value means subtitle conversion/generation is complete
     subtitleFormat?: string,
     // no need to use tree structure because most of the time I only use one directory,
     // even if really need same name files from multiple directory I can prepend something
     // like folder name to dinstinguish, even for large works with like 100 files spreaded
     // in 3 layer directories, add a full path to track info is very enough for displaying
     // and manipulating, no need to make this tree structure
+    // UPDATE very don't need directory structure
     tracks: TrackMetadata[],
 }
 interface TrackMetadata {
@@ -361,16 +361,11 @@ interface TrackMetadata {
     name?: string,
     duration: number,
     comments?: string[],
-    // index in sorted flatten reocrd list of the work specified by audioworkid
-    // NOTE start from 1
-    // TODO rename to audiofileindex
-    providerPath: number,
-    // index in sorted flatten file list of the work specified by subtitleworkid
-    // NOTE start from 1
-    // exist if have subtitle, regardless of belong to main work or editions
+    // index in raw file list, start from 1
+    audioFileIndex: number,
+    // index in raw file list, start from 1
     // -1 for asr
-    // TODO rename to subtitlefileindex
-    subtitleProviderPath?: number,
+    subtitleFileIndex?: number,
     // let client display something instead of silent 404
     workInProgress?: true,
 }
@@ -443,8 +438,8 @@ async function writeMetadata(metadata: WorkMetadata) {
             name: t.name,
             duration: t.duration,
             comments: t.comments,
-            providerPath: t.providerPath,
-            subtitleProviderPath: t.subtitleProviderPath,
+            audioFileIndex: t.audioFileIndex ?? (t as any)['providerPath'],
+            subtitleFileIndex: t.subtitleFileIndex ?? (t as any)['subtitleProviderPath'],
             workInProgress: t.workInProgress,
         })),
     };
@@ -464,42 +459,15 @@ interface FlatFileInfo {
 function flattenFileInfo(root: FileInfoNode): FlatFileInfo[] {
     const results: FlatFileInfo[] = [];
     // dfs
-    function collect(folder: FileInfoNode, basepath: string) {
-        const subfolders = folder.children?.filter(f => f.type == 'folder') ?? [];
+    function collect(node: FileInfoNode, basepath: string) {
+        const folders = node.children?.filter(f => f.type == 'folder') ?? [];
         // byte sequence compare is the only reliable string compare cross languages and libraries
-        // according to migrated data, SEあり and SEなし have different order compare to .localeCompare
-        // ascii numbers and ★, upper case letters and ♡, ～ and 變, １ and オ, H and _ (2 ascii?)
-        subfolders.sort((f1, f2) => Buffer.compare(Buffer.from(f1.title), Buffer.from(f2.title)));
-        for (const subfolder of subfolders) {
-            collect(subfolder, basepath + '/' + subfolder.title);
+        folders.sort((f1, f2) => Buffer.compare(Buffer.from(f1.title), Buffer.from(f2.title)));
+        for (const folder of folders) {
+            collect(folder, basepath + '/' + folder.title);
         }
-        const items = folder.children?.filter(f => f.type != 'folder') ?? [];
+        const items = node.children?.filter(f => f.type != 'folder') ?? [];
         items.sort((i1, i2) => Buffer.compare(Buffer.from(i1.title), Buffer.from(i2.title)));
-        for (const item of items) {
-            results.push({
-                type: item.type,
-                providerPath: basepath + '/' + item.title,
-                size: item.size!,
-                duration: item.duration!,
-                mediaDownloadUrl: item.mediaDownloadUrl!,
-            });
-        }
-    }
-    // start with virtual root directory
-    collect(root, '');
-    return results;
-}
-function legacyFlattenFileInfo(root: FileInfoNode): FlatFileInfo[] {
-    const results: FlatFileInfo[] = [];
-    // dfs
-    function collect(folder: FileInfoNode, basepath: string) {
-        const subfolders = folder.children?.filter(f => f.type == 'folder') ?? [];
-        subfolders.sort((f1, f2) => f1.title.localeCompare(f2.title));
-        for (const subfolder of subfolders) {
-            collect(subfolder, basepath + '/' + subfolder.title);
-        }
-        const items = folder.children?.filter(f => f.type != 'folder') ?? [];
-        items.sort((i1, i2) => i1.title.localeCompare(i2.title));
         for (const item of items) {
             results.push({
                 type: item.type,
@@ -542,7 +510,7 @@ function handleDisplayMetadata(ctx: CommandContext) {
     console.log('  tracks:');
     for (const track of ctx.meta.tracks) {
         console.log(`    ${track.index}: ${track.name ?? '(empty)'} ${styleText('gray', 
-            `(${track.providerPath}${track.subtitleProviderPath ? ` sub ${track.subtitleProviderPath}` : ''})`)}`);
+            `(${track.audioFileIndex}${track.subtitleFileIndex ? ` sub ${track.subtitleFileIndex}` : ''})`)}`);
     }
     console.log('  raw tracks:');
     const getDisplayPath = (value: string) => value
@@ -687,7 +655,7 @@ function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: nu
     if (!['mp3', 'wav', 'flac'].includes(audioFormat)) {
         return logError('unrecognized audio format, currently support mp3, wav, flac');
     } else if (ctx.meta.tracks.length) {
-        const existingAudioFile = ctx.files[audioWorkId][ctx.meta.tracks[0].providerPath - 1];
+        const existingAudioFile = ctx.files[audioWorkId][ctx.meta.tracks[0].audioFileIndex - 1];
         const existingAudioFormat = path.extname(existingAudioFile.providerPath).substring(1);
         if (existingAudioFormat != audioFormat) {
             return logError(`audio format ${audioFormat} not same as existing value ${existingAudioFormat}`);
@@ -718,7 +686,7 @@ function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: nu
         }
         if (ctx.meta.tracks.length) {
             const existingFileIndex = ctx.meta.tracks
-                .find(t => t.subtitleProviderPath && t.subtitleProviderPath != -1)?.subtitleProviderPath;
+                .find(t => t.subtitleFileIndex && t.subtitleFileIndex != -1)?.subtitleFileIndex;
             if (existingFileIndex) {
                 const existingSubtitleFormat = path.extname(ctx.files[subtitleWorkId][existingFileIndex - 1].providerPath).substring(1);
                 if (existingSubtitleFormat != subtitleFormat) {
@@ -738,8 +706,8 @@ function addOneTrack(ctx: CommandContext, audioWorkId: string, audioRawIndex: nu
         name: trackName,
         duration: audioFile.duration,
         // both input index and saved index start from 1
-        providerPath: audioRawIndex,
-        subtitleProviderPath: subtitleRawIndex,
+        audioFileIndex: audioRawIndex,
+        subtitleFileIndex: subtitleRawIndex,
         workInProgress: true,
     });
 }
@@ -806,7 +774,6 @@ function handleAddTrack(ctx: CommandContext, parameters: string[]) {
     }
 }
 
-// TODO merge 2 download functions to support incremental download in extra files
 // parameters: after "extra" not include "extra"
 async function handleDownloadExtraFile(ctx: CommandContext, parameters: string[]) {
     if (!parameters[0]) {
@@ -838,6 +805,7 @@ async function handleDownloadExtraFile(ctx: CommandContext, parameters: string[]
     }
     logInfo(`download extra file ${meid} ${fileinfo.providerPath} to ${localPath}`);
     if (LOGURL) { logInfo(`download url ${fileinfo.mediaDownloadUrl}`); }
+    // TODO add incremental download if need
     const response = await fetch(fileinfo.mediaDownloadUrl);
     // this can happen at abitrary file UPDATE this frequently happen to all image and video file in old works
     if (!response.ok) { return logError(`download response not ok ${response.status}`); }
@@ -857,17 +825,17 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
     logInfo(`track count ${ctx.meta.tracks.length}`);
     const tasks: { index: number, kind: 'audio' | 'subtitle', info: FlatFileInfo, localPath: string }[] = [];
     for (const track of ctx.meta.tracks) {
-        const audioFile = ctx.files[(ctx.meta.audioWorkId ?? ctx.id)][track.providerPath - 1];
+        const audioFile = ctx.files[(ctx.meta.audioWorkId ?? ctx.id)][track.audioFileIndex - 1];
         if (!audioFile) { return logError(`track ${track.index} audio provider path out of range?`); }
         const audioExtension = path.extname(audioFile.providerPath);
-        const localPath = makepath(ctx.id, `${ctx.meta.audioWorkId ?? ctx.id}-file${track.providerPath}${audioExtension}`);
+        const localPath = makepath(ctx.id, `${ctx.meta.audioWorkId ?? ctx.id}-file${track.audioFileIndex}${audioExtension}`);
         tasks.push({ index: track.index, kind: 'audio', info: audioFile, localPath });
 
-        if (track.subtitleProviderPath && track.subtitleProviderPath != -1) {
-            const subtitleFile = ctx.files[(ctx.meta.subtitleWorkId ?? ctx.id)][track.subtitleProviderPath - 1];
+        if (track.subtitleFileIndex && track.subtitleFileIndex != -1) {
+            const subtitleFile = ctx.files[(ctx.meta.subtitleWorkId ?? ctx.id)][track.subtitleFileIndex - 1];
             if (!subtitleFile) { return logError(`track ${track.index} subtitle provider path not found?`); }
             const subtitleExtension = path.extname(subtitleFile.providerPath);
-            const localPath = makepath(ctx.id, `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleProviderPath}${subtitleExtension}`);
+            const localPath = makepath(ctx.id, `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleFileIndex}${subtitleExtension}`);
             tasks.push({ index: track.index, kind: 'subtitle', info: subtitleFile, localPath });
         }
     }
@@ -941,7 +909,7 @@ async function handleModernizeAudio(ctx: CommandContext, parameters: string[]) {
     for (const track of ctx.meta.tracks) {
         const modernAudioPath = makepath(ctx.id, `track${track.index}.${expectAudioFormat}`);
         if (npfs.existsSync(modernAudioPath)) {
-            if (!track.subtitleProviderPath && track.workInProgress) {
+            if (!track.subtitleFileIndex && track.workInProgress) {
                 delete track.workInProgress;
             }
         } else {
@@ -1058,23 +1026,25 @@ async function handleSimplifySubtitle(ctx: CommandContext, parameters: string[])
     let hasDisplayedMarkASRMessage = false;
     let existingProviderSubtitleFormat: string;
     for (const track of ctx.meta.tracks) {
-        if (track.subtitleProviderPath == -1) {
+        if (track.subtitleFileIndex == -1) {
+            existingProviderSubtitleFormat = existingProviderSubtitleFormat || 'vss';
             if (!npfs.existsSync(makepath(ctx.id, `track${track.index}.vss`))
                 && !npfs.existsSync(makepath(ctx.id, `track${track.index}.txt`))
             ) {
                 logInfo(`track ${track.index}: is marked as asr but no matching txt/vss file found`);
             }
-        } else if (!track.subtitleProviderPath) {
+        } else if (!track.subtitleFileIndex) {
             if (parameters[0] == 'mark-asr') {
                 logInfo(`track ${track.index}: mark asr`);
-                track.subtitleProviderPath = -1;
+                track.subtitleFileIndex = -1;
+                existingProviderSubtitleFormat = existingProviderSubtitleFormat || 'vss';
             } else if (!hasDisplayedMarkASRMessage) {
                 hasDisplayedMarkASRMessage = true;
                 logInfo(`track ${track.index}: no subtitle provider path, use mark-asr (this script does not actually run asr)`);
             }
         } else {
             // for track with subtitle provider path, always check file exist and size match or else skip the track
-            const subtitleFile = ctx.files[ctx.meta.subtitleWorkId ?? ctx.id][track.subtitleProviderPath - 1];
+            const subtitleFile = ctx.files[ctx.meta.subtitleWorkId ?? ctx.id][track.subtitleFileIndex - 1];
             if (!subtitleFile) {
                 return logError(`track ${track.index}: subtitle provider path out of range?`);
             }
@@ -1085,7 +1055,7 @@ async function handleSimplifySubtitle(ctx: CommandContext, parameters: string[])
                 return logError(`track ${track.index}: subtitle format ${providerSubtitleFormat} not same as existing value ${existingProviderSubtitleFormat}?`);
             }
             const providerSubtitleLocalPath = makepath(ctx.id,
-                `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleProviderPath}.${providerSubtitleFormat}`);
+                `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleFileIndex}.${providerSubtitleFormat}`);
             if (!npfs.existsSync(providerSubtitleLocalPath)) {
                 logInfo(`track ${track.index}: provider subtitle file not exist, skip`);
                 continue;
@@ -1099,28 +1069,34 @@ async function handleSimplifySubtitle(ctx: CommandContext, parameters: string[])
                 if (!npfs.existsSync(makepath(ctx.id, `track${track.index}.txt`))) {
                     logInfo(`track ${track.index}: subtitle provider path is pdf but no matching txt file found`);
                 }
-            } else if (providerSubtitleFormat != 'txt') {
+            } else if (providerSubtitleFormat == 'txt') {
+                const simpleSubtitleFilePath = makepath(ctx.id, `track${track.index}.txt`);
+                if (!npfs.existsSync(simpleSubtitleFilePath)) {
+                    logInfo(`track ${track.index}: copy ${providerSubtitleLocalPath} to ${simpleSubtitleFilePath}`);
+                    await fs.copyFile(providerSubtitleLocalPath, simpleSubtitleFilePath);
+                }
+            } else if (['vtt', 'srt', 'lrc'].includes(providerSubtitleFormat)) {
                 // always try to convert to vss here
                 const simpleSubtitleFilePath = makepath(ctx.id, `track${track.index}.vss`);
                 if (!npfs.existsSync(simpleSubtitleFilePath)) {
                     const originalContent = await fs.readFile(providerSubtitleLocalPath, 'utf-8');
                     const cues = convertSubtitleFormat(track.index, providerSubtitleFormat, originalContent);
-                    const simplifiedContent = cues.map(r => `${r.start},${r.end},${r.text}\n`).join('');
+                    const simplifiedContent = cues.map(r => `${Math.round(r.start * 1000) / 1000},${Math.round(r.end * 1000) / 1000},${r.text}\n`).join('');
                     logInfo(`track ${track.index}: write ${simpleSubtitleFilePath} ${cues.length} records`);
                     await fs.writeFile(simpleSubtitleFilePath, simplifiedContent);
                 }
-            } // TODO copy txt files
+            }
         }
     }
 
     // if no track has subtitleproviderpath, do nothing
-    if (ctx.meta.tracks.some(t => t.subtitleProviderPath)) {
+    if (ctx.meta.tracks.some(t => t.subtitleFileIndex)) {
         // if all tracks with subtitleproviderpath has existing matching file, mark metadat.subtitleformat
         let allTrackComplete = true;
         const expectSimpleSubtitleFormat = ['vtt', 'srt', 'lrc', 'vss'].includes(existingProviderSubtitleFormat) ? 'vss' : 'txt';
         for (const track of ctx.meta.tracks) {
             const filepath = makepath(ctx.id, `track${track.index}.${expectSimpleSubtitleFormat}`);
-            if (track.subtitleProviderPath) {
+            if (track.subtitleFileIndex) {
                 if (npfs.existsSync(filepath)) {
                     if (track.workInProgress) {
                         delete track.workInProgress;
@@ -1151,9 +1127,7 @@ async function handleWorkCommand(parameters: string[]) {
         const [workinfo, fileinfo] = await getRawMetadata(editionId, workId); if (!workinfo) { return; }
         files.push([editionId, fileinfo]);
     }
-    const flatfiles = parameters[1] == 'meta' && parameters[2] == 'oldorder' 
-        ? Object.fromEntries(files.map(([i, r]) => [i, legacyFlattenFileInfo(r)]))
-        : Object.fromEntries(files.map(([i, r]) => [i, flattenFileInfo(r)]));
+    const flatfiles = Object.fromEntries(files.map(([i, r]) => [i, flattenFileInfo(r)]));
     const ctx: CommandContext = { id: workId, meta: metadata, info: workinfo, files: flatfiles };
     
     if (parameters.length == 1 || parameters[1] == 'meta') {
@@ -1416,7 +1390,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 'index', 'name',
                 'duration', 'comments',
                 'workInProgress',
-                'providerPath', 'subtitleProviderPath',
+                'audioFileIndex', 'subtitleFileIndex',
             ];
             for (const track of metadata.tracks) {
                 for (const propertyName of Object.keys(track)) {
@@ -1429,7 +1403,6 @@ async function handleMigrateCommand(parameters: string[]) {
                 }
             }
             if ([...metadata.languageEditions].sort((e1, e2) => +e1.substring(2) - +e2.substring(2)).some((s, i) => metadata.languageEditions[i] != s)) {
-                // TODO test this
                 logInfo(`${workId}: language edition sort difference？`);
             }
 
@@ -1465,8 +1438,14 @@ async function handleMigrateCommand(parameters: string[]) {
                 return logError(`${workId}: invalid subtitle format, don't forget to convert exsiting works`);
             }
 
-            if (metadata.retired) { return; }
+            if (metadata.retired) {
+                if (metadata.tracks.length) {
+                    logError(`${workId}: is retired but has track metadata`);
+                }
+                return;
+            }
 
+            const knownFiles: string[] = [];
             let reportedProviderAudioLocalFileMissing: boolean;
             let reportedProviderSubtitleLocalFileMissing: boolean;
             let existingProviderAudioFormat: string;
@@ -1475,7 +1454,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 // first validate provider file
                 let providerAudioFileOk = true;
                 let providerSubtitleFileOk = true;
-                const audioFile = files[(ctx.meta.audioWorkId ?? ctx.id)][track.providerPath - 1];
+                const audioFile = files[(ctx.meta.audioWorkId ?? ctx.id)][track.audioFileIndex - 1];
                 if (!audioFile) {
                     return logError(`${workId}: track ${track.index} provider path out of range?`);
                 }
@@ -1489,7 +1468,8 @@ async function handleMigrateCommand(parameters: string[]) {
                         logError(`${workId}: track ${track.index} provider audio format ${providerAudioFormat} not same as previous ${existingProviderAudioFormat}`);
                     }
                 }
-                const providerAudioFileLocalPath = makepath(workId, `${ctx.meta.audioWorkId ?? ctx.id}-file${track.providerPath}.${providerAudioFormat}`);
+                const providerAudioFileLocalPath = makepath(workId, `${ctx.meta.audioWorkId ?? ctx.id}-file${track.audioFileIndex}.${providerAudioFormat}`);
+                knownFiles.push(path.basename(providerAudioFileLocalPath));
                 if (!npfs.existsSync(providerAudioFileLocalPath)) {
                     providerAudioFileOk = false;
                     if (!reportedProviderAudioLocalFileMissing) {
@@ -1503,8 +1483,8 @@ async function handleMigrateCommand(parameters: string[]) {
                         logError(`${workId}: track ${track.index} provider size mismatch, expect ${audioFile.size} actual ${stat.size}`);
                     }
                 }
-                if (track.subtitleProviderPath && track.subtitleProviderPath != -1) {
-                    const subtitleFile = files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleProviderPath - 1];
+                if (track.subtitleFileIndex && track.subtitleFileIndex != -1) {
+                    const subtitleFile = files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleFileIndex - 1];
                     if (!subtitleFile) {
                         return logError(`${workId}: track ${track.index} subtitle provider path out of range?`);
                     } 
@@ -1518,7 +1498,8 @@ async function handleMigrateCommand(parameters: string[]) {
                             logError(`${workId}: track ${track.index} provider subtitle format ${providerSubtitleFormat} not same as previous ${existingProviderSubtitleFormat}`);
                         }
                     }
-                    const providerSubtitleFilePath = makepath(workId, `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleProviderPath}.${providerSubtitleFormat}`);
+                    const providerSubtitleFilePath = makepath(workId, `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleFileIndex}.${providerSubtitleFormat}`);
+                    knownFiles.push(path.basename(providerSubtitleFilePath));
                     if (!npfs.existsSync(providerSubtitleFilePath)) {
                         providerSubtitleFileOk = false;
                         if (!reportedProviderSubtitleLocalFileMissing) {
@@ -1546,7 +1527,7 @@ async function handleMigrateCommand(parameters: string[]) {
                             reportedProviderAudioLocalFileMissing = true;
                         }
                     }
-                    if (track.subtitleProviderPath) {
+                    if (track.subtitleFileIndex) {
                         const subtitleFilePath = makepath(workId, `track${track.index}.${metadata.subtitleFormat}`)
                         if (!npfs.existsSync(subtitleFilePath)) {
                             simpleSubtitleFileOk = false;
@@ -1559,9 +1540,9 @@ async function handleMigrateCommand(parameters: string[]) {
                 } else {
                     modernAudioFileOk = false;
                 }
-                if (providerAudioFileOk && providerSubtitleFileOk && modernAudioFileOk && simpleSubtitleFileOk && track.workInProgress) {
+                if (modernAudioFileOk && simpleSubtitleFileOk && track.workInProgress) {
                     logError(`${workId}: track ${track.index} files completed but workinprogress flag set`);
-                } else if ((!providerAudioFileOk || !providerSubtitleFileOk || !modernAudioFileOk || !simpleSubtitleFileOk) && !track.workInProgress) {
+                } else if ((!modernAudioFileOk || !simpleSubtitleFileOk) && !track.workInProgress) {
                     logError(`${workId}: track ${track.index} files not completed but workinprogress flag missing, ${providerAudioFileOk}, ${providerSubtitleFileOk}, ${modernAudioFileOk}, ${simpleSubtitleFileOk}`);
                 }
             }
@@ -1573,8 +1554,30 @@ async function handleMigrateCommand(parameters: string[]) {
                 logError(`${workId}: may be forget to remove track index from track name`);
             }
 
-            // TODO validate other files not belong to track with naming convention {workid}-file{index}.{samesuffix}
-
+            for (const filename of await fs.readdir(makepath(workId))) {
+                if (!knownFiles.includes(filename) && /^RJ\d{8}-file\d+\./.test(filename)) {
+                    const meid = filename.substring(0, 10);
+                    const fileIndex = +filename.substring(15, filename.length - path.extname(filename).length);
+                    if (meid != workId && !metadata.languageEditions.includes(meid)) {
+                        logError(`${workId}: extra file ${filename} invalid work id?`);
+                    } else {
+                        const file = files[meid][fileIndex - 1];
+                        if (!file) {
+                            logError(`${workId}: extra file ${filename} index out of range?`);
+                        } else {
+                            const providerFileType = path.extname(file.providerPath).substring(1);
+                            const actualFileType = path.extname(filename).substring(1);
+                            if (providerFileType != actualFileType) {
+                                logError(`${workId}: extra file ${filename} file type mismatch? ${providerFileType} != ${actualFileType}`)
+                            }
+                            const stat = await fs.stat(makepath(workId, filename));
+                            if (stat.size != file.size) {
+                                logError(`${workId}: extra file ${filename} size mismatch ${file.size} != ${stat.size}`);
+                            }
+                        }
+                    }
+                }
+            }
         }));
 
     // stat: all kinds of statistics
@@ -1642,9 +1645,8 @@ async function handleMigrateCommand(parameters: string[]) {
             // this is now an error not a count
             if (metadata.tracks.length == 0) { return logError(`${workId}: no tracks`); }
             workCount += 1;
-            if (metadata.tracks.some(t => t.subtitleProviderPath)) { hasSubtitleWorkCount += 1; }
+            if (metadata.tracks.some(t => t.subtitleFileIndex)) { hasSubtitleWorkCount += 1; }
 
-            (workCountPerAudioType as any)[metadata.audioFormat] += 1; // TODO move to provideraudioformat
             const month = metadata.addTime.substring(0, 6);
             monthlySpread.set(month, monthlySpread.has(month) ? monthlySpread.get(month) + 1 : 1);
             const addTime = parseMetadataTime(metadata.addTime);
@@ -1692,9 +1694,9 @@ async function handleMigrateCommand(parameters: string[]) {
             // stat's completed flag need both provider files exist and processed files exist
             let filesCompleted = true;
             for (const track of metadata.tracks) {
-                const audioFile = ctx.files[(metadata.audioWorkId ?? metadata.id)][track.providerPath - 1];
+                const audioFile = ctx.files[(metadata.audioWorkId ?? metadata.id)][track.audioFileIndex - 1];
                 if (!audioFile) {
-                    return logError(`${workId} track ${track.index}: provider path out of range? ${track.providerPath}`);
+                    return logError(`${workId} track ${track.index}: provider path out of range? ${track.audioFileIndex}`);
                 }
                 rawTotalBytes += audioFile.size;
                 totalDuration += audioFile.duration;
@@ -1720,6 +1722,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 ) {
                     // console.log(`bitrate ${workId}/${ctx.meta.audioWorkId ?? ctx.id}-file${track.providerPath}.${providerAudioFormat} ${bitrate}kbps`);
                 }
+                (workCountPerAudioType as any)[providerAudioFormat] += 1;
                 
                 // for stat, only need to check converted audio/subtitle file exist
                 const modernAudioFileLocalPath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
@@ -1730,11 +1733,11 @@ async function handleMigrateCommand(parameters: string[]) {
                     modernTotalBytes += stat.size;
                 }
 
-                if (track.subtitleProviderPath) {
-                    if (track.subtitleProviderPath != -1) {
-                        const subtitleFile = ctx.files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleProviderPath - 1];
+                if (track.subtitleFileIndex) {
+                    if (track.subtitleFileIndex != -1) {
+                        const subtitleFile = ctx.files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleFileIndex - 1];
                         if (!subtitleFile) {
-                            return logError(`${workId} track ${track.index}: subtitle provider path out of range? ${track.providerPath}`);
+                            return logError(`${workId} track ${track.index}: subtitle provider path out of range? ${track.subtitleFileIndex}`);
                         }
                         const simpleSubtitleFileLocalPath = makepath(workId, `track${track.index}.${metadata.subtitleFormat}`);
                         if (!npfs.existsSync(simpleSubtitleFileLocalPath)) {
@@ -1830,6 +1833,17 @@ async function handleMigrateCommand(parameters: string[]) {
             metadata.managementComments?.forEach(c => console.log(`${workId}: ${c}`));
             metadata.tracks.forEach(t => t.comments?.forEach(c => console.log(`${workId}: track ${t.index} ${c}`)));
         }
+    
+    // convert vtt/srt/lrc extra subtitle file to vss
+    } else if (parameters[0] == 'subtitle') {
+        if (parameters[1]) {
+            if (npfs.existsSync(parameters[1])) {
+                const result = convertSubtitleFormat('x' as unknown as number, path.extname(parameters[1]).substring(1), await fs.readFile(parameters[1], 'utf-8'));
+                const simplifiedContent = result.map(r => `${Math.round(r.start * 1000) / 1000},${Math.round(r.end * 1000) / 1000},${r.text}\n`).join('');
+                logInfo(`write ${parameters[1] + '.vss'}`);
+                await fs.writeFile(parameters[1] + '.vss', simplifiedContent);
+            }
+        }
 
     // migrate file structure
     } else if (parameters[0] == "filename") {
@@ -1850,196 +1864,67 @@ async function handleMigrateCommand(parameters: string[]) {
                 files[editionId] = flattenFileInfo({ type: 'folder', title: '(root)', children: editionNotFlatFileInfos });
             }
 
-            metadata.audioFormat = 'opus';
-            for (const track of metadata.tracks) {
-                if (!npfs.existsSync(makepath(workId, `track${track.index}.opus`))) {
-                    track.workInProgress = true;
-                } else {
-                    delete track.workInProgress;
-                }
-            }
-            await writeMetadata(metadata);
-
-            // const knownFiles = [
-            //     'cover.jpg',
-            //     'cover.avif',
-            //     'metadata.json',
-            //     `${workId}-workinfo.json`,
-            //     `${workId}-trackinfo.json`,
-            // ].concat(metadata.languageEditions.map(editionId => [
-            //     `${editionId}-workinfo.json`,
-            //     `${editionId}-trackinfo.json`,
-            // ]).flat()).concat(metadata.tracks.map(track => [
-            //     `track${track.index}.${metadata.audioFormat}`,
-            //     track.subtitleProviderPath ? `track${track.index}.${metadata.audioFormat}${subtitleFormat}` : null,
-            //     // specially exclude all vss file, they are not extra file
-            //     track.subtitleProviderPath ? `track${track.index}.${metadata.audioFormat}.vss` : null,
-            // ].filter(x => x)).flat());
-            // for (const filename of await fs.readdir(makepath(workId))) {
-            //     if (!knownFiles.includes(filename)) {
-            //         // console.log(`${workId}: extra file ${filename}`);
-            //     }
-            // }
-        }
-
-    // fix provider path mismatch after reorder
-    } else if (parameters[0] == "reorder") {
-        for (const workId of roughWorkIds) {
-            if (parameters[1] && workId != parameters[1]) { continue; }
-            // if provider audio format or provider subtitle format unexpected
-            // if provider audio file size or provider subtitle file size mismatch
-            // find the path by original sorting logic and map to new index
-
-            const metadataPath = makepath(workId, 'metadata.json');
-            if (!npfs.existsSync(metadataPath)) {
-                return logError(`${workId}: incomplete file structure`);
-            }
-            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
-            if (metadata.retired) { continue; }
-
-            const fileinfoPath = makepath(workId, `${metadata.id}-fileinfo.json`);
-            const mainNotFlatFileInfos = JSON.parse(await fs.readFile(fileinfoPath, 'utf-8')) as FileInfoNode[];
-            const files = { [workId]: flattenFileInfo({ type: 'folder', title: '(root)', children: mainNotFlatFileInfos }) };
-            for (const editionId of metadata.languageEditions) {
-                const fileinfoPath = makepath(workId, `${editionId}-fileinfo.json`);
-                const editionNotFlatFileInfos = JSON.parse(await fs.readFile(fileinfoPath, 'utf-8')) as FileInfoNode[];
-                files[editionId] = flattenFileInfo({ type: 'folder', title: '(root)', children: editionNotFlatFileInfos });
-            }
-
-            const legacyOrderFiles = { [workId]: legacyFlattenFileInfo({ type: 'folder', title: '(root)', children: mainNotFlatFileInfos }) };
-            for (const editionId of metadata.languageEditions) {
-                const fileinfoPath = makepath(workId, `${editionId}-fileinfo.json`);
-                const editionNotFlatFileInfos = JSON.parse(await fs.readFile(fileinfoPath, 'utf-8')) as FileInfoNode[];
-                legacyOrderFiles[editionId] = legacyFlattenFileInfo({ type: 'folder', title: '(root)', children: editionNotFlatFileInfos });
-            }
-
-            // ATTENTION some new indexes are same as existing old index, if you simply rename they will overwrite
-            // you need to collect plans, rename to something other and rename back
-            const renamePlans: [string, string][] = [];
-            for (const track of metadata.tracks) {
-                const audioFile = files[metadata.audioWorkId ?? metadata.id][track.providerPath - 1];
-                if (!audioFile) {
-                    logError(`${workId}: track ${track.index} provider path out of range?`);
-                    continue;
-                }
-                let mismatch = false;
-                const providerAudioFormat = path.extname(audioFile.providerPath).substring(1);
-                if (!['mp3', 'wav', 'flac'].includes(providerAudioFormat)) {
-                    // logError(`${workId}: track ${track.index} audio format mismatch, ${providerAudioFormat}`);
-                    mismatch = true;
-                } else {
-                    const providerAudioLocalPath = makepath(workId, `${metadata.audioWorkId ?? metadata.id}-file${track.providerPath}.${providerAudioFormat}`);
-                    if (npfs.existsSync(providerAudioLocalPath)) {
-                        const stat = await fs.stat(providerAudioLocalPath);
-                        if (stat.size != audioFile.size) {
-                            // logError(`${workId}: track ${track.index} audio size mismatch, ${stat.size}, ${audioFile.size}`);
-                            mismatch = true;
+            const knownFiles = [
+                'cover.jpg',
+                'cover.avif',
+                'metadata.json',
+                `${workId}-workinfo.json`,
+                `${workId}-fileinfo.json`,
+            ].concat(metadata.languageEditions.map(editionId => [
+                `${editionId}-workinfo.json`,
+                `${editionId}-fileinfo.json`,
+            ]).flat()).concat(metadata.tracks.map(track => [
+                `${metadata.audioWorkId ?? metadata.id}-file${track.audioFileIndex}${path.extname(files[metadata.audioWorkId ?? metadata.id][track.audioFileIndex - 1].providerPath)}`,
+                `track${track.index}.${metadata.audioFormat}`,
+                track.subtitleFileIndex && track.subtitleFileIndex != -1
+                    ? `${metadata.subtitleWorkId ?? metadata.id}-file${track.subtitleFileIndex}${path.extname(files[metadata.subtitleWorkId ?? metadata.id][track.subtitleFileIndex - 1].providerPath)}` : null,
+                track.subtitleFileIndex ? `track${track.index}.${metadata.subtitleFormat}` : null,
+            ].filter(x => x)).flat());
+            for (const filename of await fs.readdir(makepath(workId))) {
+                if (filename.startsWith('RJ') || filename.includes('-file')) { continue; }
+                const stat = await fs.stat(makepath(workId, filename));
+                if (!knownFiles.includes(filename)) {
+                    let ok = false;
+                    for (const editionId of [workId].concat(metadata.languageEditions)) {
+                        const matches = files[editionId].filter(f => path.basename(f.providerPath) == filename);
+                        for (const file of matches) {
+                            if (stat.size != file.size) {
+                                logInfo(`${workId}: extra file may be ${file.providerPath} but size mismatch, ${stat.size}, ${file.size}`);
+                            } else {
+                                const index = files[editionId].findIndex(f => f.providerPath == file.providerPath);
+                                const newfilename = `${editionId}-file${index + 1}${path.extname(filename)}`;
+                                if (npfs.existsSync(makepath(workId, newfilename))) {
+                                    logError(`${workId}: ${filename}: new file name already exists`);
+                                }
+                                logInfo(`${workId}: extra file ${file.providerPath} rename to ${newfilename}`);
+                                await fs.rename(makepath(workId, filename), makepath(workId, newfilename));
+                                ok = true;
+                                break;
+                            }
                         }
-                    } else {
-                        const availableFiles = await fs.readdir(makepath(workId));
-                        const matchingFile = availableFiles.find(f => f.startsWith(`${metadata.audioWorkId ?? metadata.id}-file${track.providerPath}.`));
-                        if (matchingFile) {
-                            mismatch = true;
+                        if (ok) {
+                            break;
                         }
                     }
-                }
-                if (mismatch) {
-                    logInfo(`${workId}: track ${track.index} mismatch, searching`);
-                    const legacyAudioFile = legacyOrderFiles[metadata.audioWorkId ?? metadata.id][track.providerPath - 1];
-                    const legacyProviderAudioFormat = path.extname(legacyAudioFile.providerPath).substring(1);
-                    if (!['mp3', 'wav', 'flac'].includes(legacyProviderAudioFormat)) {
-                        logError(`${workId}: track ${track.index} legacy index still not work? ${legacyAudioFile.providerPath}`);
-                        continue;
-                    }
-                    const legacyProviderAudioLocalPath = makepath(workId, `${metadata.audioWorkId ?? metadata.id}-file${track.providerPath}.${legacyProviderAudioFormat}`);
-                    if (!npfs.existsSync(legacyProviderAudioLocalPath)) {
-                        logError(`${workId}: track ${track.index} legacy file matching local path not exist, skip, ${legacyProviderAudioLocalPath}`);
-                        continue;
-                    }
-                    const stat = await fs.stat(legacyProviderAudioLocalPath);
-                    if (stat.size != legacyAudioFile.size) {
-                        logError(`${workId}: track ${track.index} legacy index still size mismatch? ${legacyAudioFile.providerPath}, ${stat.size}, ${audioFile.size}`);
-                        continue;
-                    }
-                    const newIndex = files[metadata.audioWorkId ?? metadata.id].findIndex(f => f.providerPath == legacyAudioFile.providerPath) + 1;
-                    logInfo(`${workId}: track ${track.index} find provider path ${legacyAudioFile.providerPath} new index ${styleText('cyan', track.providerPath.toString())} => ${styleText('cyan', newIndex.toString())}`);
-                    const oldLocalPath = makepath(workId, `${metadata.audioWorkId ?? metadata.id}-file${track.providerPath}.${legacyProviderAudioFormat}`);
-                    const newLocalPath = makepath(workId, `${metadata.audioWorkId ?? metadata.id}-file${newIndex}.${legacyProviderAudioFormat}`);
-                    logInfo(`${workId}: track ${track.index} plan rename ${oldLocalPath} to ${newLocalPath}`);
-                    renamePlans.push([oldLocalPath, newLocalPath]);
-                    track.providerPath = newIndex;
-                }
-                if (!track.subtitleProviderPath || track.subtitleProviderPath == -1) {
-                    continue;
-                }
-                const subtitleFile = files[metadata.subtitleWorkId ?? metadata.id][track.subtitleProviderPath - 1];
-                if (!subtitleFile) {
-                    logError(`${workId}: track ${track.index} subtitle provider path out of range?`);
-                    continue;
-                }
-                mismatch = false;
-                const providerSubtitleFormat = path.extname(subtitleFile.providerPath).substring(1);
-                if (!['vtt', 'srt', 'lrc', 'pdf', 'txt'].includes(providerSubtitleFormat)) {
-                    mismatch = true;
-                } else {
-                    const providerSubtitleLocalPath = makepath(workId, `${metadata.subtitleWorkId ?? metadata.id}-file${track.subtitleProviderPath}.${providerSubtitleFormat}`);
-                    if (npfs.existsSync(providerSubtitleLocalPath)) {
-                        const stat = await fs.stat(providerSubtitleLocalPath);
-                        if (stat.size != subtitleFile.size) {
-                            mismatch = true;
+                    if (!ok) {
+                        // try match ext and size
+                        for (const editionId of [workId].concat(metadata.languageEditions)) {
+                            const matches = files[editionId].filter(f => path.extname(f.providerPath) == path.extname(filename) && stat.size == f.size);
+                            if (matches.length == 1) {
+                                const index = files[editionId].findIndex(f => f.providerPath == matches[0].providerPath);
+                                const newfilename = `${editionId}-file${index + 1}${path.extname(filename)}`
+                                if (npfs.existsSync(makepath(workId, newfilename))) {
+                                    logError(`${workId}: ${filename}: new file name already exists`);
+                                }
+                                logInfo(`${workId}: extra file ${filename} should be ${matches[0].providerPath} rename to ${newfilename}`);
+                                await fs.rename(makepath(workId, filename), makepath(workId, newfilename));
+                                ok = true;
+                                break;
+                            }
                         }
-                    } else {
-                        const availableFiles = await fs.readdir(makepath(workId));
-                        const matchingFile = availableFiles.find(f => f.startsWith(`${metadata.subtitleWorkId ?? metadata.id}-file${track.subtitleProviderPath}.`));
-                        if (matchingFile) {
-                            mismatch = true;
+                        if (!ok) {
+                            logError(`${workId}: unknown extra file? ${filename}`);
                         }
-                    }
-                }
-                if (mismatch) {
-                    logInfo(`${workId}: track ${track.index} subtitle mismatch, searching`);
-                    const legacySubtitleFile = legacyOrderFiles[metadata.subtitleWorkId ?? metadata.id][track.subtitleProviderPath - 1];
-                    const legacyProviderSubtitleFormat = path.extname(legacySubtitleFile.providerPath).substring(1);
-                    if (!['vtt', 'srt', 'lrc', 'pdf', 'txt'].includes(legacyProviderSubtitleFormat)) {
-                        logError(`${workId}: track ${track.index} subtitle legacy index still not work? ${legacySubtitleFile.providerPath}`);
-                        continue;
-                    }
-                    const legacyProviderSubtitleLocalPath = makepath(workId, `${metadata.subtitleWorkId ?? metadata.id}-file${track.subtitleProviderPath}.${legacyProviderSubtitleFormat}`);
-                    if (!npfs.existsSync(legacyProviderSubtitleLocalPath)) {
-                        logError(`${workId}: track ${track.index} subtitle legacy file matching local path not exist, skip, ${legacyProviderSubtitleLocalPath}`);
-                        continue;
-                    }
-                    const stat = await fs.stat(legacyProviderSubtitleLocalPath);
-                    if (stat.size != legacySubtitleFile.size) {
-                        logError(`${workId}: track ${track.index} subtitle legacy index still size mismatch? ${legacySubtitleFile.providerPath}, ${stat.size}, ${subtitleFile.size}`);
-                        continue;
-                    }
-                    const newIndex = files[metadata.subtitleWorkId ?? metadata.id].findIndex(f => f.providerPath == legacySubtitleFile.providerPath) + 1;
-                    logInfo(`${workId}: track ${track.index} find subtitle provider path ${legacySubtitleFile.providerPath} new index ${styleText('cyan', track.subtitleProviderPath.toString())} => ${styleText('cyan', newIndex.toString())}`);
-                    const oldLocalPath = makepath(workId, `${metadata.subtitleWorkId ?? metadata.id}-file${track.subtitleProviderPath}.${legacyProviderSubtitleFormat}`);
-                    const newLocalPath = makepath(workId, `${metadata.subtitleWorkId ?? metadata.id}-file${newIndex}.${legacyProviderSubtitleFormat}`);
-                    logInfo(`${workId}: track ${track.index} plan rename ${oldLocalPath} to ${newLocalPath}`);
-                    renamePlans.push([oldLocalPath, newLocalPath]);
-                    track.subtitleProviderPath = newIndex;
-                }
-            }
-            if (parameters[1]) {
-                if (parameters[2] == 'commit') {
-                    for (const [oldPath, newPath] of renamePlans) {
-                        logInfo(`${workId}: rename ${oldPath} to ${newPath}-temp`);
-                        await fs.rename(oldPath, newPath + '-temp');
-                    }
-                    for (const [, newPath] of renamePlans) {
-                        logInfo(`${workId}: rename ${newPath}-temp to ${newPath}`);
-                        await fs.rename(newPath + '-temp', newPath);
-                    }
-                    await writeMetadata(metadata);
-                } else {
-                    for (const [oldPath, newPath] of renamePlans) {
-                        logInfo(`${workId}: will rename ${oldPath} to ${newPath}-temp`);
-                    }
-                    for (const [, newPath] of renamePlans) {
-                        logInfo(`${workId}: will rename ${newPath}-temp to ${newPath}`);
                     }
                 }
             }
@@ -2060,6 +1945,85 @@ async function handleMigrateCommand(parameters: string[]) {
             }
         }
         logInfo(`short id avg length ${totalLength / roughWorkIds.length}`);
+
+    // find all difference in different compare methods of file infos
+    // to the detailest level for all different char pairs by compare one by one at levels
+    } else if (parameters[0] == "comp") {
+        // context is simply a descriptive text for work and base path, not commandcontext
+        const pairs: { char1: string, char2: string, contexts: string[] }[] = [];
+        for (const workId of roughWorkIds) {
+            const metadataPath = makepath(workId, 'metadata.json');
+            if (!npfs.existsSync(metadataPath)) {
+                return logError(`${workId}: incomplete file structure`);
+            }
+            const metadata = JSON.parse(await fs.readFile(metadataPath, 'utf-8')) as WorkMetadata;
+            if (metadata.retired) { continue; }
+            logInfo(`${workId}`);
+
+            for (const editionId of [workId].concat(metadata.languageEditions)) {
+                const fileinfoPath = makepath(workId, `${editionId}-fileinfo.json`);
+                const fileinfoTree = JSON.parse(await fs.readFile(fileinfoPath, 'utf-8')) as FileInfoNode[];
+                const fileinfoRoot = { type: 'folder', title: '(root)', children: fileinfoTree } as const;
+
+                const process = (names: string[], context: string) => {
+                    const names1 = [...names].sort((n1, n2) => n1.localeCompare(n2));
+                    const names2 = [...names].sort((n1, n2) => Buffer.compare(Buffer.from(n1), Buffer.from(n2)));
+                    if (names1.some((f1, i) => f1 != names2[i])) {
+                        // if sort result has any difference, compare all one by one pairs in names
+                        for (let index1 = 0; index1 < names.length - 1; index1 += 1) {
+                            for (let index2 = index1 + 1; index2 < names.length; index2 += 1) {
+                                const compareResult1 = names[index1].localeCompare(names[index2]);
+                                const normalizedCompareResult1 = compareResult1 < 0 ? -1 : compareResult1 > 0 ? 1 : 0;
+                                const compareResult2 = Buffer.compare(Buffer.from(names[index1]), Buffer.from(names[index2]));
+                                if (normalizedCompareResult1 != compareResult2) {
+                                    for (let index3 = 0; index3 < Math.min(names[index1].length, names[index2].length); index3 += 1) {
+                                        const index1c = names[index1].at(index3);
+                                        const index2c = names[index2].at(index3);
+                                        const compareResult1 = index1c.localeCompare(index2c);
+                                        const normalizedCompareResult1 = compareResult1 < 0 ? -1 : compareResult1 > 0 ? 1 : 0;
+                                        const compareResult2 = Buffer.compare(Buffer.from(index1c), Buffer.from(index2c));
+                                        if (normalizedCompareResult1 != compareResult2) {
+                                            // fc: for compare
+                                            // console.log(names[index1], names[index2], names[index1].length, index3);
+                                            const char1fc = names[index1].at(index3);
+                                            const char2fc = names[index2].at(index3);
+                                            const char1 = Buffer.compare(Buffer.from(char1fc), Buffer.from(char2fc)) < 0 ? char1fc : char2fc;
+                                            const char2 = char1 == char1fc ? char2fc : char1fc;
+                                            const pair = pairs.find(p => p.char1 == char1 && p.char2 == char2);
+                                            if (pair) {
+                                                pair.contexts.push(context + `/ ${names[index1]} vs ${names[index2]}`);
+                                            } else {
+                                                pairs.push({ char1, char2, contexts: [context + `/ ${names[index1]} vs ${names[index2]}`] });
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                const visit = (node: FileInfoNode, basepath: string) => {
+                    const folders = node.children?.filter(f => f.type == 'folder') ?? [];
+                    process(folders.map(f => f.title), `${workId}:${editionId}${basepath}`);
+                    for (const folder of folders) {
+                        visit(folder, basepath + '/' + folder.title);
+                    }
+                    const items = node.children?.filter(f => f.type != 'folder') ?? [];
+                    process(items.map(i => i.title), `${workId}:${editionId}${basepath}`);
+                    // here don't need to collect items
+                };
+                visit(fileinfoRoot, '');
+            }
+        }
+        for (const { char1, char2, contexts } of pairs) {
+            console.log(`${char1} <=> ${char2}`);
+            console.log(`  String.prototype.localeCompare(${char1}, ${char2}) = ${char1.localeCompare(char2)}`);
+            console.log(`  Buffer.compare(Buffer.from(${char1}), Buffer.from(${char2})) = Buffer.compare(${Buffer.from(char1).toHex()}, ${Buffer.from(char2).toHex()}) = ${Buffer.compare(Buffer.from(char1), Buffer.from(char2))}`);
+            for (const context of contexts) {
+                console.log(`  ${context}`);
+            }
+        }
 
     // tagdb: for now, only collect occurance of provider tags and actors and print them in order
     // TODO try prefer japaness chinese character, try avoid english, chinese chinese and katakana/harakana
