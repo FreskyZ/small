@@ -60,9 +60,7 @@ def backup_raw_metadata(stat=False):
                     # what do you mean by this default add whitespace for comma and colon?
                     minified_content = json.dumps(raw_metadata, ensure_ascii=False, separators=(',', ':'))
                     encoded_content = minified_content.encode('utf-8')
-                    # TODO temp
-                    arcname = path.name.replace('fileinfo', 'trackinfo') if path.name.endswith('fileinfo.json') else path.name
-                    info = tarfile.TarInfo(name=arcname).replace(mode=0o644, mtime=mtime)
+                    info = tarfile.TarInfo(name=path.name).replace(mode=0o644, mtime=mtime)
                     info.size = len(encoded_content)
                     with io.BytesIO(encoded_content) as entry_fileobj:
                         tar.addfile(info, fileobj=entry_fileobj)
@@ -265,14 +263,13 @@ def check_restore():
         with io.BytesIO(base64.b85decode(json_bundle_encoded_text)) as json_bundle_tar_fileobj:
             with tarfile.open(mode='r:xz', fileobj=json_bundle_tar_fileobj) as json_bundle_tar:
                 for member in json_bundle_tar.getmembers():
-                    if not member.name.endswith('-workinfo.json') and not member.name.endswith('-trackinfo.json'):
+                    if not member.name.endswith('-workinfo.json') and not member.name.endswith('-fileinfo.json'):
                         raise ValueError(f'{work_id}: unexpected arcname {arcname}')
                     extract_fileobj = json_bundle_tar.extractfile(member)
                     extract_content = json.load(extract_fileobj)
                     # need json format to compare text content
                     extract_content = json.dumps(extract_content, ensure_ascii=False, indent=2)
-                    # TODO temp
-                    current_file_path = output_directory / (member.name.replace('trackinfo', 'fileinfo') if member.name.endswith('trackinfo.json') else member.name)
+                    current_file_path = output_directory / member.name
                     with open(current_file_path) as current_file:
                         current_content = current_file.read()
                     if extract_content == current_content:
