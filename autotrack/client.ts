@@ -56,7 +56,7 @@ function getAllWorks() {
     queryId = queryId && /^\d+$/.test(queryId) ? `RJ${queryId}` : queryId;
     if (queryId && queryId.startsWith('RJ') && results.some(w => w.id == queryId)) {
         // because put this as last statement of this module does not work because conflict with render implementation magic
-        // TODO try to make this work
+        // TODO try to make this work, UPDATE if you are going to do this, implement useful client side routing or else currently it's very unintuitive
         // render({ activeWorkId: queryId });
         const [work] = results.splice(results.findIndex(w => w.id == queryId), 1);
         results.unshift(work);
@@ -84,7 +84,7 @@ const state: PageState = {
     activeTrackPlainIndex: -1,
 };
 
-// TODO
+// TODO use notification instead of window.alert
 const notificationElements = {
     mask: document.querySelector<HTMLDivElement>('div#notification-mask'),
     container: document.querySelector<HTMLDivElement>('div#notification-container'),

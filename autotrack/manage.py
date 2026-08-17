@@ -12,7 +12,7 @@ from PIL import Image # uv add Pillow
 LINE_WIDTH = 128
 # backup metadata files into base64 (similar) encoded tar archive
 # and then format them into text file and save into... ?! github !?
-def backup_raw_metadata(stat=False):
+def backup_raw_meta(stat=False):
     # (work id, raw metadata backup text file size)[]
     raw_metadata_file_sizes = []
     for directory_path in pathlib.Path('/data').iterdir():
@@ -87,7 +87,7 @@ def backup_raw_metadata(stat=False):
     raw_metadata_total_size = sum(map(lambda s: s[1], raw_metadata_file_sizes))
     print(f'raw metadata total {raw_metadata_total_size / 1000:.3f}kb avg {raw_metadata_total_size / len(raw_metadata_file_sizes) / 1000:.3f}kb')
 
-def backup_metadata():
+def backup_meta():
     metadata_tar_fileobj = io.BytesIO()
     metadata_tar = tarfile.open(f'metadata.tar.xz', 'w:xz', fileobj=metadata_tar_fileobj)
     for directory_path in pathlib.Path('/data').iterdir():
@@ -127,45 +127,12 @@ def backup_metadata():
     with open('/meta-archive/metadata.txt', 'wb') as metadata_backup_file:
         metadata_backup_file.write(b)
 
-# for now this backup single work, decide whether this should be full backup in future
-# different from download part's avoidance of anti crawling mechanism, while for this operation,
-# onedrive will not rate limit, but I guess it may crash or even data corruption if copy all files at once
-def backup_data(work_path):
-    work_id = work_path.name
-    with open(work_path / 'metadata.json') as f:
-        metadata = json.load(f)
-    target_path = pathlib.Path('/data-archive') / work_id
-    target_path.mkdir(exist_ok=True)
-
-    def copy(filename):
-        source_filepath, target_filepath = work_path / filename, target_path / filename
-        if not source_filepath.exists():
-            print(f'file {filename} not exist, abort (will not recover previous fs operations)')
-            exit(1)
-        if target_filepath.exists():
-            response = input(f'target file {filename} exist, Y to continue, N to abort (will not recover previous fs operations): ')
-            if response.lower() != 'y':
-                exit(1)
-        print(f'copy {source_filepath} to {target_filepath}')
-        source_filepath.copy(target_filepath, preserve_metadata=True)
-
-    copy('cover.avif')
-    copy('metadata.json')
-    for edition_id in [work_id] + metadata['languageEditions']:
-        copy(f'{edition_id}-workinfo.json')
-        copy(f'{edition_id}-fileinfo.json')
-    for track in metadata['tracks']:
-        copy(f'track{track['index']}.{metadata['audioFormat']}')
-        if 'subtitleFileIndex' in track:
-            copy(f'track{track['index']}.{metadata['subtitleFormat']}')
-    print('copy complete')
-
 def assert_eq(lhs, rhs, message_header, comp=None):
     # why do lambda without paren syntax error?
     comp = comp or (lambda l, r: l == r)
     assert comp(lhs, rhs), f'{message_header}: {lhs} != {rhs}'
 
-def check_restore():
+def check_meta_backup():
     # 1. check restore metadata
     with open('/meta-archive/metadata.txt') as f:
         metadata_bundle_formatted_encoded_text = f.read()
@@ -284,6 +251,104 @@ def check_restore():
                     #     # recover json indention by the way
                     #     json.dump(json.loads(extract_content), output_fileobj, ensure_ascii=False, indent=2)
     print(f'raw metadata: match bytes {total_ok_bytes} characters {total_ok_characters} lines {total_ok_lines}')
+
+# for now this backup single work, decide whether this should be full backup in future
+# different from download part's avoidance of anti crawling mechanism, while for this operation,
+# onedrive will not rate limit, but I guess it may crash or even data corruption if copy all files at once
+def backup_data(work_path):
+    work_id = work_path.name
+    with open(work_path / 'metadata.json') as f:
+        metadata = json.load(f)
+    target_path = pathlib.Path('/data-archive') / work_id
+    target_path.mkdir(exist_ok=True)
+
+    def copy(filename):
+        source_filepath, target_filepath = work_path / filename, target_path / filename
+        if not source_filepath.exists():
+            print(f'{filename}: source file not exist, abort (will not recover previous fs operations)')
+            exit(1)
+        if target_filepath.exists():
+            if filename.startswith('track'):
+                source_size = source_filepath.stat().st_size
+                target_size = target_filepath.stat().st_size
+                if source_size == target_size:
+                    print(f'{filename}: target file exist and size match, skip')
+                    return
+                else:
+                    print(f'{filename}: target file exist and size mismatch, overwrite')
+            elif filename == 'metadata.json':
+                source_content = source_filepath.read_text()
+                target_content = target_filepath.read_text()
+                if source_content == target_content:
+                    print(f'{filename}: target file exist and content same, skip')
+                    return
+                else:
+                    print(f'{filename}: target file exist and content mismatch, overwrite')
+            else:
+                print(f'{filename}: target file exist, skip')
+                return
+        print(f'copy {source_filepath} to {target_filepath}')
+        source_filepath.copy(target_filepath, preserve_metadata=True)
+
+    copy('cover.avif')
+    copy('metadata.json')
+    for edition_id in [work_id] + metadata['languageEditions']:
+        copy(f'{edition_id}-workinfo.json')
+        copy(f'{edition_id}-fileinfo.json')
+    for track in metadata['tracks']:
+        copy(f'track{track['index']}.{metadata['audioFormat']}')
+        if 'subtitleFileIndex' in track:
+            copy(f'track{track['index']}.{metadata['subtitleFormat']}')
+    print('copy complete')
+
+def check_data_backup():
+
+    match_file_count = 0
+    total_file_count = 0
+    def create_check(work_id):
+        def check(filename):
+            nonlocal total_file_count
+            nonlocal match_file_count
+            total_file_count += 1
+            source_filepath = pathlib.Path('/data') / work_id / filename
+            target_filepath = pathlib.Path('/data-archive') / work_id / filename
+            if not source_filepath.exists():
+                print(f'{work_id}: {filename}: source file not exist, incomplete file structure?')
+                return
+            if not target_filepath.exists():
+                print(f'{work_id}: {filename}: target file not exist')
+                return
+            source_content = source_filepath.read_bytes()
+            target_content = target_filepath.read_bytes()
+            if source_content != target_content:
+                print(f'{work_id}: {filename}: content mismatch')
+                return
+            match_file_count += 1
+        return check
+
+    work_ids = [d.name for d in pathlib.Path('/data').iterdir() if d.name.startswith('RJ')]
+    archive_work_ids = [d.name for d in pathlib.Path('/data-archive').iterdir() if d.name.startswith('RJ')]
+    for work_id in archive_work_ids:
+        if work_id not in work_ids:
+            print(f'{work_id}: in data archive but not in data')
+    for work_id in work_ids:
+        if work_id not in archive_work_ids:
+            print(f'{work_id}: in data but not in data archive')
+            continue
+        with open(pathlib.Path('/data') / work_id / 'metadata.json') as f:
+            metadata = json.load(f)
+        check = create_check(work_id)
+
+        check('cover.avif')
+        check('metadata.json')
+        for edition_id in [work_id] + metadata['languageEditions']:
+            check(f'{edition_id}-workinfo.json')
+            check(f'{edition_id}-fileinfo.json')
+        for track in metadata['tracks']:
+            check(f'track{track['index']}.{metadata['audioFormat']}')
+            if 'subtitleFileIndex' in track:
+                check(f'track{track['index']}.{metadata['subtitleFormat']}')
+    print(f'check complete {len(work_ids)} work ids, match {match_file_count}/{total_file_count} files')
 
 def convert_cover_image(work_path):
     work_id = work_path.name
@@ -438,13 +503,6 @@ def migrate(parameters):
                     duration = get_audio_duration(audio_path)
                     if abs(round(duration) - round(track['duration'])) > 1:
                         print(f'{work_path.name}: track {track['index']}: duration mismatch, expect {track['duration']} actual {duration}')
-    elif len(parameters) > 0 and parameters[0] == 'backup-data':
-        # randomly pick a work to backup-data
-        existing_work_ids = [d.name for d in pathlib.Path('/data-archive').iterdir()]
-        work_paths = [d for d in pathlib.Path('/data').iterdir() if d.name.startswith('RJ') and d.name not in existing_work_ids]
-        if len(work_paths):
-            work_path = random.choice(work_paths)
-            backup_data(work_path)
 
 def get_work_id(input_parameter):
     matches = [d for d in pathlib.Path('/data').iterdir() if d.name.endswith(input_parameter)]
@@ -457,14 +515,16 @@ def get_work_id(input_parameter):
     print(f'manage.py: work id {matches[0].name}')
     return matches[0]
 
-if len(sys.argv) > 1 and sys.argv[1] == 'raw-metadata':
-    backup_raw_metadata(stat=len(sys.argv) > 2 and sys.argv[2] == 'stat')
-elif len(sys.argv) > 1 and sys.argv[1] == 'metadata':
-    backup_metadata()
+if len(sys.argv) > 1 and sys.argv[1] == 'backup-raw-meta':
+    backup_raw_meta(stat=len(sys.argv) > 2 and sys.argv[2] == 'stat')
+elif len(sys.argv) > 1 and sys.argv[1] == 'backup-meta':
+    backup_meta()
+elif len(sys.argv) > 1 and sys.argv[1] == 'check-meta-backup':
+    check_meta_backup()
 elif len(sys.argv) > 2 and sys.argv[1] == 'backup-data':
     backup_data(get_work_id(sys.argv[2]))
-elif len(sys.argv) > 1 and sys.argv[1] == 'check-restore':
-    check_restore()
+elif len(sys.argv) > 1 and sys.argv[1] == 'check-data-backup':
+    check_data_backup()
 elif len(sys.argv) > 2 and sys.argv[1] == 'avif':
     convert_cover_image(get_work_id(sys.argv[2]))
 elif len(sys.argv) > 2 and sys.argv[1] == 'opus':
@@ -473,13 +533,13 @@ elif len(sys.argv) > 1 and sys.argv[1] == 'migrate':
     migrate(sys.argv[2:])
 else:
     print('USAGE:')
-    print('    manage.py avif WORKID      convert provider image files to avif codec')
-    print('    manage.py opus WORKID      convert provider audio files to opus codec')
-    print('    manage.py pdfsub WORKID    convert provider pdf subtitle files to txt')
-    print('    manage.py raw-metadata     backup raw metadata')
-    print('    manage.py metadata         backup metadata')
-    print('    manage.py check-restore    check backup restore, does not actually restore')
-    print('    manage.py backup-data WORKID')
-    print('                               backup data')
-    print('    manage.py migrate          various migrate operations')
+    print('    manage.py avif WORKID          convert provider image files to avif codec')
+    print('    manage.py opus WORKID          convert provider audio files to opus codec')
+    print('    manage.py pdfsub WORKID        convert provider pdf subtitle files to txt')
+    print('    manage.py backup-raw-meta      backup raw metadata')
+    print('    manage.py backup-meta          backup metadata')
+    print('    manage.py check-meta-backup    check metadata backup, does not restore')
+    print('    manage.py backup-data WORKID   backup data')
+    print('    manage.py check-data-backup    check data backup, does not restore')
+    print('    manage.py migrate              various migrate operations')
     exit(1)

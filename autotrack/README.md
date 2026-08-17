@@ -1,7 +1,7 @@
 autotrack: AUTOnomous sensory meridian response audio TRACK local storage management tool
 
-meridian first mean the vertical lines in grid system on a sphere, like 120N line on earth is a meridian,
-and later extended to represent 经络 in traditional chinese medicine, and later is use to refer sexual climate in internet slang?
+meridian first mean the vertical lines in a grid system on a sphere, like the 120 N line on earth, and later
+extended to mean 经络 in traditional chinese medicine? and later is used to refer sexual climate in internet slang?
 
 ### Storage File Structure
 
@@ -17,24 +17,30 @@ and later extended to represent 经络 in traditional chinese medicine, and late
 naming conventions
 
 - the name of workinfo follow it's provider api path
-- the name of fileinfo should be more accurate that most of records are not
-  audio track, and more aligned with workinfo comparing to its api path called tracks
-- use same convention for main work and language edition work's raw metadata should make it easier to process
-- split raw file and actual audio and subtitle file to allow for more clear format conversion workflow
-  - for now audio files are always converted/modernized to opus, normal subtitle files
-  - vtt/srt and lrc are always converted to vss (csv like very simple subtitle)
-- although raw metadata/file archive are suitable to put in one directory for all works,
-  group them by main work seems more clear file structure
+- the name of fileinfo does not follow it's provider api path called tracks,
+  it's more accurate because most of the records are not audio tracks, and is more aligned with workinfo
+- the main work raw metadata archive was not including a work id, as it's same as directory name,
+  but make them same as language edition work's raw metadata archive related operations simpler and easier
+- use very different naming convention for raw audio and subtitle archive and active files to use at client
+  side make state management in the workflow to complete a work simpler and easier, and by the way allow for
+  different content in provider provided txt subtitle files (not work use this feature yet), and by the way
+  make audio and subtitle raw file archive and extra file archive same naming convention
+- although this naming convention of raw archive files make them able to store in one or several raw files
+  directory, keep grouping them by main work seems better for code and understanding
+- data archive directory use same structure except raw file archive, or else they will be too large,
+  it is actually used as content root path for the static file server, making this effectively the deploy
+  location, but lazy to repurpose (re-namingconvention) data archive directory to deployment directory and
+  main data directory as staging directory, keep them like this for now
 
 current workflow
 
 - start containers, you seems need a compose file for these, but docker and wslc don't stay in one compose project
-  manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work -v $DATADIR:/data -h ASMRTS -w /work my/node
-  manage.py: docker run -it --rm --name asmrpy1 -v $REPO/autotrack:/work
+  - manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work -v $DATADIR:/data -h ASMRTS -w /work my/node
+  - manage.py: docker run -it --rm --name asmrpy1 -v $REPO/autotrack:/work
     -v $DATADIR:/data -v $DATAARC:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMRPY -w /work my/python
     the python project files are not tracked in this repository: uv add Pillow && uv add pypdf && apt install ffmpeg
-  transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $DATADIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
-- manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata
+  - transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $DATADIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
+- manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata, and display it
 - manage.ts WORKID add: add tracks and optionally subtitles, this will NOT actually download files
 - manage.ts WORKID dry: check files to download
   manage.ts WORKID commit: actually download files
@@ -47,21 +53,24 @@ current workflow
   - manage.ts WORKID subtitle: for not most works, mark subtitle file conversion complete
 - transcribe.py WORKID: auto transcribe
   - manage.ts WORKID mark-asr: mark tracks to use asr, and mark subtitle file conversion complete
-- manage.py raw-metadata: backup raw metadata in /meta-archive
-- manage.py metadata: backup metadata in /meta-archive
-- manage.py backup-data: backup metadata, audio and subtitle files in /data-archive
+- manage.py backup-raw-meta: backup raw metadata in /meta-archive
+  - manage.py backup-meta: backup metadata in /meta-archive
+  - manage.py check-meta-backup: confirm meta archive same as main data directory
+  - manage.py backup-data: backup metadata, audio and subtitle files in /data-archive
+  - manage.py check-data-backup: confirm data archive same as main data directory
 
 ### Subtitle Formats
 
-vtt is a more popular subtitle format in my provider's data, others use lrc, no other format seen for now
+vtt is a more popular subtitle format in my provider's data, others use lrc,
+no other format seen for now UPDATE seen srt, and some pdf/txt manuscript files
 
 vtt is designed for html5 caption feature (the difference between subtitle and caption seems to be subtitle being
 translated text other than original media's language, caption being accessibility feature to support users without
 sound functionality), vtt has a specification at w3c https://w3c.github.io/webvtt/, it is inspired by srt format,
 or SubRip Text format provided by the subrip software https://en.wikipedia.org/wiki/SubRip, this is an early 2000s
-*free* software, you may have learned the difference betwee free softwares and open source softwares and know free
+*free* software, you may have learned the differences between free software and open source software and know free
 software community is created at 1980s, and become great with gnu project and linux kernel, and read the classical
-list of free software examples for many times, which does not include this, which is refreshing
+list of free software examples for many times, which does not include this, which may be interesting
 
 lrc file format https://en.wikipedia.org/wiki/LRC_(file_format) comes with another 2000s free software "Kuo lyrics
 displayer" by a developer from taiwan province, which is an winamp plugin, ai says it's the first software piece to
@@ -85,10 +94,10 @@ UPDATE what do you mean by the original implementation does support sub-second p
 this project itself don't include a server to serving the files, because any static content server will work
 
 but you may need to specifically allow subtitle files if your static content middleware check file extensions, vtt
-has web standard and may be supported, if you need explicit config, it has mime type text/vtt, lrc is not common in
+has web standard and may be supported, if you need explicit config, it use mime type text/vtt, lrc is not common in
 this area, and don't have a dedicated mime type, use text/plain, vss is currently my choice to my personal standard
 for very simple subtitles, it is unexpectedly default supported by asp.net core because it is same as visio's old
-file format, *by coincidence*, this may not be true for your static content server, and it also don't have an mime
+file format *by coincidence*, this may not be true for your static content server, and it also don't have an mime
 type and should use text/plain
 
 by the way, asp.net core static file middleware default supported extensions
@@ -307,13 +316,6 @@ I assume my dataset is too difficult for the generic forced aligner model?
 the current implementation run transcrption only and even distribute the sentences into time range
 by character length, which is amazingly the highest quality I can get in the investigation process
 
-current workflow:
-
-- manage.ts migrate prepare WORKID: copy track files to Input directory
-- uv run transcribe.py: auto transcribe
-- manage.ts migrate take WORKID: copy result files into track directory
-- manage.ts migrate use WORKID VSSVER: use vss version and mark work as has subtitle
-
 ### Base85 Versions
 
 according to python document, there are multiple base85 versions,
@@ -488,10 +490,31 @@ as you may know 96kbps is common default choice for opus file quality, 32kbps is
 - opus spec https://datatracker.ietf.org/doc/html/rfc6716
 - also see ogg+opus spec https://datatracker.ietf.org/doc/html/rfc7845
   section 9 recommend mime type audio/ogg, recommend filename extension .opus
+- ogg home page https://xiph.org/ogg/
+- ogg spec seems to be https://datatracker.ietf.org/doc/html/rfc3533
 
 the deprecation statement can be found at
 https://wiki.xiph.org/index.php?title=OpusFAQ&oldid=13856#Does_Opus_make_all_those_other_lossy_codecs_obsolete?
 technically deprecation should be enough for saying vorbis is superseded by opus
+
+about metadata
+
+- ffmpeg -i input.mp3 -f ffmetadata output.txt
+  read metadata
+- ...other ffmpeg parameters... -metadata album_artist='artist name'
+  write metadata
+
+this is not used in code because I'm only considering clean up some outdated or redundent metadata value and
+try insert some metadata values that may be useful, but all docs, specs and source code of ogg and opus does
+not provide a basic binary structure but only talks about frames, packets, streams and multiplexing, also on
+the other side html5 audio element does not provide access to custom metadata, you need to parse binary file
+on your own, so abort this attempt
+
+UPDATE ai says streamable multimedia format work like this?
+UPDATE ai says frames and packets in ogg and opus are all variant so user agent need to binary search for byte
+position for user input time point seek? why does formats designed for streaming does not consider http's limit
+that range request only works with byte position? and mp4 seems have a time point and byte position map so don't
+need this
 
 ### String Compare
 
