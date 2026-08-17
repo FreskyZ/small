@@ -18,6 +18,10 @@ New-VMSwitch -Name "External Switch" -NetAdapterName $netadaptername -AllowManag
 Connect-VMNetworkAdapter -VMName $vmname -SwitchName "External Switch"
 ```
 
+TODO what's the mean by home router see my vm's host name, display my vm's ip address, and need to
+enable 专用网络 in vm's network setting to allow my mobile phone to access web service opened on host
+with host's ip address UPDATE this seems to be related with the ExternalSwitch choice
+
 2. create vm
 
 ```powershell

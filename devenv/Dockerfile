@@ -80,7 +80,7 @@ EORUN
 # basic shell experience
 # docker build --target shell --tag my/shell .
 # occassionally update packages: docker build --no-cache --target shell --tag my/shell .
-FROM debian:13.5-slim AS shell
+FROM debian:13.6-slim AS shell
 # base image https://hub.docker.com/_/debian
 # source code https://github.com/debuerreotype/docker-debian-artifacts/blob/dist-amd64/trixie/Dockerfile
 # if you can't notice difference for slim image, it shrinks many docs and mans, their bin and packages are same
@@ -127,7 +127,7 @@ FROM my/shell AS node
 # source code https://github.com/nodejs/docker-node/blob/main/26/trixie-slim/Dockerfile
 # the build process simply download and decompress and remove some unnecessary large files
 
-ARG NODE_VERSION=26.4.0
+ARG NODE_VERSION=26.7.0
 RUN <<EORUN
 set -ex
 # wget seems to be about 4mb, xz-utils seems to be about 1.5mb,
@@ -159,11 +159,11 @@ FROM my/shell AS python
 
 # https://docs.astral.sh/uv/guides/integration/docker/#available-images
 # for this copy usage, 0.11.26 is enough, others will come with distro and python
-COPY --from=ghcr.io/astral-sh/uv:0.11.26 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /bin/
 
 RUN <<EORUN
 set -ex
-uv python install 3.14.6
+uv python install 3.14.7
 echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.zshrc
 EORUN
 
