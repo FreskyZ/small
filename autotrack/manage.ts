@@ -829,14 +829,14 @@ async function handleDownloadTracks(ctx: CommandContext, dry: boolean) {
     const tasks: { index: number, kind: 'audio' | 'subtitle', info: FlatFileInfo, localPath: string }[] = [];
     for (const track of ctx.meta.tracks) {
         const audioFile = ctx.files[(ctx.meta.audioWorkId ?? ctx.id)][track.audioFileIndex - 1];
-        if (!audioFile) { return logError(`track ${track.index} audio provider path out of range?`); }
+        if (!audioFile) { return logError(`track ${track.index} audio file index out of range?`); }
         const audioExtension = path.extname(audioFile.providerPath);
         const localPath = makepath(ctx.id, `${ctx.meta.audioWorkId ?? ctx.id}-file${track.audioFileIndex}${audioExtension}`);
         tasks.push({ index: track.index, kind: 'audio', info: audioFile, localPath });
 
         if (track.subtitleFileIndex && track.subtitleFileIndex != -1) {
             const subtitleFile = ctx.files[(ctx.meta.subtitleWorkId ?? ctx.id)][track.subtitleFileIndex - 1];
-            if (!subtitleFile) { return logError(`track ${track.index} subtitle provider path not found?`); }
+            if (!subtitleFile) { return logError(`track ${track.index} subtitle file index not found?`); }
             const subtitleExtension = path.extname(subtitleFile.providerPath);
             const localPath = makepath(ctx.id, `${ctx.meta.subtitleWorkId ?? ctx.id}-file${track.subtitleFileIndex}${subtitleExtension}`);
             tasks.push({ index: track.index, kind: 'subtitle', info: subtitleFile, localPath });
@@ -1016,7 +1016,7 @@ function convertSubtitleFormat(trackIndex: number, subtitleFormat: string, rawte
 // - download txt from provider,
 //   run this command to copy txt files from file*.txt to track*.txt, mark subtitleformat to txt
 // - for all the case above, if some of the track missing subtitle and need asr,
-//   after generation complete, manually mark the track with subtitle provider path = -1
+//   after generation complete, manually mark the track with subtitle file index = -1
 // - no subtitlte provided by provider,
 //   run this command to mark tracks to be asr, asr,
 //   run this command to find vss files complete, mark subtitleformat to vss
@@ -1043,13 +1043,13 @@ async function handleSimplifySubtitle(ctx: CommandContext, parameters: string[])
                 existingProviderSubtitleFormat = existingProviderSubtitleFormat || 'vss';
             } else if (!hasDisplayedMarkASRMessage) {
                 hasDisplayedMarkASRMessage = true;
-                logInfo(`track ${track.index}: no subtitle provider path, use mark-asr (this script does not actually run asr)`);
+                logInfo(`track ${track.index}: no subtitle file index, use mark-asr (this script does not actually run asr)`);
             }
         } else {
-            // for track with subtitle provider path, always check file exist and size match or else skip the track
+            // for track with subtitle file index, always check file exist and size match or else skip the track
             const subtitleFile = ctx.files[ctx.meta.subtitleWorkId ?? ctx.id][track.subtitleFileIndex - 1];
             if (!subtitleFile) {
-                return logError(`track ${track.index}: subtitle provider path out of range?`);
+                return logError(`track ${track.index}: subtitle file index out of range?`);
             }
             const providerSubtitleFormat = path.extname(subtitleFile.providerPath).substring(1);
             if (!existingProviderSubtitleFormat) {
@@ -1070,7 +1070,7 @@ async function handleSimplifySubtitle(ctx: CommandContext, parameters: string[])
             }
             if (providerSubtitleFormat == 'pdf') {
                 if (!npfs.existsSync(makepath(ctx.id, `track${track.index}.txt`))) {
-                    logInfo(`track ${track.index}: subtitle provider path is pdf but no matching txt file found`);
+                    logInfo(`track ${track.index}: subtitle file index is pdf but no matching txt file found`);
                 }
             } else if (providerSubtitleFormat == 'txt') {
                 const simpleSubtitleFilePath = makepath(ctx.id, `track${track.index}.txt`);
@@ -1449,8 +1449,11 @@ async function handleMigrateCommand(parameters: string[]) {
             }
 
             const knownFiles: string[] = [];
-            let reportedProviderAudioLocalFileMissing: boolean;
-            let reportedProviderSubtitleLocalFileMissing: boolean;
+            let reportedProviderAudioLocalFileMissing = false;
+            let reportedProviderSubtitleLocalFileMissing = false;
+            let reportedModernAudioLocalFileMissing = false;
+            let reportedSimpleSubtitleLocalFileMissing = false;
+            let reportedMissingAudioFormat = false;
             let existingProviderAudioFormat: string;
             let existingProviderSubtitleFormat: string;
             for (const track of ctx.meta.tracks) {
@@ -1459,7 +1462,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 let providerSubtitleFileOk = true;
                 const audioFile = files[(ctx.meta.audioWorkId ?? ctx.id)][track.audioFileIndex - 1];
                 if (!audioFile) {
-                    return logError(`${workId}: track ${track.index} provider path out of range?`);
+                    return logError(`${workId}: track ${track.index} index out of range?`);
                 }
                 const providerAudioFormat = path.extname(audioFile.providerPath).substring(1);
                 if (!['mp3', 'wav', 'flac'].includes(providerAudioFormat)) {
@@ -1489,7 +1492,7 @@ async function handleMigrateCommand(parameters: string[]) {
                 if (track.subtitleFileIndex && track.subtitleFileIndex != -1) {
                     const subtitleFile = files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleFileIndex - 1];
                     if (!subtitleFile) {
-                        return logError(`${workId}: track ${track.index} subtitle provider path out of range?`);
+                        return logError(`${workId}: track ${track.index} subtitle file index out of range?`);
                     } 
                     const providerSubtitleFormat = path.extname(subtitleFile.providerPath).substring(1);
                     if (!['vtt', 'srt', 'lrc', 'pdf', 'txt'].includes(providerSubtitleFormat)) {
@@ -1525,23 +1528,27 @@ async function handleMigrateCommand(parameters: string[]) {
                     const audioFilePath = makepath(workId, `track${track.index}.${metadata.audioFormat}`);
                     if (!npfs.existsSync(audioFilePath)) {
                         modernAudioFileOk = false;
-                        if (!reportedProviderAudioLocalFileMissing) {
+                        if (!reportedModernAudioLocalFileMissing) {
                             logError(`${workId}: track ${track.index} audio file missing ${audioFilePath}`);
-                            reportedProviderAudioLocalFileMissing = true;
+                            reportedModernAudioLocalFileMissing = true;
                         }
                     }
                     if (track.subtitleFileIndex) {
                         const subtitleFilePath = makepath(workId, `track${track.index}.${metadata.subtitleFormat}`)
                         if (!npfs.existsSync(subtitleFilePath)) {
                             simpleSubtitleFileOk = false;
-                            if (!reportedProviderSubtitleLocalFileMissing) {
+                            if (!reportedSimpleSubtitleLocalFileMissing) {
                                 logError(`${workId}: track ${track.index} subtittle file missing ${subtitleFilePath}`);
-                                reportedProviderSubtitleLocalFileMissing = true;
+                                reportedSimpleSubtitleLocalFileMissing = true;
                             }
                         }
                     }
                 } else {
                     modernAudioFileOk = false;
+                    if (!reportedMissingAudioFormat) {
+                        logError(`${workId}: missing audioFormat`);
+                        reportedMissingAudioFormat = true;
+                    }
                 }
                 if (modernAudioFileOk && simpleSubtitleFileOk && track.workInProgress) {
                     logError(`${workId}: track ${track.index} files completed but workinprogress flag set`);
@@ -1699,7 +1706,7 @@ async function handleMigrateCommand(parameters: string[]) {
             for (const track of metadata.tracks) {
                 const audioFile = ctx.files[(metadata.audioWorkId ?? metadata.id)][track.audioFileIndex - 1];
                 if (!audioFile) {
-                    return logError(`${workId} track ${track.index}: provider path out of range? ${track.audioFileIndex}`);
+                    return logError(`${workId} track ${track.index}: audio file index out of range? ${track.audioFileIndex}`);
                 }
                 rawTotalBytes += audioFile.size;
                 totalDuration += audioFile.duration;
@@ -1740,7 +1747,7 @@ async function handleMigrateCommand(parameters: string[]) {
                     if (track.subtitleFileIndex != -1) {
                         const subtitleFile = ctx.files[(metadata.subtitleWorkId ?? metadata.id)][track.subtitleFileIndex - 1];
                         if (!subtitleFile) {
-                            return logError(`${workId} track ${track.index}: subtitle provider path out of range? ${track.subtitleFileIndex}`);
+                            return logError(`${workId} track ${track.index}: subtitle file index out of range? ${track.subtitleFileIndex}`);
                         }
                         const simpleSubtitleFileLocalPath = makepath(workId, `track${track.index}.${metadata.subtitleFormat}`);
                         if (!npfs.existsSync(simpleSubtitleFileLocalPath)) {

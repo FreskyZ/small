@@ -409,9 +409,9 @@ def convert_audio_format(work_path):
     audio_work_id = metadata['audioWorkId'] if 'audioWorkId' in metadata else work_id
 
     for track in metadata['tracks']:
-        audio_file = files[audio_work_id][track['providerPath'] - 1]
+        audio_file = files[audio_work_id][track['audioFileIndex'] - 1]
         audio_suffix = pathlib.Path(audio_file).suffix
-        provider_file_local_path = work_path / f'{audio_work_id}-file{track['providerPath']}{audio_suffix}'
+        provider_file_local_path = work_path / f'{audio_work_id}-file{track['audioFileIndex']}{audio_suffix}'
         modern_file_path = work_path / f'track{track['index']}.opus'
         if not provider_file_local_path.exists():
             print(f'{work_id}: track {track['index']} provider file local path not exist, skip, {provider_file_local_path}')
@@ -483,13 +483,7 @@ def NOT_OK_check_completeness(path):
         print(f'{path}: ffmpeg return code {child.returncode}')
 
 def migrate(parameters):
-    if len(parameters) > 0 and parameters[0] == 'opus':
-        # convert audio for all works
-        for directory_path in pathlib.Path('/data').iterdir():
-            if not directory_path.name.startswith('RJ'):
-                continue
-            convert_audio_format(directory_path)
-    elif len(parameters) > 0 and parameters[0] == 'validate':
+    if len(parameters) > 0 and parameters[0] == 'validate':
         # validate converted file duration
         for directory_path in pathlib.Path('/data').iterdir():
             if not directory_path.name.startswith('RJ'):
