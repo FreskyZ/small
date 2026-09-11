@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Languages of Sennaar</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+body{background-color:#333;color:#eee}
+h2{margin:8px 0}
+div.language-container{padding:8px;background-color:#2224;border-radius:4px;font-family:sans-serif}
+div.group-container{padding:8px;background-color:#2224;border-radius:4px;font-family:sans-serif;margin-top:8px}
+div.group-name{margin-bottom:8px}
+div.example-container{padding:8px 4px;background-color:#2224;border-radius:4px;font-family:sans-serif;margin-top:8px}
+span.example-description{margin-left: 12px}
+span.char-container{display:inline-flex;flex-flow:column;gap:4px;margin-left:8px;align-items:center}
+span.char-container>svg{border:1px solid #ccc7}
+span.char-container>span{font-size:14px}
+  </style>
+</head>
+<body>
+  <h2>Languages of Sennaar</h2>
+  <div id="all-languages"></div>
+  <script type="module">
+
+const AllLanguageData = [{
+  name: 'priest',
+  characterGroups: [{
+    name: 'primitive symbols',
+    characters: [
+      { name: 'god', desc: 'god', path: 'M 500 250 l 300 350 l -300 200 l -300 -200 z m -300 350 h 600 m -300 -350 v 550' },
+      { name: 'man', desc: 'man, human: a standing person', path: 'M 450 200 v 600 l 150 10' },
+      { name: 'greeting', desc: 'hello, bye: a smiling face, I guess', path: 'M 475 250 v 250 h 325 a 275 275 0 0 1 -550 0 M 625 250 v 150' },
+      { name: 'plant', desc: 'plant: a sine wave?', path: 'M 500 200 c -150 75, -200 200, 0 250 s 300 300, -100 300 l 100, -300' },
+      { name: 'up', desc: 'up, great', path: 'M 350 400 a 150 150 0 0 1 300 0 M 350 400 a 150 150 0 0 0 300 0 M 500 550 v 300' },
+      { name: 'negative', desc: 'TODO: what does a Y mean?', path: 'M 250 250 l 150 150 l 250 -150 l -200 600' },
+      { name: 'free', desc: 'TODO', path: 'M 380 320 h 300 M 330 445 h 400 M 530 445 l 25 300 l -280 -100' },
+      { name: 'music', desc: 'music', path: 'M 320 700 a 260 260 0 1 1 215 100 v -250' },
+      { name: 'container (NG)', desc: 'a left parenthesis', path: 'M 400 200 c -240 200, -240 400, 0 600' },
+      { name: 'action (NG)', desc: 'a underline', path: 'M 200 800 h 600' },
+      { name: 'place (NG)', desc: 'a box', path: 'M 225 250 h 575 v 525 h -575 v -150' },
+    ],
+  }, {
+    name: 'people: a standing person',
+    characters: [
+      { name: 'me', desc: 'me, first person pronoun', path: 'M 300 200 v 600 l 125 10 M 500 400 v -250 h 225 v 275' },
+      { name: 'you', desc: 'you, second person pronoun', path: 'M 300 200 v 600 l 125 10 M 525 150 l -25 250 M 700 150 l -25 275' },
+      { name: 'priest', desc: 'priest: man that believes in god', path: 'M 250 200 v 600 l 125 10 M 600 540 l -175 -175 l 225 -225 l 150 225 z' },
+      { name: 'warrior', desc: 'warrior: man that fight with each other', path: 'M 250 200 v 600 l 125 10 M 400 150 l 200 150 l -225 125 M 825 300 l -200 150 l 225 125' },
+      { name: 'dead', desc: 'dead: man laying down', path: 'M 200 650 h 600 l 10 -125 M 275 375 h 64 v 64 h -64 z' },
+      { name: 'preacher', desc: 'people who what?', path: 'M 250 200 v 600 l 125 10 M 350 250 a 400 400 0 0 1 400 375 h -150 a 160 160 0 0 0 -200 -160' },
+    ],
+  }, {
+    name: 'actions: underline',
+    characters: [
+      { name: 'open', desc: 'open', path: 'M 750 300 h -500 C 250 300, 250 600, 760 640 M 200 800 h 600' },
+      { name: 'close', desc: 'close: a closed door', path: 'M 250 280 h 500 v 300 h -500 z M 500 280 v 300 M 200 800 h 600' },
+      { name: 'help', desc: 'help: connect two points', path: 'M 550 250 a 100 100 0 0 0 100 100 m -100 -100 a 100 100 0 1 1 100 100 M 250 525 a 100 100 0 0 0 100 100 m -100 -100 a 100 100 0 1 1 100 100 M 650 325 a 100 200 45 0 1 -200 200 M 200 800 h 600' },
+      { name: 'go', desc: 'go, pass: a person go/pass a place', path: 'M 350 300 v 300 h -150 M 475 300 h 280 v 300 h -250 v -150 M 200 800 h 600' },
+      { name: 'talk', desc: 'talk', path: 'M 250 250 a 450 450 0 0 1 500 400 h -200 a 200 200 0 0 0 -240 -200 M 200 800 h 600' },
+      { name: 'seek', desc: 'seek, want: multiple eyes and a hide position?', path: 'M 300 500 a 100 150 0 0 1 200 0 M 300 700 a 100 150 0 0 1 200 0 M 650 600 h 64 v 64 h -64 z M 200 800 h 600' },
+      { name: 'find', desc: 'find: a person twisted hiding in a place?', path: 'M 250 625 l 60 -180 c 175 225, 325 300, 450 100 M 550 350 h 64 v 64 h -64 z M 200 800 h 600' },
+      { name: 'watch', desc: 'watch: an eye', path: 'M 250 600 a 250 280 0 0 1 500 0 z M 500 400 v 200 M 200 750 h 600' },
+      { name: 'make', desc: 'make', path: 'M 285 420 a 200 200 0 0 0 420 0 a 200 200 0 0 0 -420 0 M 200 800 h 600' },
+      { name: 'like', desc: 'like', path: 'M 600 300 l 125 176 h -500 M 200 700 h 600' },
+    ],
+  }, {
+    name: 'instruments: left parenthesis',
+    characters: [
+      { name: 'door', desc: 'door: a device to stop pass through?', path: 'M 400 200 c -240 200, -240 400, 0 600 M 650 200 v 360 m -180 0 h 360' },
+      { name: 'key', desc: 'key: a device to change to open state', path: 'M 400 200 c -240 200, -240 400, 0 600 M 780 350 h -350 c 0 200, 250 280, 350 280' },
+      { name: 'instrument', desc: 'music instrument', path: 'M 400 200 c -240 200, -240 400, 0 600 M 475 600 a 200 200 0 1 1 169 100 v -200' },
+      { name: 'pot', desc: 'pot: instrument to hold plants', path: 'M 400 200 c -240 200, -240 400, 0 600 M 635 250 c -150 75, -200 200, 0 250 s 200 200, -100 250 l 100, -250' },
+      { name: 'potion', desc: 'potion: instrument to help/assistant', path: 'M 400 200 c -240 200, -240 400, 0 600 M 600 315 a 100 100 0 0 0 100 100 m -100 -100 a 100 100 0 1 1 100 100 M 500 680 a 100 100 0 0 0 100 100 m -100 -100 a 100 100 0 1 1 100 100 M 685 400 l -60 200' },
+      { name: 'lens', desc: 'lens: instruments to see', path: 'M 400 200 c -240 200, -240 400, 0 600 M 350 600 a 200 225 0 0 1 450 0 z M 575 450 v 175' },
+    ],
+  }, {
+    name: 'places: an open box',
+    characters: [
+      { name: 'abbey', desc: 'abbey: a place with 2 ⚲', path: 'M 225 250 h 575 v 525 h -575 v -150 M 340 460 a 60 60 0 0 1 120 0 m -120 0 a 60 60 0 0 0 120 0 m -60 60 v 160 M 560 420 a 60 60 0 0 1 120 0 m -120 0 a 60 60 0 0 0 120 0 m -60 60 v 210' },
+      { name: 'church', desc: 'church: a place for god', path: 'M 225 250 h 575 v 525 h -575 v -150 M 500 350 l 160 200 l -160 125 l -160 -125 z' },
+      { name: 'garden', desc: 'garden: a place with plants', path: 'M 225 200 h 575 v 625 h -575 v -150 M 530 315 c -125 75, -150 150, 0 200 s 200 200, -100 200 l 100, -200' },
+      { name: 'graveyard', desc: 'graveyard: a place for the dead', path: 'M 225 250 h 575 v 525 h -575 v -150 M 300 625 h 375 l 10 -125 M 325 445 h 64 v 64 h -64 z' },
+    ],
+  }],
+  sentences: [{
+    characters: ['you', 'help', 'me'],
+    desc: 'You help me.',
+    context: 'generic puzzle tutorial',
+  }, {
+    characters: ['you', 'open', 'door'],
+    desc: 'You open the door.',
+    context: 'generic puzzle tutorial',
+  }, {
+    characters: ['me', 'go'],
+    desc: 'I\'m going.',
+    context: 'generic puzzle tutorial',
+  }, {
+    characters: ['priest', 'priest', 'seek', 'god', 'up'],
+    desc: 'Priests seeking god ? great',
+    context: 'level 1 area 1 wall sculpture',
+  }, {
+    characters: ['you', 'seek', 'me'],
+    desc: 'You, seek me.',
+    context: 'play with children at level 1 area 1',
+  }, {
+    characters: ['you', 'find', 'me'],
+    desc: 'You found me.',
+    context: 'play with children at level 1 area 1',
+  }, {
+    characters: ['me', 'negative', 'free'],
+    desc: 'I\'m not free',
+    context: 'play with children at level 1 area 1',
+  }, {
+    characters: ['me', 'go', 'abbey'],
+    desc: 'I\'m going to abbey',
+    context: 'play with children at level 1 area 1',
+  }, {
+    characters: ['you', 'me', 'negative', 'go', 'up'],
+    desc: 'You and me cannot go up',
+    context: 'play with children at level 1 area 1 before area 2 door',
+  }, {
+    characters: ['you', 'find', 'key', 'you', 'me', 'free?'],
+    desc: 'You find key, you and me are free',
+    context: 'play with children at level 1 area 1 before area 2 door',
+  }, {
+    characters: ['me', 'priest'],
+    desc: 'I\'m a priest.',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['warrior', 'warrior', 'close', 'door'],
+    desc: 'Warriors closed the door.',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['you', 'negative', 'go', 'door'],
+    desc: 'You cannot go through the door.',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['god', 'up'],
+    desc: 'god is great',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['me', 'me', 'seek', 'go', 'up'],
+    desc: 'We want to go up',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['you', 'help', 'me', 'me'],
+    desc: 'You help us.',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['warrior', 'warrior', 'negative', 'priest', 'priest'],
+    desc: 'Warrirors are not priests.',
+    context: 'behind warriors closed door',
+  }, {
+    characters: ['you', 'seek', 'god'],
+    desc: 'You are seeking god?',
+    context: 'level 1 area 2 graveyard',
+  }, {
+    characters: ['church', 'help', 'you'],
+    desc: 'Church will help you.',
+    context: 'level 1 area 2 graveyard',
+  }, {
+    characters: ['god', 'watch', 'you', 'me'],
+    desc: 'God sees you and me.',
+    context: 'level 1 area 2 graveyard',
+  }, {
+    characters: ['preacher', 'negative', 'garden'],
+    desc: 'Preacher is not in garden?',
+    context: 'level 1 area 2 way to garden',
+  }, {
+    characters: ['me', 'negative', 'find', 'preacher'],
+    desc: 'I did\'t find preacher',
+    context: 'level 1 area 2 way to garden',
+  }, {
+    characters: ['plant', 'plant', 'dead'],
+    desc: 'Plants are dying.',
+    context: 'level 1 area 2 way to garden',
+  }, {
+    characters: ['me', 'negative', 'like', 'plant', 'plant', 'dead'],
+    desc: 'I don\'t like plants to die?',
+    context: 'level 1 area 2 way to garden',
+  }, {
+    characters: ['me', 'like', 'music'],
+    desc: 'I like music',
+    context: 'level 1 area 2 way to church',
+  }, {
+    characters: ['god', 'like', 'you', 'me'],
+    desc: 'God like you and me.',
+    context: 'level 1 area 2 way to church',
+  }, {
+    characters: ['god', 'negative', 'dead'],
+    desc: 'god don\'t like dead?',
+    context: 'level 1 area 2 church',
+  }, {
+    characters: ['me', 'make', 'instrument', 'instrument'],
+    desc: 'I sell music instruments?',
+    context: 'level 1 area 2 garden music instrument window',
+  }, {
+    characters: ['you', 'like', 'music'],
+    desc: 'You like music.',
+    context: 'level 1 area 2 garden music instrument window',
+  }, {
+    characters: ['me', 'make', 'pot', 'pot'],
+    desc: 'I sell music instruments?',
+    context: 'level 1 area 2 garden pot window',
+  }, {
+    characters: ['you', 'seek', 'pot'],
+    desc: 'You want music',
+    context: 'level 1 area 2 garden pot window',
+  }, {
+    characters: ['you', 'man', 'up'],
+    desc: 'You are a good man.',
+    context: 'level 1 area 2 begger',
+  }, {
+    characters: ['me', 'like', 'you'],
+    desc: 'I like you.',
+    context: 'level 1 area 2 begger',
+  }, {
+    characters: ['me', 'me', 'seek', 'talk', 'preacher'],
+    desc: 'We are praying for raining?',
+    context: 'level 1 area 2 begger',
+  }, {
+    characters: ['me', 'seek', 'talk', 'god'],
+    desc: 'I want to talk to god',
+    context: 'level 1 area 2 begger',
+  }, {
+    characters: ['me', 'seek', 'talk', 'preacher'],
+    desc: 'I want to talk to preacher',
+    context: 'level 1 area 2 begger',
+  }, {
+    characters: ['me', 'find', 'lens'],
+    desc: 'I\'m going to find glasses',
+    context: 'level 1 area 2 preacher note',
+  }, {
+    characters: ['lens', 'find', 'god'],
+    desc: 'Glasses can find god',
+    context: 'level 1 area 2 preacher note',
+  }],
+  // the man looks at the priest
+  // the priest looks at god
+  // god looks at the instrument
+  // preacher talk to the man
+}];
+
+const allLanguagesElement = document.querySelector('div#all-languages');
+
+function createSVGElement(pathData) {
+  const element = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  element.setAttribute('viewBox', '0 0 1024 1024');
+  element.setAttribute('width', '28px');
+  element.setAttribute('height', '28px');
+  element.setAttribute('stroke', '#eee');
+  element.setAttribute('stroke-width', '72');
+  element.setAttribute('fill', 'none');
+  const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  pathElement.setAttribute('d', pathData);
+  element.append(pathElement);
+  return element;
+}
+
+function render() {
+  for (const languageData of AllLanguageData) {
+    const languageContainerElement = document.createElement('div');
+    languageContainerElement.classList.add('language-container');
+    const languageNameElement = document.createElement('div');
+    languageNameElement.classList.add('language-name');
+    languageNameElement.innerText = `LANGUAGE: ${languageData.name}`;
+    languageContainerElement.appendChild(languageNameElement);
+    for (const groupData of languageData.characterGroups) {
+      const groupContainerElement = document.createElement('div');
+      groupContainerElement.classList.add('group-container');
+      const groupNameElement = document.createElement('div');
+      groupNameElement.classList.add('group-name');
+      groupNameElement.innerText = `GROUP ${groupData.name}`;
+      groupContainerElement.appendChild(groupNameElement);
+      for (const charData of groupData.characters) {
+        const charContainerElement = document.createElement('span');
+        charContainerElement.classList.add('char-container');
+        charContainerElement.dataset['id'] = charData.name;
+        charContainerElement.appendChild(createSVGElement(charData.path));
+        const charNameElement = document.createElement('span');
+        charNameElement.classList.add('char-name');
+        charNameElement.innerText = charData.name;
+        charContainerElement.title = charData.desc;
+        charContainerElement.appendChild(charNameElement);
+        groupContainerElement.appendChild(charContainerElement);
+      }
+      languageContainerElement.appendChild(groupContainerElement);
+    }
+    for (const exampleData of languageData.sentences) {
+      const exampleContainerElement = document.createElement('div');
+      exampleContainerElement.classList.add('example-container');
+      for (const charName of exampleData.characters) {
+        const charData = languageData.characterGroups.flatMap(g => g.characters).find(c => c.name == charName);
+        const charContainerElement = document.createElement('span');
+        charContainerElement.classList.add('char-container');
+        charContainerElement.dataset['id'] = charData?.name;
+        charContainerElement.appendChild(createSVGElement(charData?.path));
+        const charNameElement = document.createElement('span');
+        charNameElement.classList.add('char-name');
+        charNameElement.innerText = charData?.name;
+        charContainerElement.title = charData?.desc;
+        charContainerElement.appendChild(charNameElement);
+        exampleContainerElement.appendChild(charContainerElement);
+      }
+      const descriptionElement = document.createElement('span');
+      descriptionElement.classList.add('example-description');
+      descriptionElement.innerText = `${exampleData.desc} (${exampleData.context})`;
+      exampleContainerElement.appendChild(descriptionElement);
+      languageContainerElement.appendChild(exampleContainerElement);
+    }
+    allLanguagesElement.appendChild(languageContainerElement);
+  }
+}
+render();
+  </script>
+</body>
