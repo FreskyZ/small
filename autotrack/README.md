@@ -35,10 +35,10 @@ naming conventions
 current workflow
 
 - start containers, you seems need a compose file for these, but docker and wslc don't stay in one compose project
-  - manage.ts: docker run -it --rm --name asmrts1 -v $REPO/autotrack:/work -v $DATADIR:/data -h ASMRTS -w /work my/node
-  - manage.py: docker run -it --rm --name asmrpy1 -v $REPO/autotrack:/work
-    -v $DATADIR:/data -v $DATAARC:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMRPY -w /work my/python
-    the python project files are not tracked in this repository: uv add Pillow && uv add pypdf && apt install ffmpeg
+  - docker run -it --rm --name asmr1 -v $REPO/autotrack:/work
+    -v $DATADIR:/data -v $DATAARC:/data-archive -v $REPO/archive/asmr:/meta-archive -h ASMR -w /work my/run
+  - open multiple shells by: docker exec -it asmr1 zsh
+  - install ffmpeg: apt install -y ffmpeg
   - transcribe.py: wslc run -it --rm --name asmrasr1 --gpus all -v $DATADIR:/data -v $MODELDIR:/models -h ASMRASR -w /work my/asr
 - manage.ts WORKID: add a new work, this will download raw metadata and create initial metadata, and display it
 - manage.ts WORKID add: add tracks and optionally subtitles, this will NOT actually download files

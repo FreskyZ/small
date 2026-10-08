@@ -4,3 +4,4 @@ akari.json
 .env
 .venv
 .cache
+autotrack/config.json

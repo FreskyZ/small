@@ -1,7 +1,18 @@
+# /// script
+# requires-python = ">=3.14"
+# dependencies = [
+#     "pillow>=12.3.0",
+# ]
+# ///
+
 import pathlib, json, io, tarfile, math, base64, datetime, sys, re, subprocess, random, time
-import pypdf          # uv add pypdf
-from PIL import Image # uv add Pillow
-                      # apt install ffmpeg
+# import pypdf
+from PIL import Image
+
+# apt install ffmpeg
+# # uv init --script manage.py
+# # uv add --script manage.py Pillow
+# uv run manage.py
 
 # expected file structure
 # /data for main data
