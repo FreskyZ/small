@@ -3,7 +3,7 @@
 # build minimal omz, why does omz repository contains so many not used files?
 # - this stage build a /build directory without unnecessary files and with necessary files
 # - does not contain the zsh program, need package manager and install
-FROM alpine:3.24.1 AS ohmyzsh-build
+FROM alpine:3.24.2 AS ohmyzsh-build
 
 # git clone git@github.com:ohmyzsh/ohmyzsh
 # tar cJf ohmyzsh.tar.xz -C ./ohmyzsh .
@@ -80,7 +80,7 @@ EORUN
 # basic shell experience
 # docker build --target shell --tag my/shell .
 # occassionally update packages: docker build --no-cache --target shell --tag my/shell .
-FROM debian:13.6-slim AS shell
+FROM debian:13.7-slim AS shell
 # base image https://hub.docker.com/_/debian
 # source code https://github.com/debuerreotype/docker-debian-artifacts/blob/dist-amd64/trixie/Dockerfile
 # if you can't notice difference for slim image, it shrinks many docs and mans, their bin and packages are same
@@ -111,12 +111,12 @@ ENTRYPOINT ["/bin/zsh"]
 #   sed -i 's|http://archive.ubuntu.com/ubuntu/|https://mirrors.tuna.tsinghua.edu.cn/ubuntu|g' /etc/apt/sources.list.d/ubuntu.sources
 # - apk mirror in case you need
 #   cat <<'EOCAT' > /etc/apk/repositories
-#   https://mirrors.aliyun.com/alpine/v3.23/main
-#   https://mirrors.aliyun.com/alpine/v3.23/community
+#   https://mirrors.aliyun.com/alpine/v3.24/main
+#   https://mirrors.aliyun.com/alpine/v3.24/community
 #   EOCAT
 # - apk mirror in convenient 2 one liners in case you need
-#   echo https://mirrors.aliyun.com/alpine/v3.23/main > /etc/apk/repositories
-#   echo https://mirrors.aliyun.com/alpine/v3.23/community >> /etc/apk/repositories
+#   echo https://mirrors.aliyun.com/alpine/v3.24/main > /etc/apk/repositories
+#   echo https://mirrors.aliyun.com/alpine/v3.24/community >> /etc/apk/repositories
 # - edit passwd file in case you don't have chsh
 #   sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/zsh#' /etc/passwd
 
@@ -127,7 +127,7 @@ FROM my/shell AS node
 # source code https://github.com/nodejs/docker-node/blob/main/26/trixie-slim/Dockerfile
 # the build process simply download and decompress and remove some unnecessary large files
 
-ARG NODE_VERSION=26.7.0
+ARG NODE_VERSION=26.11.1
 RUN <<EORUN
 set -ex
 # wget seems to be about 4mb, xz-utils seems to be about 1.5mb,
@@ -152,14 +152,15 @@ rm -rf /tmp/node-v${NODE_VERSION}-linux-x64
 npm install -g npm@latest
 EORUN
 
-# ==============================================
-# docker build --target python --tag my/python .
-FROM my/shell AS python
-# uv and install latest python by uv
+# node + python because they are frequently choosen at the same time for quick small projects
+# run: generic script RUNning environment
+# ====================================================
+# docker build --target node-and-python --tag my/run .
+FROM my/node AS node-and-python
 
 # https://docs.astral.sh/uv/guides/integration/docker/#available-images
 # for this copy usage, 0.11.26 is enough, others will come with distro and python
-COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /uvx /bin/
 
 RUN <<EORUN
 set -ex
