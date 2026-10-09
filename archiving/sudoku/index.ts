@@ -1,4 +1,4 @@
-// tsc index.ts --target es6 --lib dom,es2020
+// tsc index.ts --target es2025 --lib dom,esnext --ignoreConfig
 // npx terser --ecma 2020 --compress --mangle --output index.min.js -- index.js
 // deployment note: change index.css and index.js in index.html to public path
 
@@ -573,6 +573,7 @@ class Behavior {
         this.isPencil = false;
         this.externalActiveNumber = 0;
         this.reportedComplete = false;
+        this.dark = true;
         this.previouslyActiveCell = null;
     
         const savedatastring = localStorage.getItem('PAGEDATA');
@@ -621,7 +622,7 @@ class Behavior {
         })
         const activeCell = this.board.cells.find(cell => cell.isFocused())
             // TODO this make externactivenumber's external part not working, may need a button for that
-            || (navigator['userAgentData']?.mobile ? this.previouslyActiveCell : null);
+            || ((navigator as any).userAgentData?.mobile ? this.previouslyActiveCell : null);
         if (activeCell) {
             this.externalActiveNumber = 0;
             this.board.cells.forEach(other => {
@@ -781,7 +782,8 @@ class Behavior {
         this.do({ kind: 'auto-pencil' });
     }
 
-    private inferrer: InferrerLike;
+    // you need this to pass typescript 7.0 default setting
+    private inferrer: InferrerLike = null as unknown as InferrerLike;
     public setInferrer(inferer: InferrerLike) {
         this.inferrer = inferer;
     }
@@ -1059,7 +1061,7 @@ class Inferrer {
         }
     }
 
-    private apply: boolean;
+    private apply: boolean = false;
     public infer = (apply: boolean) => {
         this.apply = apply;
         this.element.innerHTML = '';
@@ -1593,5 +1595,5 @@ class Inferrer {
 const ui = makeui();
 const board = new Board(ui);
 const modal = new Modal(ui);
-const behavior = window['thegame'] = new Behavior(board, modal, ui);
+const behavior = (window as any).thegame = new Behavior(board, modal, ui);
 behavior.setInferrer(new Inferrer(behavior, ui));
