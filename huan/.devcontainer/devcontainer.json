@@ -1,0 +1,29 @@
+{
+    "name": "huan",
+    "image": "my/rust",
+    // add reasonable host name, add reasonable container name
+    "runArgs": ["-h=HUAN-DEVC", "--name=huan1"],
+    "mounts": [
+        // source cannot use ~
+        // source does not respsect temporary `export VAR=value` in the shell to run `code .`, need to add to .zshrc
+        { "source": "${localEnv:CARGO_DOWNLOAD_CACHE}", "target": "/usr/local/cargo/registry", "type": "bind" }
+    ],
+    // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "rust-lang.rust-analyzer"
+            ],
+            "settings": {
+                "editor.semanticTokenColorCustomizations": {
+                    "enabled": true,
+                    "rules": {
+                        "*.mutable": {
+                            "underline": false
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
