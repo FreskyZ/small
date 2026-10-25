@@ -5,17 +5,21 @@ import urllib.request, pathlib, shutil, subprocess, sys, tarfile
 url_base = 'https://download.docker.com/linux/debian/dists/trixie/pool/stable/amd64/'
 # according to semantic versioning, the hyphen after major.minor.patch is prerelease, plus is build
 # but this really looks like build not prerelease, by the way, semantic version does not allow tilde ~
-build = '-1~debian.13~trixie_amd64'
+build = '~debian.13~trixie_amd64'
 # docker-ce-rootless-extras is not used
 # buildx plugin is not used on server, used in dev environment, use a switch for that
-buildx_plugin = False
+buildx_plugin = True
 
 packages = [p for p in [
-    ('containerd.io', '2.2.5'),
-    ('docker-ce', '29.6.1'),
-    ('docker-ce-cli', '29.6.1'),
-    ('docker-buildx-plugin', '0.35.0') if buildx_plugin else False,
-    ('docker-compose-plugin', '5.2.0'),
+    # https://github.com/containerd/containerd/releases
+    ('containerd.io', '2.4.2-3'),
+    # https://github.com/moby/moby/releases
+    # https://docs.docker.com/engine/release-notes/29/
+    ('docker-ce', '29.9.2-1'),
+    ('docker-ce-cli', '29.9.2-1'),
+    ('docker-buildx-plugin', '0.38.1-1') if buildx_plugin else False,
+    # https://github.com/docker/compose/releases
+    ('docker-compose-plugin', '5.6.1-1'),
 ] if p]
 
 # download and extract

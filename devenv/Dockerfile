@@ -3,7 +3,7 @@
 # build minimal omz, why does omz repository contains so many not used files?
 # - this stage build a /build directory without unnecessary files and with necessary files
 # - does not contain the zsh program, need package manager and install
-FROM alpine:3.24.2 AS ohmyzsh-build
+FROM alpine:3.24.3 AS ohmyzsh-build
 
 # git clone git@github.com:ohmyzsh/ohmyzsh
 # tar cJf ohmyzsh.tar.xz -C ./ohmyzsh .
@@ -127,7 +127,7 @@ FROM my/shell AS node
 # source code https://github.com/nodejs/docker-node/blob/main/26/trixie-slim/Dockerfile
 # the build process simply download and decompress and remove some unnecessary large files
 
-ARG NODE_VERSION=26.11.1
+ARG NODE_VERSION=26.12.1
 RUN <<EORUN
 set -ex
 # wget seems to be about 4mb, xz-utils seems to be about 1.5mb,
@@ -160,11 +160,11 @@ FROM my/node AS node-and-python
 
 # https://docs.astral.sh/uv/guides/integration/docker/#available-images
 # for this copy usage, 0.11.26 is enough, others will come with distro and python
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 RUN <<EORUN
 set -ex
-uv python install 3.14.7
+uv python install 3.15.1
 echo 'export PATH="/root/.local/bin:$PATH"' >> /root/.zshrc
 EORUN
 
@@ -186,18 +186,32 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
 ENV PATH=/usr/local/cargo/bin:$PATH
 
+# # setup mirror, add these to project level .cargo/config.toml
+# # https://mirrors.tuna.tsinghua.edu.cn/help/crates.io-index.git/
+# [source.crates-io]
+# replace-with = 'mirror'
+# [source.mirror]
+# registry = "https://mirrors.tuna.tsinghua.edu.cn/git/crates.io-index.git"
+
 RUN <<EORUN
 set -ex
 # wget is too small compare to rust installed size
-apt-get install -y wget
+apt-get install -y --no-install-recommends wget
 # https://rust-lang.github.io/rustup/installation/other.html#manual-installation
 wget https://static.rust-lang.org/rustup/dist/x86_64-unknown-linux-gnu/rustup-init
 chmod +x rustup-init
+EORUN
+
+# split here to improve fail and continue in not good network condition
+RUN <<EORUN
+set -ex
 ./rustup-init -y --no-modify-path --profile minimal
 rm rustup-init
 rustup --version
 rustc --version
 cargo --version
+# linker
+apt-get install -y --no-install-recommends build-essential
 EORUN
 
 # ========================================
