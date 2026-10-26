@@ -6,7 +6,8 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0"
 chrono = "0.4"
+futures-util = "0.3"
 regex = "1"
-reqwest = { version = "0.13", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "stream"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }

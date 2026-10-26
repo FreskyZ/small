@@ -1,11 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{BinaryHeap, HashMap};
 use std::fs;
 use std::fmt::Write as _;
-use std::path::Path;
 use anyhow::{Context as _, Result, bail};
-use chrono::{DateTime, Timelike, Utc};
+use chrono::{DateTime, Utc};
+use futures_util::StreamExt;
 use serde_json::json;
-// use reqwest;
+use reqwest;
+
+#[cfg(test)]
+use std::assert_matches;
+#[cfg(test)]
+use chrono::TimeZone as _;
 
 #[derive(Debug)]
 enum MessageKind {
@@ -32,6 +37,8 @@ enum MessageKind {
         // log or additional information not send as content
         execution_metadata: HashMap<String, String>,
     },
+    // oh, only when you provide tools in manual api invocation and receive an assistant message with content and tool
+    // calls in your lifetime you realize that, content, reasoning content and tool calls will appear in the same message
     Assistant{
         content: String,
         reasoning_content: Option<String>,
@@ -181,7 +188,7 @@ fn read_session(original_content: &str) -> Result<Vec<Message>> {
                             },
                             MessageKind::Assistant{ response_metadata, .. } => {
                                 if let Some(value) = segment.strip_prefix("complete-time:") {
-                                    response_metadata.insert("copmlete-time".to_string(), value.trim().to_string());
+                                    response_metadata.insert("complete-time".to_string(), value.trim().to_string());
                                 } else if let Some(value) = segment.strip_prefix("usage:") {
                                     response_metadata.insert("usage".to_string(), value.trim().to_string());
                                 } else if let Some(value) = segment.strip_prefix("model:") {
@@ -194,7 +201,7 @@ fn read_session(original_content: &str) -> Result<Vec<Message>> {
                                 if let Some(value) = segment.strip_prefix("id:") {
                                     *id = value.trim().to_string();
                                 } else if let Some(value) = segment.strip_prefix("complete-time:") {
-                                    response_metadata.insert("copmlete-time".to_string(), value.trim().to_string());
+                                    response_metadata.insert("complete-time".to_string(), value.trim().to_string());
                                 } else if let Some(value) = segment.strip_prefix("usage:") {
                                     response_metadata.insert("usage".to_string(), value.trim().to_string());
                                 } else if let Some(value) = segment.strip_prefix("model:") {
@@ -234,7 +241,7 @@ fn read_session(original_content: &str) -> Result<Vec<Message>> {
     Ok(messages)
 }
 
-fn write_session(filename: impl AsRef<Path>, session: &[Message]) -> Result<()> {
+fn format_session(session: &[Message]) -> Result<String> {
 
     let mut b = String::new();
     for message in session {
@@ -287,14 +294,13 @@ fn write_session(filename: impl AsRef<Path>, session: &[Message]) -> Result<()> 
             | MessageKind::ToolCall { response_metadata: metadata, .. }
             | MessageKind::ToolResult { execution_metadata: metadata, .. } = &message.kind
         {
-            for (key, value) in metadata {
+            for (key, value) in metadata.iter().collect::<BinaryHeap<_>>().into_sorted_vec() {
                 write!(b, ", {}: {}", key, value)?;
             }
         }
         b.push_str("\n\n");
     }
-    fs::write(filename, b)?;
-    Ok(())
+    Ok(b)
 }
 
 #[tokio::main]
@@ -325,25 +331,272 @@ async fn main() -> Result<()> {
     // println!("response {}", response_text);
     // seems need use response.bytes_stream
 
-    let result_message = Message {
-        id: 43,
-        parent_id: 42,
-        create_time: Utc::now().with_nanosecond(0).unwrap(),
-        kind: MessageKind::Assistant {
-            content: "this file contains...".to_string(),
-            reasoning_content: Some("now I need to...".to_string()),
-            response_metadata: {
-                let mut map = HashMap::new();
-                map.insert("time".to_string(), "30".to_string());
-                map.insert("model".to_string(), "deepseekv5".to_string());
-                map.insert("usage".to_string(), "100/200/300".to_string());
-                map.insert("system-fingerprint".to_string(), "system-fingerprint".to_string());
-                map
+    Ok(())
+}
+
+#[test]
+fn test_read() -> Result<()> {
+    let session = read_session(concat!(
+        "🚀SYSTEM #1:\n",
+        "💬CONTENT:\n",
+        "You are a coding agent.\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-22T15:13:00Z\n\n",
+        "🙋USER #2<#1:\n",
+        "💬CONTENT:\n",
+        "summary source code file src/main.rs\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-22T15:13:01Z\n\n",
+        "🤖TOOL-CALL #3<#2:\n",
+        "💬CONTENT:\n",
+        "read_file({ pathname: \"src/main.rs\" })\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:29:00Z, id: toolcallid, usage: 100/100/100, model: deepseek-flash\n\n",
+        "🕵🏻TOOL-RESULT #3<#2:\n",
+        "💬CONTENT:\n",
+        "use std::fs;\n",
+        "...\n",
+        "struct Message...\n",
+        "fn read_session...\n",
+        "fn test_read...\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:30:00Z, id: toolcallid\n\n",
+        "🤖ASSISTANT #5<#42:\n",
+        "💭REASONING-CONTENT:\n",
+        "why do you need reasoning when reading a small file?\n",
+        "💬CONTENT:\n",
+        "this file contains...\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:29:02Z, complete-time: 30, usage:42/325/799, model: deepseek-flasher\n\n",
+    ))?;
+    assert_eq!(session.len(), 5);
+    assert_eq!(session[0].id, 1);
+    assert_eq!(session[0].parent_id, 0);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 0).unwrap());
+    assert_matches!(&session[0].kind, MessageKind::System{ content } if content == "You are a coding agent.");
+    assert_eq!(session[1].id, 2);
+    assert_eq!(session[1].parent_id, 1);
+    assert_eq!(session[1].create_time, Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 1).unwrap());
+    assert_matches!(&session[1].kind, MessageKind::User{ content } if content == "summary source code file src/main.rs");
+    assert_eq!(session[2].id, 3);
+    assert_eq!(session[2].parent_id, 2);
+    assert_eq!(session[2].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 0).unwrap());
+    let MessageKind::ToolCall{ id, name, parameters, response_metadata } = &session[2].kind else {
+        panic!("session[2].kind not toolcall");
+    };
+    assert_eq!(id, "toolcallid");
+    assert_eq!(name, "read_file");
+    assert_eq!(parameters, "{ pathname: \"src/main.rs\" }");
+    assert_eq!(response_metadata.len(), 2);
+    assert_eq!(response_metadata["usage"], "100/100/100");
+    assert_eq!(response_metadata["model"], "deepseek-flash");
+    // does not validate id
+    assert_eq!(session[3].id, 3);
+    assert_eq!(session[3].parent_id, 2);
+    assert_eq!(session[3].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap());
+    let MessageKind::ToolResult{ id, content, execution_metadata } = &session[3].kind else {
+        panic!("session[3].kind not toolresult");
+    };
+    assert_eq!(id, "toolcallid");
+    assert_eq!(content, "use std::fs;\n...\nstruct Message...\nfn read_session...\nfn test_read...");
+    assert_eq!(execution_metadata.len(), 0);
+    assert_eq!(session[4].id, 5);
+    // does not validate id
+    assert_eq!(session[4].parent_id, 42);
+    assert_eq!(session[4].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 2).unwrap());
+    let MessageKind::Assistant{ reasoning_content, content, response_metadata } = &session[4].kind else {
+        panic!("session[4].kind not assistant");
+    };
+    assert_eq!(reasoning_content.as_deref(), Some("why do you need reasoning when reading a small file?"));
+    assert_eq!(content, "this file contains...");
+    assert_eq!(response_metadata.len(), 3);
+    assert_eq!(response_metadata["complete-time"], "30");
+    assert_eq!(response_metadata["usage"], "42/325/799");
+    assert_eq!(response_metadata["model"], "deepseek-flasher");
+
+    Ok(())
+}
+
+#[test]
+fn test_read_no_system() -> Result<()> {
+
+    let session = read_session(concat!(
+        "🙋USER #1:\n",
+        "💬CONTENT:\n",
+        "hello\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-25T07:57:00Z",
+    ))?;
+    assert_eq!(session.len(), 1);
+    assert_eq!(session[0].id, 1);
+    assert_eq!(session[0].parent_id, 0);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
+    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "hello");
+
+    // does not validate first message shouldn't have parent id
+    let session = read_session(concat!(
+        "🙋USER #1<#33554432:\n",
+        "💬CONTENT:\n",
+        "hello\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-25T07:57:00Z",
+    ))?;
+    assert_eq!(session.len(), 1);
+    assert_eq!(session[0].id, 1);
+    assert_eq!(session[0].parent_id, 33554432);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
+    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "hello");
+    
+    // does not validate first message is system or user
+    let session = read_session(concat!(
+        "🕵🏻TOOL-RESULT #3<#2:\n",
+        "💬CONTENT:\n",
+        "use std::fs;\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:30:00Z, id: toolcallid\n\n",
+    ))?;
+    assert_eq!(session[0].id, 3);
+    assert_eq!(session[0].parent_id, 2);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap());
+    let MessageKind::ToolResult{ id, content, execution_metadata } = &session[0].kind else {
+        panic!("session[0].kind not toolresult");
+    };
+    assert_eq!(id, "toolcallid");
+    assert_eq!(content, "use std::fs;");
+    assert_eq!(execution_metadata.len(), 0);
+
+    Ok(())
+}
+
+#[test]
+fn test_read_escape() -> Result<()> {
+
+    // does not have escape mechanism
+    // oh, cannot transition to in-content state from in-content state?
+    let session = read_session(concat!(
+        "🙋USER #1:\n",
+        "💬CONTENT:\n",
+        "💬CONTENT:\n",
+        "💬CONTENT:\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-25T07:57:00Z",
+    ))?;
+    assert_eq!(session.len(), 1);
+    assert_eq!(session[0].id, 1);
+    assert_eq!(session[0].parent_id, 0);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
+    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "💬CONTENT:\n💬CONTENT:");
+
+    let session = read_session(concat!(
+        "🤖ASSISTANT #1:\n",
+        "💬CONTENT:\n",
+        "💭REASONING-CONTENT:\n",
+        "💬CONTENT:\n",
+        "💭REASONING-CONTENT:\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-25T08:04:00Z",
+    ))?;
+    assert_eq!(session.len(), 1);
+    assert_eq!(session[0].id, 1);
+    assert_eq!(session[0].parent_id, 0);
+    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 8, 4, 0).unwrap());
+    assert_matches!(&session[0].kind, MessageKind::Assistant{ content, reasoning_content, .. } if content == "" && reasoning_content.is_none());
+
+    Ok(())
+}
+
+#[test]
+fn test_write() -> Result<()> {
+
+    assert_eq!(format_session(&[
+        Message {
+            id: 1,
+            parent_id: 0,
+            create_time: Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 0).unwrap(),
+            kind: MessageKind::System { content: "You are a coding agent.".to_string() },
+        },
+        Message {
+            id: 2,
+            parent_id: 1,
+            create_time: Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 1).unwrap(),
+            kind: MessageKind::User { content: "summary source code file src/main.rs".to_string() },
+        },
+        Message {
+            id: 3,
+            parent_id: 2,
+            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 0).unwrap(),
+            kind: MessageKind::ToolCall {
+                id: "tool-call-id".to_string(),
+                name: "read_file".to_string(),
+                parameters: "{ pathname: \"src/main.rs\" }".to_string(),
+                response_metadata: {
+                    let mut map = HashMap::new();
+                    map.insert("model".to_string(), "deepseek-flash".to_string());
+                    map.insert("usage".to_string(), "100/100/100".to_string());
+                    map
+                },
             },
         },
-    };
-    session.push(result_message);
-    write_session("example2-1.txt", &session)?;
-
+        Message {
+            id: 3,
+            parent_id: 2,
+            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap(),
+            kind: MessageKind::ToolResult {
+                // does not validate tool call id
+                id: "not-tool-call-id".to_string(),
+                content: "use std::fs;\n...\nstruct Message...\nfn read_session...\nfn test_read...".to_string(),
+                execution_metadata: HashMap::new(),
+            },
+        },
+        Message {
+            id: 5,
+            parent_id: 42,
+            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 2).unwrap(),
+            kind: MessageKind::Assistant {
+                content: "this file contains...".to_string(),
+                reasoning_content: Some("why do you need reasoning when reading a small file?".to_string()),
+                response_metadata: {
+                    let mut map = HashMap::new();
+                    map.insert("complete-time".to_string(), "30".to_string());
+                    map.insert("model".to_string(), "deepseek-flasher".to_string());
+                    map.insert("usage".to_string(), "42/325/799".to_string());
+                    map.insert("system-fingerprint".to_string(), "system-fingerprint".to_string());
+                    map
+                },
+            },
+        },
+    ])?, concat!(
+        "🚀SYSTEM #1:\n",
+        "💬CONTENT:\n",
+        "You are a coding agent.\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-22T15:13:00Z\n\n",
+        "🙋USER #2<#1:\n",
+        "💬CONTENT:\n",
+        "summary source code file src/main.rs\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-22T15:13:01Z\n\n",
+        "🤖TOOL-CALL #3<#2:\n",
+        "💬CONTENT:\n",
+        "read_file({ pathname: \"src/main.rs\" })\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:29:00Z, id: tool-call-id, model: deepseek-flash, usage: 100/100/100\n\n",
+        "🕵🏻TOOL-RESULT #3<#2:\n",
+        "💬CONTENT:\n",
+        "use std::fs;\n",
+        "...\n",
+        "struct Message...\n",
+        "fn read_session...\n",
+        "fn test_read...\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:30:00Z, id: not-tool-call-id\n\n",
+        "🤖ASSISTANT #5<#42:\n",
+        "💭REASONING-CONTENT:\n",
+        "why do you need reasoning when reading a small file?\n",
+        "💬CONTENT:\n",
+        "this file contains...\n",
+        "🔗METADATA:\n",
+        "time: 2026-10-23T06:29:02Z, complete-time: 30, model: deepseek-flasher, system-fingerprint: system-fingerprint, usage: 42/325/799\n\n",
+    ));
     Ok(())
 }
