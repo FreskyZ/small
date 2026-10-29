@@ -1,306 +1,261 @@
-use std::collections::{BinaryHeap, HashMap};
 use std::fs;
-use std::fmt::Write as _;
 use anyhow::{Context as _, Result, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use futures_util::StreamExt;
 use serde_json::json;
+use serde_yaml_ng::from_str as yaml_parse;
 use reqwest;
 
-#[cfg(test)]
-use std::assert_matches;
-#[cfg(test)]
-use chrono::TimeZone as _;
+#[derive(Debug)]
+enum Role {
+    System,
+    User,
+    Assistant,
+}
 
 #[derive(Debug)]
-enum MessageKind {
-    System{
-        content: String,
-    },
-    User{
-        content: String,
-    },
-    ToolCall{
-        // tool call id
-        id: String,
-        // function name
-        name: String,
-        // string for now
-        parameters: String,
-        // model, time, headers, finish reason, system fingerprint, etc.
-        response_metadata: HashMap<String, String>,
-    },
-    ToolResult{
-        // tool call id
-        id: String,
-        content: String,
-        // log or additional information not send as content
-        execution_metadata: HashMap<String, String>,
-    },
-    // oh, only when you provide tools in manual api invocation and receive an assistant message with content and tool
-    // calls in your lifetime you realize that, content, reasoning content and tool calls will appear in the same message
-    Assistant{
-        content: String,
-        reasoning_content: Option<String>,
-        response_metadata: HashMap<String, String>,
-    },
+struct TextBlock {
+    value: String,
+}
+
+// this content block design come from a/ messages api,
+// a user message can contain multiple tool result blocks,
+// while that's multiple role=tool messages for chat completion api,
+// use this design for in memory data structure because it's more clear
+#[derive(Debug)]
+struct ToolResultBlock {
+    id: String,
+    value: String,
+    // tool execution information
+    metadata: Vec<(String, serde_yaml_ng::Value)>,
+}
+
+#[derive(Debug)]
+struct ToolCallBlock {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug)]
+enum ContentBlock {
+    // system, user, assistant, tool result content
+    Content(TextBlock),
+    Reasoning(TextBlock),
+    ToolResult(ToolResultBlock),
+    ToolCall(ToolCallBlock),
 }
 
 #[derive(Debug)]
 struct Message {
     id: usize,
-    // 0 for message#1 I guess
     parent_id: usize,
-    create_time: DateTime<Utc>,
-    kind: MessageKind,
+    role: Role,
+    content: Vec<ContentBlock>,
+    // web response additional information
+    response_metadata: Vec<(String, serde_yaml_ng::Value)>,
 }
 
-mod template {
-    use std::sync::LazyLock;
-    use regex::Regex;
-    pub const SYSTEM: &str = "🚀SYSTEM";
-    pub const USER: &str = "🙋USER";
-    pub const ASSISTANT: &str = "🤖ASSISTANT";
-    pub const TOOL_CALL: &str = "🤖TOOL-CALL";
-    pub const TOOL_RESULT: &str = "🕵🏻TOOL-RESULT";
-    pub static HEADERS: &[&str] = &[SYSTEM, USER, ASSISTANT, TOOL_CALL, TOOL_RESULT];
-    pub const CONTENT: &str = "💬CONTENT:";
-    pub const REASONING_CONTENT: &str = "💭REASONING-CONTENT:";
-    pub const METADATA: &str = "🔗METADATA:";
-    pub static RE_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#(\d+)(?:<#(\d+))?:$").unwrap());
+#[derive(Debug)]
+struct Session {
+    name: String,
+    // store messages tree structure as flat nodes and record tree structure in id and parent id
+    messages: Vec<Message>,
 }
 
-fn read_session(original_content: &str) -> Result<Vec<Message>> {
+fn read_session(original_content: &str) -> Result<Session> {
+    use serde_yaml_ng::Value as Node;
 
-    #[derive(PartialEq, Eq)]
-    enum State {
-        // initial or after metadata, expect message header
-        Initial,
-        AfterMessageHeader,
-        InContent{ reasoning: bool },
-        InMetadata,
-    }
-    let mut state = State::Initial;
-    let mut messages = Vec::new();
-    let mut current_message = Message{ id: 0, parent_id: 0, create_time: Utc::now(), kind: MessageKind::System { content: String::new() } };
+    let document: Node = yaml_parse(original_content)?;
+    // println!("{:?}", document);
+    let Node::Mapping(mut document) = document else { bail!("top level not mapping?") };
 
-    for (line_index, line) in original_content.lines().enumerate() {
-        let row_number = line_index + 1;
-        // println!("begin loop, {}, {}, {}", row_number, state, line);
-        match state {
-            State::Initial => {
-                if line.trim().is_empty() {
-                    continue; // ignore empty lines outside message
-                } else if let Some(match_index) =
-                    template::HEADERS.iter().position(|h| line.starts_with(*h) && line.ends_with(':'))
-                {
-                    let header = template::HEADERS[match_index];
-                    let Some(captures) = template::RE_ID.captures(line[header.len()..].trim()) else {
-                        bail!("row {} expect message header and id", row_number);
-                    };
-                    // unwrap#1: an always capturing group, unwrap#2: \d+ nearly always parse
-                    current_message.id = captures.get(1).unwrap().as_str().parse().unwrap();
-                    if let Some(capture) = captures.get(2) {
-                        // unwrap: \d+ nearly always parse
-                        current_message.parent_id = capture.as_str().parse().unwrap();
-                    }
-                    match match_index {
-                        0 => {}, // same as default value
-                        1 => current_message.kind = MessageKind::User{ content: String::new() },
-                        2 => current_message.kind = MessageKind::Assistant {
-                            content: String::new(),
-                            reasoning_content: None,
-                            response_metadata: HashMap::new(),
-                        },
-                        3 => current_message.kind = MessageKind::ToolCall {
-                            id: String::new(),
-                            name: String::new(),
-                            parameters: String::new(),
-                            response_metadata: HashMap::new(),
-                        },
-                        4 => current_message.kind = MessageKind::ToolResult {
-                            id: String::new(),
-                            content: String::new(),
-                            execution_metadata: HashMap::new(),
-                        },
-                        _ => unreachable!("match_index"),
-                    }
-                    state = State::AfterMessageHeader;
-                } else {
-                    bail!("row {} expect message header", row_number);
-                }
-            },
-            State::AfterMessageHeader => {
-                match line.trim() {
-                    template::CONTENT => state = State::InContent{ reasoning: false },
-                    template::REASONING_CONTENT if matches!(current_message.kind, MessageKind::Assistant{..}) => state = State::InContent{ reasoning: true },
-                    template::METADATA => state = State::InMetadata,
-                    _ => bail!("row {} unexpected format after message header", row_number),
-                }
-            },
-            State::InContent{ reasoning } => {
-                if line == template::CONTENT && reasoning {
-                    state = State::InContent { reasoning: false };
-                } else if line == template::REASONING_CONTENT && !reasoning && matches!(current_message.kind, MessageKind::Assistant{..}) {
-                    state = State::InContent { reasoning: true };
-                } else if line == template::METADATA {
-                    state = State::InMetadata;
-                } else if reasoning {
-                    let MessageKind::Assistant{ reasoning_content, .. } = &mut current_message.kind else {
-                        unreachable!("non assistant in reasoning");
-                    };
-                    if let Some(reasoning_content) = reasoning_content {
-                        reasoning_content.push_str(line);
-                        reasoning_content.push('\n');
-                    } else {
-                        let mut b = line.to_string();
-                        b.push('\n');
-                        *reasoning_content = Some(b);
-                    }
-                } else /* not reasoning normal content */ {
-                    match &mut current_message.kind {
-                        MessageKind::System{ content }
-                        | MessageKind::User{ content }
-                        | MessageKind::Assistant{ content, .. }
-                        | MessageKind::ToolResult{ content, .. } => { content.push_str(line); content.push('\n'); },
-                        MessageKind::ToolCall { name, parameters, .. } => {
-                            let Some(left_paren_index) = line.find('(') else {
-                                bail!("row {} function call content unexpected format", row_number);
-                            };
-                            if !line.ends_with(')') {
-                                bail!("row {} function call content unexpected format (2)", row_number);
-                            }
-                            *name = line[..left_paren_index].to_string();
-                            *parameters = line[left_paren_index + 1..line.len() - 1].to_string();
-                        },
-                    }
-                }
-            },
-            State::InMetadata => {
-                for mut segment in line.split(',') {
-                    segment = segment.trim();
-                    if let Some(value) = segment.strip_prefix("time:") {
-                        current_message.create_time = value.trim().parse().with_context(|| format!("row {} date parse", row_number))?;
-                    } else {
-                        match &mut current_message.kind {
-                            MessageKind::System{..} | MessageKind::User{..} => {
-                                bail!("row {} unexpected metadata {}", row_number, segment);
-                            },
-                            MessageKind::Assistant{ response_metadata, .. } => {
-                                if let Some(value) = segment.strip_prefix("complete-time:") {
-                                    response_metadata.insert("complete-time".to_string(), value.trim().to_string());
-                                } else if let Some(value) = segment.strip_prefix("usage:") {
-                                    response_metadata.insert("usage".to_string(), value.trim().to_string());
-                                } else if let Some(value) = segment.strip_prefix("model:") {
-                                    response_metadata.insert("model".to_string(), value.trim().to_string());
-                                } else {
-                                    bail!("row {} assistant message unknown metadata {}", row_number, segment);
-                                }
-                            },
-                            MessageKind::ToolCall{ id, response_metadata, .. } => {
-                                if let Some(value) = segment.strip_prefix("id:") {
-                                    *id = value.trim().to_string();
-                                } else if let Some(value) = segment.strip_prefix("complete-time:") {
-                                    response_metadata.insert("complete-time".to_string(), value.trim().to_string());
-                                } else if let Some(value) = segment.strip_prefix("usage:") {
-                                    response_metadata.insert("usage".to_string(), value.trim().to_string());
-                                } else if let Some(value) = segment.strip_prefix("model:") {
-                                    response_metadata.insert("model".to_string(), value.trim().to_string());
-                                } else {
-                                    bail!("row {} tool-call message unknown metadata {}", row_number, segment);
-                                }
-                            },
-                            MessageKind::ToolResult{ id, .. } => {
-                                if let Some(value) = segment.strip_prefix("id:") {
-                                    *id = value.trim().to_string();
-                                } else {
-                                    bail!("row {} tool-result message unknown metadata {}", row_number, segment);
-                                }
-                            },
-                        }
-                    }
-                }
-                match &mut current_message.kind {
-                    MessageKind::ToolCall{..} => {},
-                    MessageKind::System{ content }
-                    | MessageKind::User{ content }
-                    | MessageKind::ToolResult{ content, .. } => { *content = content.trim().to_string() },
-                    MessageKind::Assistant{ content, reasoning_content, .. } => {
-                        *content = content.trim().to_string();
-                        if let Some(reasoning_content) = reasoning_content {
-                            *reasoning_content = reasoning_content.trim().to_string();
-                        }
+    let Node::String(session_name) = document.shift_remove("name")
+        .unwrap_or_else(|| Node::String("session name".to_string())) else
+    {
+        bail!("session name not string?");
+    };
+    let mut session = Session{
+        name: session_name,
+        messages: Vec::new(),
+    };
+
+    for (key, value) in document {
+        let Node::String(key) = key else {
+            bail!("oh very cool non-plain mapping key");
+        };
+        if matches!(key.as_str(), "create-time") {
+            continue;
+        }
+        let Some(message_id) = key.strip_prefix("message-") else {
+            bail!("unknown top level property {}", key);
+        };
+        let message_id: usize = message_id.parse()
+            .with_context(|| format!("failed to parse message id in {}", key))?;
+        let Node::Mapping(mut message_node) = value else {
+            bail!("message#{}: message element not mapping?", message_id);
+        };
+
+        let Node::Number(parent_id) = message_node.swap_remove("parent-id").unwrap_or(0.into()) else {
+            bail!("message#{}: parent-id not number", message_id);
+        };
+        let Some(parent_id) = parent_id.as_u64().map(|v| v as usize) else {
+            bail!("message#{}: parent-id not positive integer?", message_id);
+        };
+
+        let Some(Node::String(role)) = message_node.swap_remove("role") else {
+            bail!("message#{}: role missing or is not string", message_id);
+        };
+        let role = match role.as_str() {
+            "system" => Role::System,
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            other => bail!("message#{}: unknown role {}", message_id, other),
+        };
+
+        let mut message = Message{
+            id: message_id,
+            parent_id,
+            role,
+            content: Vec::new(),
+            response_metadata: Vec::new(),
+        };
+        let Some(content_node) = message_node.swap_remove("content") else {
+            bail!("message#{}: missing content", message_id);
+        };
+        if let Node::String(value) = content_node {
+            message.content.push(ContentBlock::Content(TextBlock{ value }));
+        } else if let Node::Sequence(content_nodes) = content_node {
+            for (content_index, content_node) in content_nodes.into_iter().enumerate() {
+                let Node::Mapping(mut content_node) = content_node else {
+                    bail!("message#{}: content#{}: not mapping?", message_id, content_index);
+                };
+                let Some(Node::String(kind)) = content_node.swap_remove("kind") else {
+                    bail!("message#{}: content#{}: kind missing or is not string", message_id, content_index);
+                };
+                let content_block;
+                match kind.as_str() {
+                    "content" => {
+                        let Some(Node::String(value)) = content_node.swap_remove("value") else {
+                            bail!("message#{}: content#{}: value missing or is not string", message_id, content_index);
+                        };
+                        content_block = ContentBlock::Content(TextBlock{ value });
                     },
+                    "reasoning" => {
+                        let Some(Node::String(value)) = content_node.swap_remove("value") else {
+                            bail!("message#{}: content#{}: value missing or is not string", message_id, content_index);
+                        };
+                        content_block = ContentBlock::Reasoning(TextBlock{ value });
+                    },
+                    "tool-call" => {
+                        let Some(Node::String(tool_call_id)) = content_node.swap_remove("id") else {
+                            bail!("message#{}: content#{}: id missing or is not string", message_id, content_index);
+                        };
+                        let Some(Node::String(tool_name)) = content_node.swap_remove("name") else {
+                            bail!("message#{}: content#{}: name missing or is not string", message_id, content_index);
+                        };
+                        let Some(Node::String(arguments)) = content_node.swap_remove("arguments") else {
+                            bail!("message#{}: content#{}: arguments missing or is not string", message_id, content_index);
+                        };
+                        content_block = ContentBlock::ToolCall(ToolCallBlock{ id: tool_call_id, name: tool_name, arguments });
+                    },
+                    "tool-result" => {
+                        let Some(Node::String(tool_call_id)) = content_node.swap_remove("id") else {
+                            bail!("message#{}: content#{}: id missing or is not string", message_id, content_index);
+                        };
+                        let Some(Node::String(value)) = content_node.swap_remove("value") else {
+                            bail!("message#{}: content#{}: value missing or is not string", message_id, content_index);
+                        };
+                        let metadata = Vec::new();
+                        // no need to read existing execution metadata
+                        content_node.swap_remove("metadata");
+                        content_block = ContentBlock::ToolResult(ToolResultBlock{ id: tool_call_id, value, metadata });
+                    },
+                    other => bail!("message#{}: content#{}: unknown kind {}", message_id, content_index, other),
                 }
-                messages.push(current_message);
-                current_message = Message{ id: 0, parent_id: 0, create_time: Utc::now(), kind: MessageKind::System { content: String::new() } };
-                state = State::Initial;
+                if !content_node.is_empty() {
+                    bail!("message#{}: content#{}: unknown properties {:?}", message_id, content_index, content_node.keys().collect::<Vec<_>>());
+                }
+                message.content.push(content_block);
             }
+        } else {
+            bail!("message#{}: content is not string or sequence?", message_id);
         }
+        // no need to read existing response metadata
+        message_node.swap_remove("response");
+        if !message_node.is_empty() {
+            bail!("message#{}: unknown properties {:?}", message_id, message_node.keys().collect::<Vec<_>>());
+        }
+        session.messages.push(message);
     }
-    Ok(messages)
+
+    Ok(session)
 }
 
-fn format_session(session: &[Message]) -> Result<String> {
+// only append seems good
+fn format_message(message: Message) -> Result<String> {
+    use serde_yaml_ng::{Value as Node, Mapping};
 
-    let mut b = String::new();
-    for message in session {
-        b.push_str(match message.kind {
-            MessageKind::System{..} => template::SYSTEM,
-            MessageKind::User{..} => template::USER,
-            MessageKind::Assistant{..} => template::ASSISTANT,
-            MessageKind::ToolCall{..} => template::TOOL_CALL,
-            MessageKind::ToolResult{..} => template::TOOL_RESULT,
-        });
-        write!(b, " #{}", message.id)?;
-        if message.parent_id != 0 {
-            write!(b, "<#{}", message.parent_id)?;
-        }
-        b.push_str(":\n");
-        if let MessageKind::Assistant{ reasoning_content: Some(reasoning_content), .. } = &message.kind {
-            b.push_str(template::REASONING_CONTENT);
-            b.push('\n');
-            b.push_str(reasoning_content);
-            if !b.ends_with('\n') { b.push('\n'); }
-        }
-        match &message.kind {
-            | MessageKind::System{ content }
-            | MessageKind::User{ content }
-            | MessageKind::Assistant{ content, .. }
-            | MessageKind::ToolResult{ content, .. } => {
-                b.push_str(template::CONTENT);
-                b.push('\n');
-                b.push_str(&content);
-                if !b.ends_with('\n') { b.push('\n'); }
-            }
-            MessageKind::ToolCall{ name, parameters, .. } => {
-                b.push_str(template::CONTENT);
-                b.push('\n');
-                b.push_str(name);
-                b.push('(');
-                b.push_str(parameters);
-                b.push_str(")\n");
-            },
-        }
-        b.push_str(template::METADATA);
-        b.push('\n');
-        // why is this specific format the impl debug
-        write!(b, "time: {:?}", message.create_time)?;
-        if let MessageKind::ToolCall { id, .. } | MessageKind::ToolResult { id, .. } = &message.kind {
-            write!(b, ", id: {}", id)?;
-        }
-        if let
-            | MessageKind::Assistant { response_metadata: metadata, .. }
-            | MessageKind::ToolCall { response_metadata: metadata, .. }
-            | MessageKind::ToolResult { execution_metadata: metadata, .. } = &message.kind
-        {
-            for (key, value) in metadata.iter().collect::<BinaryHeap<_>>().into_sorted_vec() {
-                write!(b, ", {}: {}", key, value)?;
-            }
-        }
-        b.push_str("\n\n");
+    let mut message = message;
+    let mut message_node = Mapping::new();
+    if message.parent_id != 0 {
+        message_node.insert(Node::String("parent-id".to_string()), Node::Number(message.parent_id.into()));
     }
-    Ok(b)
+    message_node.insert(Node::String("role".to_string()), Node::String(match message.role {
+        Role::System => "system",
+        Role::User => "user",
+        Role::Assistant => "assistant",
+    }.to_string()));
+    if message.content.len() == 1 && matches!(message.content[0], ContentBlock::Content(_)) {
+        let ContentBlock::Content(TextBlock{ value }) = &mut message.content[0] else { unreachable!() };
+        message_node.insert(Node::String("content".to_string()), Node::String(std::mem::take(value)));
+    } else {
+        let mut content_nodes = Vec::new();
+        for content_block in message.content {
+            let mut content_node = Mapping::new();
+            match content_block {
+                ContentBlock::Content(TextBlock { value }) => {
+                    content_node.insert(Node::String("kind".to_string()), Node::String("content".to_string()));
+                    content_node.insert(Node::String("value".to_string()), Node::String(value));
+                },
+                ContentBlock::Reasoning(TextBlock { value }) => {
+                    content_node.insert(Node::String("kind".to_string()), Node::String("reasoning".to_string()));
+                    content_node.insert(Node::String("value".to_string()), Node::String(value));
+                },
+                ContentBlock::ToolCall(ToolCallBlock { id, name, arguments }) => {
+                    content_node.insert(Node::String("kind".to_string()), Node::String("tool-call".to_string()));
+                    content_node.insert(Node::String("id".to_string()), Node::String(id));
+                    content_node.insert(Node::String("name".to_string()), Node::String(name));
+                    content_node.insert(Node::String("arguments".to_string()), Node::String(arguments));
+                },
+                ContentBlock::ToolResult(ToolResultBlock { id, value, metadata }) => {
+                    content_node.insert(Node::String("kind".to_string()), Node::String("tool-result".to_string()));
+                    content_node.insert(Node::String("id".to_string()), Node::String(id));
+                    content_node.insert(Node::String("value".to_string()), Node::String(value));
+                    let mut metadata_node = Mapping::new();
+                    for (key, value) in metadata {
+                        metadata_node.insert(Node::String(key), value);
+                    }
+                    if !metadata_node.is_empty() {
+                        content_node.insert(Node::String("metadata".to_string()), Node::Mapping(metadata_node));
+                    }
+                },
+            }
+            content_nodes.push(Node::Mapping(content_node));
+        }
+        message_node.insert(Node::String("content".to_string()), Node::Sequence(content_nodes));
+    }
+    if !message.response_metadata.is_empty() {
+        let mut response_metadata_node = Mapping::new();
+        for (key, value) in message.response_metadata {
+            response_metadata_node.insert(Node::String(key), value);
+        }
+        message_node.insert(Node::String("response".to_string()), Node::Mapping(response_metadata_node));
+    }
+
+    let mut new_document = Mapping::new();
+    new_document.insert(Node::String(format!("message-{}", message.id)), Node::Mapping(message_node));
+    Ok(serde_yaml_ng::to_string(&Node::Mapping(new_document))?)
 }
 
 #[tokio::main]
@@ -310,9 +265,69 @@ async fn main() -> Result<()> {
         bail!("env var HUAN_API_KEY missing");
     };
     
-    let session_data = fs::read_to_string("example2.txt")?;
-    let mut session = read_session(&session_data)?;
+    let text = fs::read_to_string("example-input.yml")?;
+    let session = read_session(&text)?;
+    println!("session name {}", session.name);
     println!("{:?}", session);
+
+    // let formatted = format_session(session)?;
+    // fs::write("example-output.yml", formatted)?;
+
+    for message in session.messages {
+        println!("{}", format_message(message)?);
+    }
+
+    // let messages = session.iter().map(|m| match &m.kind {
+    //     MessageKind::System{ content } => json!({ "role": "system", "content": content }),
+    //     MessageKind::User{ content } => json!({ "role": "user", "content": content }),
+    //     MessageKind::Assistant{ content, .. } => json!({ "role": "user", "content": content }),
+    //     MessageKind::ToolResult{ id, content, .. } => json!({ "role": "tool", "tool_call_id": id, "content": content }),
+    //     MessageKind::ToolCall{ id, name, parameters, .. } => json!({
+    //         "role": "assistant",
+    //         // you are ok with this null?
+    //         "content": null,
+    //         "tool_calls": [
+    //             {
+    //                 "id": id,
+    //                 "type": "function",
+    //                 "function": {
+    //                     "name": name,
+    //                     "arguments": parameters,
+    //                 },
+    //             }
+    //         ],
+    //     })
+    // }).collect::<Vec<_>>();
+    // println!("{:?}", messages);
+
+    // let tools = json!([
+    //     {
+    //         "type": "function",
+    //         "function": {
+    //             "name": "read-file",
+    //             "description": "Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.",
+    //             "parameters": {
+    //                 "type": "object",
+    //                 "properties": {
+    //                     "pathname": {
+    //                         "type": "string",
+    //                         "description": "The path of the file to read.",
+    //                     },
+    //                     "offset": {
+    //                         "type": "number",
+    //                         "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
+    //                     },
+    //                     "limit": {
+    //                         "type": "number",
+    //                         "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
+    //                     }
+    //                 },
+    //                 "required": ["pathname"],
+    //             },
+    //         },
+    //     },
+    // ]);
+    // println!("{:?}", tools);
 
     // let client = reqwest::Client::builder().build()?;
     // let request = client
@@ -322,185 +337,177 @@ async fn main() -> Result<()> {
     //     .body(json!({
     //         "model": "deepseek-flash",
     //         "messages": messages,
-    //         "stream": true
-    //     }).to_string())
-    //     .build()?;
+    //         "tools": tools,
+    //         "thinking": { "type": "disabled" },
+    //         "stream": true,
+    //         "max_tokens": 1024,
+    //     }).to_string()).build()?;
     // let response = client.execute(request).await?;
-    // println!("status {} headers {:?}", response.status(), response.headers());
-    // let response_text = response.text().await?;
-    // println!("response {}", response_text);
-    // seems need use response.bytes_stream
+
+    // let status = response.status();
+    // if !status.is_success() {
+    //     let body = response.text().await?;
+    //     bail!("response error {}: {}", status, body);
+    // }
+    // for (name, value) in response.headers() {
+    //     println!("header {}: {:?}", name, value);
+    // }
+
+    // let mut stream = response.bytes_stream();
+    // while let Some(chunk) = stream.next().await {
+    //     let chunk = chunk?;
+    //     let chunk = String::from_utf8_lossy(&chunk);
+    //     println!("chunk: {}", chunk);
+    // }
 
     Ok(())
 }
 
 #[test]
 fn test_read() -> Result<()> {
-    let session = read_session(concat!(
-        "🚀SYSTEM #1:\n",
-        "💬CONTENT:\n",
-        "You are a coding agent.\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-22T15:13:00Z\n\n",
-        "🙋USER #2<#1:\n",
-        "💬CONTENT:\n",
-        "summary source code file src/main.rs\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-22T15:13:01Z\n\n",
-        "🤖TOOL-CALL #3<#2:\n",
-        "💬CONTENT:\n",
-        "read_file({ pathname: \"src/main.rs\" })\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:29:00Z, id: toolcallid, usage: 100/100/100, model: deepseek-flash\n\n",
-        "🕵🏻TOOL-RESULT #3<#2:\n",
-        "💬CONTENT:\n",
-        "use std::fs;\n",
-        "...\n",
-        "struct Message...\n",
-        "fn read_session...\n",
-        "fn test_read...\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:30:00Z, id: toolcallid\n\n",
-        "🤖ASSISTANT #5<#42:\n",
-        "💭REASONING-CONTENT:\n",
-        "why do you need reasoning when reading a small file?\n",
-        "💬CONTENT:\n",
-        "this file contains...\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:29:02Z, complete-time: 30, usage:42/325/799, model: deepseek-flasher\n\n",
-    ))?;
-    assert_eq!(session.len(), 5);
-    assert_eq!(session[0].id, 1);
-    assert_eq!(session[0].parent_id, 0);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 0).unwrap());
-    assert_matches!(&session[0].kind, MessageKind::System{ content } if content == "You are a coding agent.");
-    assert_eq!(session[1].id, 2);
-    assert_eq!(session[1].parent_id, 1);
-    assert_eq!(session[1].create_time, Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 1).unwrap());
-    assert_matches!(&session[1].kind, MessageKind::User{ content } if content == "summary source code file src/main.rs");
-    assert_eq!(session[2].id, 3);
-    assert_eq!(session[2].parent_id, 2);
-    assert_eq!(session[2].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 0).unwrap());
-    let MessageKind::ToolCall{ id, name, parameters, response_metadata } = &session[2].kind else {
-        panic!("session[2].kind not toolcall");
-    };
-    assert_eq!(id, "toolcallid");
-    assert_eq!(name, "read_file");
-    assert_eq!(parameters, "{ pathname: \"src/main.rs\" }");
-    assert_eq!(response_metadata.len(), 2);
-    assert_eq!(response_metadata["usage"], "100/100/100");
-    assert_eq!(response_metadata["model"], "deepseek-flash");
-    // does not validate id
-    assert_eq!(session[3].id, 3);
-    assert_eq!(session[3].parent_id, 2);
-    assert_eq!(session[3].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap());
-    let MessageKind::ToolResult{ id, content, execution_metadata } = &session[3].kind else {
-        panic!("session[3].kind not toolresult");
-    };
-    assert_eq!(id, "toolcallid");
-    assert_eq!(content, "use std::fs;\n...\nstruct Message...\nfn read_session...\nfn test_read...");
-    assert_eq!(execution_metadata.len(), 0);
-    assert_eq!(session[4].id, 5);
-    // does not validate id
-    assert_eq!(session[4].parent_id, 42);
-    assert_eq!(session[4].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 2).unwrap());
-    let MessageKind::Assistant{ reasoning_content, content, response_metadata } = &session[4].kind else {
-        panic!("session[4].kind not assistant");
-    };
-    assert_eq!(reasoning_content.as_deref(), Some("why do you need reasoning when reading a small file?"));
-    assert_eq!(content, "this file contains...");
-    assert_eq!(response_metadata.len(), 3);
-    assert_eq!(response_metadata["complete-time"], "30");
-    assert_eq!(response_metadata["usage"], "42/325/799");
-    assert_eq!(response_metadata["model"], "deepseek-flasher");
-
-    Ok(())
-}
-
-#[test]
-fn test_read_no_system() -> Result<()> {
+    use std::assert_matches;
 
     let session = read_session(concat!(
-        "🙋USER #1:\n",
-        "💬CONTENT:\n",
-        "hello\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-25T07:57:00Z",
+        "name: session name\n",
+        "create-time: 2026-10-22T07:59:00Z\n",
+        "\n",
+        "message-1:\n",
+        "  role: system\n",
+        "  content: You are a coding agent\n",
+        "\n",
+        "message-2:\n",
+        "  parent-id: 1\n",
+        "  role: user\n",
+        "  content:\n",
+        "    summary source code file src/main.rs\n",
+        "\n",
+        "message-3:\n",
+        "  parent-id: 2\n",
+        "  role: assistant\n",
+        "  content:\n",
+        "  - kind: reasoning\n",
+        "    value: reasoning content\n",
+        "  - kind: content\n",
+        "    value: normal content\n",
+        "  - kind: tool-call\n",
+        "    id: tool-call-id-1\n",
+        "    name: read-file\n",
+        "    # although you can inline json inside yaml line, there is no need to do that\n",
+        "    arguments: '{ pathname: \"src/main.rs\" }'\n",
+        "  - kind: tool-call\n",
+        "    # even chat completion api support parallel tool calls if you didn't notice\n",
+        "    id: tool-call-id-2\n",
+        "    name: read-file\n",
+        "    arguments: '{ pathname: \"src/session.rs\" }'\n",
+        "  # store some of the response information in case they are useful\n",
+        "  response:\n",
+        "    create-time: TODO\n",
+        "    status-code: 200\n",
+        "    header-x-ds-trace-id: x-ds-trace-id1\n",
+        "    header-date: Sun, 25 Oct 2026 08:47:50 GMT\n",
+        "    header-eo-log-uuid: eo-log-uuid1\n",
+        "    model: deepseek-flasher\n",
+        "    complete-time: 2026-10-23T06:29:10Z\n",
+        "    token-usage: 42/325/799\n",
+        "\n",
+        "message-4:\n",
+        "  parent-id: 3\n",
+        "  role: user\n",
+        "  # messages api support returning multiple tool results in one user message\n",
+        "  # but chat completion api role=tool message can only include one tool call id,\n",
+        "  # to avoid deciding how to map this kind of api to that kind of api for this scenario,\n",
+        "  # allow multiple tool-result content blocks here but don't allow other kinds of content blocks\n",
+        "  content:\n",
+        "  - kind: tool-result\n",
+        "    id: tool-call-id-1\n",
+        "    value: |\n",
+        "      use std::fs...\n",
+        "      ...\n",
+        "      struct Message...\n",
+        "\n",
+        "      fn read_session...\n",
+        "      fn test_read...\n",
+        "    metadata:\n",
+        "      create-time: TODO\n",
+        "      complete-time: etc.1\n",
+        "      file-size: etc.2\n",
+        "      return-size: etc.3\n",
+        "      git-version: etc.4\n",
+        "  - kind: tool-result\n",
+        "    id: tool-call-id-2\n",
+        "    value: |\n",
+        "      use std::collections::{HashMap, BinaryHeap};...\n",
+        "      ...\n",
+        "\n",
+        "message-5:\n",
+        "  parent-id: 4\n",
+        "  role: assistant\n",
+        "  content:\n",
+        "    this file contains...\n",
+        "  response:\n",
+        "    create-time: TODO\n",
+        "    status-code: 200\n",
+        "    token-usage: 100/200/300\n",
     ))?;
-    assert_eq!(session.len(), 1);
-    assert_eq!(session[0].id, 1);
-    assert_eq!(session[0].parent_id, 0);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
-    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "hello");
-
-    // does not validate first message shouldn't have parent id
-    let session = read_session(concat!(
-        "🙋USER #1<#33554432:\n",
-        "💬CONTENT:\n",
-        "hello\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-25T07:57:00Z",
-    ))?;
-    assert_eq!(session.len(), 1);
-    assert_eq!(session[0].id, 1);
-    assert_eq!(session[0].parent_id, 33554432);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
-    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "hello");
+    assert_eq!(session.name, "session name");
+    assert_eq!(session.messages.len(), 5);
+    assert_eq!(session.messages[0].id, 1);
+    assert_eq!(session.messages[0].parent_id, 0);
+    assert_matches!(session.messages[0].role, Role::System);
+    assert_eq!(session.messages[0].response_metadata.len(), 0);
+    assert_eq!(session.messages[0].content.len(), 1);
+    assert_matches!(&session.messages[0].content[0], ContentBlock::Content(TextBlock{ value }) if value == "You are a coding agent");
+    assert_eq!(session.messages[1].id, 2);
+    assert_eq!(session.messages[1].parent_id, 1);
+    assert_matches!(session.messages[1].role, Role::User);
+    assert_eq!(session.messages[1].response_metadata.len(), 0);
+    assert_eq!(session.messages[1].content.len(), 1);
+    assert_matches!(&session.messages[1].content[0], ContentBlock::Content(TextBlock{ value }) if value == "summary source code file src/main.rs");
+    assert_eq!(session.messages[2].id, 3);
+    assert_eq!(session.messages[2].parent_id, 2);
+    assert_matches!(session.messages[2].role, Role::Assistant);
+    assert_eq!(session.messages[2].content.len(), 4);
+    assert_matches!(&session.messages[2].content[0], ContentBlock::Reasoning(TextBlock{ value }) if value == "reasoning content");
+    assert_matches!(&session.messages[2].content[1], ContentBlock::Content(TextBlock{ value }) if value == "normal content");
+    let ContentBlock::ToolCall(ToolCallBlock{ id, name, arguments }) = &session.messages[2].content[2] else {
+        panic!("session.messages[2].content[2] not toolcall");
+    };
+    assert_eq!(id, "tool-call-id-1");
+    assert_eq!(name, "read-file");
+    assert_eq!(arguments, "{ pathname: \"src/main.rs\" }");
+    let ContentBlock::ToolCall(ToolCallBlock{ id, name, arguments }) = &session.messages[2].content[3] else {
+        panic!("session.messages[2].content[3] not toolcall");
+    };
+    assert_eq!(id, "tool-call-id-2");
+    assert_eq!(name, "read-file");
+    assert_eq!(arguments, "{ pathname: \"src/session.rs\" }");
+    // read don't read response metadata
+    assert_eq!(session.messages[2].response_metadata.len(), 0);
+    // assert_eq!(session.messages[2].response_metadata[0].0, "create-time");
+    // assert_matches!(&session.messages[2].response_metadata[0].1, serde_yaml_ng::Value::String(value) if value == "TODO");
     
-    // does not validate first message is system or user
-    let session = read_session(concat!(
-        "🕵🏻TOOL-RESULT #3<#2:\n",
-        "💬CONTENT:\n",
-        "use std::fs;\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:30:00Z, id: toolcallid\n\n",
-    ))?;
-    assert_eq!(session[0].id, 3);
-    assert_eq!(session[0].parent_id, 2);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap());
-    let MessageKind::ToolResult{ id, content, execution_metadata } = &session[0].kind else {
-        panic!("session[0].kind not toolresult");
+    assert_eq!(session.messages[3].id, 4);
+    assert_eq!(session.messages[3].parent_id, 3);
+    assert_matches!(session.messages[3].role, Role::User);
+    assert_eq!(session.messages[3].content.len(), 2);
+    let ContentBlock::ToolResult(ToolResultBlock{ id, value, metadata }) = &session.messages[3].content[0] else {
+        panic!("session.messages[3].content[0] not toolcall");
     };
-    assert_eq!(id, "toolcallid");
-    assert_eq!(content, "use std::fs;");
-    assert_eq!(execution_metadata.len(), 0);
+    assert_eq!(id, "tool-call-id-1");
+    assert_eq!(value, "use std::fs...\n...\nstruct Message...\n\nfn read_session...\nfn test_read...\n");
+    assert_eq!(metadata.len(), 0);
+    let ContentBlock::ToolResult(ToolResultBlock{ id, value, metadata }) = &session.messages[3].content[1] else {
+        panic!("session.messages[3].content[1] not toolcall");
+    };
+    assert_eq!(id, "tool-call-id-2");
+    assert_eq!(value, "use std::collections::{HashMap, BinaryHeap};...\n...\n");
+    assert_eq!(metadata.len(), 0);
 
-    Ok(())
-}
-
-#[test]
-fn test_read_escape() -> Result<()> {
-
-    // does not have escape mechanism
-    // oh, cannot transition to in-content state from in-content state?
-    let session = read_session(concat!(
-        "🙋USER #1:\n",
-        "💬CONTENT:\n",
-        "💬CONTENT:\n",
-        "💬CONTENT:\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-25T07:57:00Z",
-    ))?;
-    assert_eq!(session.len(), 1);
-    assert_eq!(session[0].id, 1);
-    assert_eq!(session[0].parent_id, 0);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 7, 57, 0).unwrap());
-    assert_matches!(&session[0].kind, MessageKind::User{ content } if content == "💬CONTENT:\n💬CONTENT:");
-
-    let session = read_session(concat!(
-        "🤖ASSISTANT #1:\n",
-        "💬CONTENT:\n",
-        "💭REASONING-CONTENT:\n",
-        "💬CONTENT:\n",
-        "💭REASONING-CONTENT:\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-25T08:04:00Z",
-    ))?;
-    assert_eq!(session.len(), 1);
-    assert_eq!(session[0].id, 1);
-    assert_eq!(session[0].parent_id, 0);
-    assert_eq!(session[0].create_time, Utc.with_ymd_and_hms(2026, 10, 25, 8, 4, 0).unwrap());
-    assert_matches!(&session[0].kind, MessageKind::Assistant{ content, reasoning_content, .. } if content == "" && reasoning_content.is_none());
+    assert_eq!(session.messages[4].id, 5);
+    assert_eq!(session.messages[4].parent_id, 4);
+    assert_matches!(session.messages[4].role, Role::Assistant);
+    assert_eq!(session.messages[4].content.len(), 1);
+    assert_matches!(&session.messages[4].content[0], ContentBlock::Content(TextBlock{ value }) if value == "this file contains...");
 
     Ok(())
 }
@@ -508,95 +515,135 @@ fn test_read_escape() -> Result<()> {
 #[test]
 fn test_write() -> Result<()> {
 
-    assert_eq!(format_session(&[
-        Message {
-            id: 1,
-            parent_id: 0,
-            create_time: Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 0).unwrap(),
-            kind: MessageKind::System { content: "You are a coding agent.".to_string() },
-        },
-        Message {
-            id: 2,
-            parent_id: 1,
-            create_time: Utc.with_ymd_and_hms(2026, 10, 22, 15, 13, 1).unwrap(),
-            kind: MessageKind::User { content: "summary source code file src/main.rs".to_string() },
-        },
-        Message {
-            id: 3,
-            parent_id: 2,
-            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 0).unwrap(),
-            kind: MessageKind::ToolCall {
-                id: "tool-call-id".to_string(),
-                name: "read_file".to_string(),
-                parameters: "{ pathname: \"src/main.rs\" }".to_string(),
-                response_metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("model".to_string(), "deepseek-flash".to_string());
-                    map.insert("usage".to_string(), "100/100/100".to_string());
-                    map
-                },
-            },
-        },
-        Message {
-            id: 3,
-            parent_id: 2,
-            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 30, 0).unwrap(),
-            kind: MessageKind::ToolResult {
-                // does not validate tool call id
-                id: "not-tool-call-id".to_string(),
-                content: "use std::fs;\n...\nstruct Message...\nfn read_session...\nfn test_read...".to_string(),
-                execution_metadata: HashMap::new(),
-            },
-        },
-        Message {
-            id: 5,
-            parent_id: 42,
-            create_time: Utc.with_ymd_and_hms(2026, 10, 23, 6, 29, 2).unwrap(),
-            kind: MessageKind::Assistant {
-                content: "this file contains...".to_string(),
-                reasoning_content: Some("why do you need reasoning when reading a small file?".to_string()),
-                response_metadata: {
-                    let mut map = HashMap::new();
-                    map.insert("complete-time".to_string(), "30".to_string());
-                    map.insert("model".to_string(), "deepseek-flasher".to_string());
-                    map.insert("usage".to_string(), "42/325/799".to_string());
-                    map.insert("system-fingerprint".to_string(), "system-fingerprint".to_string());
-                    map
-                },
-            },
-        },
-    ])?, concat!(
-        "🚀SYSTEM #1:\n",
-        "💬CONTENT:\n",
-        "You are a coding agent.\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-22T15:13:00Z\n\n",
-        "🙋USER #2<#1:\n",
-        "💬CONTENT:\n",
-        "summary source code file src/main.rs\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-22T15:13:01Z\n\n",
-        "🤖TOOL-CALL #3<#2:\n",
-        "💬CONTENT:\n",
-        "read_file({ pathname: \"src/main.rs\" })\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:29:00Z, id: tool-call-id, model: deepseek-flash, usage: 100/100/100\n\n",
-        "🕵🏻TOOL-RESULT #3<#2:\n",
-        "💬CONTENT:\n",
-        "use std::fs;\n",
-        "...\n",
-        "struct Message...\n",
-        "fn read_session...\n",
-        "fn test_read...\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:30:00Z, id: not-tool-call-id\n\n",
-        "🤖ASSISTANT #5<#42:\n",
-        "💭REASONING-CONTENT:\n",
-        "why do you need reasoning when reading a small file?\n",
-        "💬CONTENT:\n",
-        "this file contains...\n",
-        "🔗METADATA:\n",
-        "time: 2026-10-23T06:29:02Z, complete-time: 30, model: deepseek-flasher, system-fingerprint: system-fingerprint, usage: 42/325/799\n\n",
+    assert_eq!(format_message(Message {
+        id: 1,
+        parent_id: 0,
+        role: Role::System,
+        content: vec![ContentBlock::Content(TextBlock{ value: "You are a coding agent.".to_string() })],
+        response_metadata: Vec::new(),
+    })?, "message-1:\n  role: system\n  content: You are a coding agent.\n");
+
+    assert_eq!(format_message(Message {
+        id: 2,
+        parent_id: 1,
+        role: Role::User,
+        content: vec![ContentBlock::Content(TextBlock{ value: "summary source code file src/main.rs.".to_string() })],
+        response_metadata: Vec::new(),
+    })?, "message-2:\n  parent-id: 1\n  role: user\n  content: summary source code file src/main.rs.\n");
+
+    assert_eq!(format_message(Message {
+        id: 3,
+        parent_id: 2,
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Reasoning(TextBlock{ value: "why do you enable reasoning for this simple work?".to_string() }),
+            ContentBlock::Content(TextBlock{ value: "let me read the files...".to_string() }),
+            ContentBlock::ToolCall(ToolCallBlock{
+                id: "id1".to_string(),
+                name: "read-file".to_string(),
+                arguments: "{ pathname: \"src/main.rs\" }".to_string(),
+            }),
+            ContentBlock::ToolCall(ToolCallBlock{
+                id: "id2".to_string(),
+                name: "read-file".to_string(),
+                arguments: "{ pathname: \"src/session.rs\" }".to_string(),
+            }),
+        ],
+        response_metadata: [
+            ("create-time", "2026-10-23T06:29:00Z"),
+            ("complete-time", "2026-10-23T06:29:30Z"),
+            ("status-code", "200"),
+            ("header-x-ds-trace-id", "x-ds-trace-id-1"),
+            ("token-usage", "42/325/799"),
+        ].into_iter().map(|(k, v)| (k.to_string(), serde_yaml_ng::Value::String(v.to_string()))).collect(),
+    })?, concat!(
+        "message-3:\n",
+        "  parent-id: 2\n",
+        "  role: assistant\n",
+        "  content:\n",
+        "  - kind: reasoning\n",
+        "    value: why do you enable reasoning for this simple work?\n",
+        "  - kind: content\n",
+        "    value: let me read the files...\n",
+        "  - kind: tool-call\n",
+        "    id: id1\n",
+        "    name: read-file\n",
+        "    arguments: '{ pathname: \"src/main.rs\" }'\n",
+        "  - kind: tool-call\n",
+        "    id: id2\n",
+        "    name: read-file\n",
+        "    arguments: '{ pathname: \"src/session.rs\" }'\n",
+        "  response:\n",
+        "    create-time: 2026-10-23T06:29:00Z\n",
+        "    complete-time: 2026-10-23T06:29:30Z\n",
+        "    status-code: '200'\n",
+        "    header-x-ds-trace-id: x-ds-trace-id-1\n",
+        "    token-usage: 42/325/799\n",
     ));
+
+    assert_eq!(format_message(Message {
+        id: 4,
+        parent_id: 3,
+        role: Role::User,
+        content: vec![
+            ContentBlock::ToolResult(ToolResultBlock{
+                id: "id1".to_string(),
+                value: "use std::fs...".to_string(),
+                metadata: vec![
+                    ("create-time", "2026-10-23T06:29:00Z"),
+                    ("complete-time", "2026-10-23T06:29:30Z"),
+                ].into_iter().map(|(k, v)| (k.to_string(), serde_yaml_ng::Value::String(v.to_string()))).collect(),
+            }),
+            ContentBlock::ToolResult(ToolResultBlock{
+                id: "id2".to_string(),
+                value: "use std::collections...".to_string(),
+                metadata: Vec::new(),
+            }),
+        ],
+        response_metadata: Vec::new(),
+    })?, concat!(
+        "message-4:\n",
+        "  parent-id: 3\n",
+        "  role: user\n",
+        "  content:\n",
+        "  - kind: tool-result\n",
+        "    id: id1\n",
+        "    value: use std::fs...\n",
+        "    metadata:\n",
+        "      create-time: 2026-10-23T06:29:00Z\n",
+        "      complete-time: 2026-10-23T06:29:30Z\n",
+        "  - kind: tool-result\n",
+        "    id: id2\n",
+        "    value: use std::collections...\n",
+    ));
+
+    assert_eq!(format_message(Message {
+        id: 5,
+        parent_id: 42,
+        role: Role::Assistant,
+        content: vec![
+            ContentBlock::Content(TextBlock{ value: "this file contains...\nand this file...".to_string() }),
+        ],
+        response_metadata: [
+            ("create-time", "2026-10-53T06:29:00Z"),
+            ("complete-time", "2026-10-53T06:29:30Z"),
+            ("status-code", "418"),
+            ("token-usage", "42/325/799"),
+        ].into_iter().map(|(k, v)| (k.to_string(), serde_yaml_ng::Value::String(v.to_string()))).collect(),
+    })?, concat!(
+        "message-5:\n",
+        "  parent-id: 42\n",
+        "  role: assistant\n",
+        // what's this |-
+        "  content: |-\n",
+        "    this file contains...\n",
+        "    and this file...\n",
+        "  response:\n",
+        "    create-time: 2026-10-53T06:29:00Z\n",
+        "    complete-time: 2026-10-53T06:29:30Z\n",
+        "    status-code: '418'\n",
+        "    token-usage: 42/325/799\n",
+    ));
+
     Ok(())
 }
