@@ -45,6 +45,9 @@ span#page-count {
     color: #ccc;
     line-height: 28px;
 }
+select#sort-method {
+    margin-left: 8px;
+}
 
 /* summary */
 div#summary-container {
