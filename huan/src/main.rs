@@ -1,5 +1,6 @@
 use std::fs;
 use anyhow::{Context as _, Result, bail};
+use bytes::{BufMut as _, Bytes, BytesMut};
 use chrono::{DateTime, Timelike, Utc};
 use futures_util::StreamExt;
 use serde_json::json;
@@ -16,6 +17,7 @@ enum Role {
 #[derive(Debug)]
 struct TextBlock {
     value: String,
+    // TODO maybe add a name to textblock to render as <name>content</name>
 }
 
 // this content block design come from a/ messages api,
@@ -189,6 +191,9 @@ fn read_session(original_content: &str) -> Result<Session> {
         session.messages.push(message);
     }
 
+    // TODO validate
+    // no duplicate id, parent id exists, tool-call and reasoning only in assistant, user message either no tool-result or all tool-result
+
     Ok(session)
 }
 
@@ -258,6 +263,136 @@ fn format_message(message: Message) -> Result<String> {
     Ok(serde_yaml_ng::to_string(&Node::Mapping(new_document))?)
 }
 
+// html spec (why is this not rfc) https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
+// mdn https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events/Using_server-sent_events#event_stream_format
+// by the way, microsoft branded not active developing but active downloaded package https://www.npmjs.com/package/@microsoft/fetch-event-source
+
+// according to spec
+// - stream = event*
+// - event = (comment | field)* EOL
+// - comment = COLON ANY* EOL
+// - field = field-name (COLON SPACE ANY*)? EOL   # this space don't have star
+// - field-name = ANYEXCEPT*                      # any char except colon, cr and lf
+// - EOL = CR | LF | CR LF
+// - ANY is any utf8 char, ANY* is any utf8 sequence
+
+// - the common practice is split whole response by \n\n, and then split message (event) by \n into fields, but actually
+//   the \n\n comes from field's eol + message's eol, if the final message miss the eol, it is not complete and is not dispatched
+// - a field can have extra space after the colon, but not before, before the colon is always field name
+//   field without colon is regarded all as field name and no field value, what's the usage? emptify last event id and event type?
+// - for web EventSource api, field names allow id, event, data, retry, others are ignored
+//   - id does not allow \0?, or else it is ignored, why specifically related to id?
+//     use in last-event-id, while I don't see any discussion about this in ai apis?
+//   - event is event name use in .addEventListener
+//   - data is data, can have multiple data in one message, they are concat with .join(\n)
+//   - retry is retry time, why do server send this?
+//   - if you have control of server and client side you can have custom field names? not for this scenario
+// - a message with empty data is not dispatched
+// - there is NO guarantee over a message will not be cut in the middle in 2 transmits,
+//   there is NO guarantee over a utf8 multi byte character will not be cut in the middle in 2 transmits,
+//   so you need a byte level parser to parse messages
+
+struct EventStreamParser {
+    buffer: BytesMut,
+    position: usize,
+    current_data: BytesMut,
+}
+impl EventStreamParser {
+    fn new() -> Self {
+        Self {
+            buffer: BytesMut::with_capacity(1024),
+            position: 0,
+            current_data: BytesMut::with_capacity(1024),
+        }
+    }
+
+    fn push(&mut self, bytes: Bytes) {
+        self.buffer.extend_from_slice(&bytes);
+    }
+    // only return event.data as llm apis do not use id and type properties
+    // no expected error yet, still return Result in case needed in future
+    fn pull(&mut self, response_metadata: &mut Vec<(String, serde_yaml_ng::Value)>) -> Result<Option<String>> {
+        loop {
+            // eol begin index and eol end index, same for bare cr and normal lf, +1 for crlf
+            let eol_index = match (
+                self.buffer.iter().skip(self.position).position(|b| *b == b'\r'),
+                self.buffer.iter().skip(self.position).position(|b| *b == b'\n'),
+            ) {
+                // line not completed, wait for more
+                (None, None) => return Ok(None),
+                // cannot decide bare cr if it is exactly end of current buffer, wait for more
+                (Some(cr_index), None) if cr_index == self.buffer.len() - 1 => return Ok(None),
+                // bare cr
+                (Some(cr_index), None) => (cr_index, cr_index),
+                (Some(cr_index), Some(lf_index)) if cr_index + 1 < lf_index => (cr_index, cr_index),
+                // normal lf
+                (None, Some(lf_index)) => (lf_index, lf_index),
+                (Some(cr_index), Some(lf_index)) if cr_index > lf_index => (lf_index, lf_index),
+                // crlf
+                (Some(cr_index), Some(lf_index)) if cr_index + 1 == lf_index => (cr_index, lf_index),
+                // previous conditions have fully covered cr_index and lf_index relationships, but compiler don't know that
+                _ => unreachable!("unexpected cr_index and lf_index relationship"),
+            };
+            // note the previous eol index is relative to self.position
+            let eol_index = (eol_index.0 + self.position, eol_index.1 + self.position);
+
+            if eol_index.0 == self.position { // empty line, end of message
+                if let Some(c) = self.current_data.last() && c == &b'\n' {
+                    // according to spec, trim one ending lf, making data concat effectively join(\n)
+                    self.current_data.truncate(self.current_data.len() - 1);
+                }
+                // discard used buffer
+                self.buffer = self.buffer.split_off(eol_index.1 + 1);
+                self.position = 0;
+                let result_data = self.current_data.split_off(0).to_vec();
+                // according to spec, do not dispatch no data event
+                // // from_utf8_lossy_owned is super new rust 1.99 function
+                return if result_data.is_empty() { Ok(None) } else { Ok(Some(String::from_utf8_lossy_owned(result_data))) };
+            } else {
+                // field without eol
+                let field = &self.buffer[self.position..eol_index.0];
+                self.position = eol_index.1 + 1;
+                let (name, value) = if let Some(colon_index) = field.iter().position(|b| *b == b':') {
+                    // note the result value may be empty
+                    (&field[..colon_index], &field[colon_index + 1..])
+                } else {
+                    if !response_metadata.iter().any(|(k, _)| k == "event-stream-parser-full-name-field") {
+                        response_metadata.push((
+                            "event-stream-parser-full-name-field".to_string(),
+                            serde_yaml_ng::Value::String(format!("you really have this? {:?}", field))));
+                    }
+                    (field, &[] as &[u8]) // you need this as to convert from &[{unknown};0] to &[u8]?
+                };
+                if name.is_empty() {
+                    if !response_metadata.iter().any(|(k, _)| k == "event-stream-parser-comment-field") {
+                        response_metadata.push((
+                            "event-stream-parser-comment-field".to_string(),
+                            serde_yaml_ng::Value::String(format!("you really have comment? {:?}: {:?}", name, value))));
+                    }
+                } else if name == b"data" {
+                    // according to spec, remove one ascii whitespace from beginning of value
+                    let value = if !value.is_empty() && value[0] == b' ' { &value[1..] } else { value };
+                    self.current_data.extend_from_slice(value);
+                    // according to spec, join data lines by single lf regardless of actual eol
+                    self.current_data.put_u8(b'\n');
+                } else {
+                    if !response_metadata.iter().any(|(k, _)| k == "event-stream-parser-non-data-field") {
+                        response_metadata.push((
+                            "event-stream-parser-non-data-field".to_string(),
+                            serde_yaml_ng::Value::String(format!("you really have non data field? {:?}: {:?}", name, value))));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// NOT this https://www.rfc-editor.org/info/rfc6902/
+fn merge_delta(result: &mut serde_json::Value, delta: serde_json::Value) -> Result<()> {
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
 
@@ -265,69 +400,95 @@ async fn main() -> Result<()> {
         bail!("env var HUAN_API_KEY missing");
     };
     
-    let text = fs::read_to_string("example-input.yml")?;
-    let session = read_session(&text)?;
+    let input_text = fs::read_to_string("example-input.yml")?;
+    let session = read_session(&input_text)?;
     println!("session name {}", session.name);
     println!("{:?}", session);
 
-    // let formatted = format_session(session)?;
-    // fs::write("example-output.yml", formatted)?;
-
-    for message in session.messages {
-        println!("{}", format_message(message)?);
+    let mut messages = Vec::new();
+    for message in &session.messages {
+        match message.role {
+            Role::System => {
+                let mut content = String::new();
+                for content_block in &message.content {
+                    let ContentBlock::Content(TextBlock{ value }) = content_block else {
+                        panic!("how do you put non content content in system message?");
+                    };
+                    content.push_str(value);
+                }
+                messages.push(json!({ "role": "system", "content": content }));
+            },
+            Role::User => {
+                let mut content = String::new();
+                for (content_index, content_block) in message.content.iter().enumerate() {
+                    if let ContentBlock::Content(TextBlock{ value }) = content_block {
+                        content.push_str(value);
+                    } else if let ContentBlock::ToolResult(ToolResultBlock { id, value, .. }) = content_block {
+                        messages.push(json!({ "role": "tool", "tool_call_id": id, "content": value }));
+                    } else {
+                        panic!("how do you put reasoning/toolcall content in user message?");
+                    }
+                }
+                if !content.is_empty() {
+                    messages.push(json!({ "role": "user", "content": content }));
+                }
+            },
+            Role::Assistant => {
+                let mut content = String::new();
+                let mut tool_calls = Vec::new();
+                for (content_index, content_block) in message.content.iter().enumerate() {
+                    if let ContentBlock::Content(TextBlock{ value }) = content_block {
+                        content.push_str(value);
+                    } else if let ContentBlock::ToolCall(ToolCallBlock{ id, name, arguments }) = content_block {
+                        tool_calls.push(json!({
+                            "index": content_index,
+                            "id": id, 
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": arguments,
+                            },
+                        }));
+                    } else if let ContentBlock::Reasoning(_) = content_block {
+                        // don't forget thinking content is not in request
+                    } else {
+                        panic!("how do you put toolresult content in assistant message?");
+                    }
+                }
+                if tool_calls.is_empty() {
+                    messages.push(json!({ "role": "assistant", "content": content }));
+                } else {
+                    messages.push(json!({ "role": "assistant", "content": content, "tool_calls": tool_calls }));
+                }
+            },
+        }
     }
+    println!("{:?}", messages);
 
-    // let messages = session.iter().map(|m| match &m.kind {
-    //     MessageKind::System{ content } => json!({ "role": "system", "content": content }),
-    //     MessageKind::User{ content } => json!({ "role": "user", "content": content }),
-    //     MessageKind::Assistant{ content, .. } => json!({ "role": "user", "content": content }),
-    //     MessageKind::ToolResult{ id, content, .. } => json!({ "role": "tool", "tool_call_id": id, "content": content }),
-    //     MessageKind::ToolCall{ id, name, parameters, .. } => json!({
-    //         "role": "assistant",
-    //         // you are ok with this null?
-    //         "content": null,
-    //         "tool_calls": [
-    //             {
-    //                 "id": id,
-    //                 "type": "function",
-    //                 "function": {
-    //                     "name": name,
-    //                     "arguments": parameters,
-    //                 },
-    //             }
-    //         ],
-    //     })
-    // }).collect::<Vec<_>>();
-    // println!("{:?}", messages);
-
-    // let tools = json!([
-    //     {
-    //         "type": "function",
-    //         "function": {
-    //             "name": "read-file",
-    //             "description": "Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.",
-    //             "parameters": {
-    //                 "type": "object",
-    //                 "properties": {
-    //                     "pathname": {
-    //                         "type": "string",
-    //                         "description": "The path of the file to read.",
-    //                     },
-    //                     "offset": {
-    //                         "type": "number",
-    //                         "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
-    //                     },
-    //                     "limit": {
-    //                         "type": "number",
-    //                         "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
-    //                     }
-    //                 },
-    //                 "required": ["pathname"],
-    //             },
-    //         },
-    //     },
-    // ]);
-    // println!("{:?}", tools);
+    let tools = json!([{
+        "type": "function", "function": {
+        "name": "read-file",
+        "description": "Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "pathname": {
+                    "type": "string",
+                    "description": "The path of the file to read.",
+                },
+                "offset": {
+                    "type": "number",
+                    "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
+                },
+                "limit": {
+                    "type": "number",
+                    "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
+                }
+            },
+            "required": ["pathname"],
+        },
+    } }]);
+    println!("{:?}", tools);
 
     // let client = reqwest::Client::builder().build()?;
     // let request = client
@@ -353,12 +514,23 @@ async fn main() -> Result<()> {
     //     println!("header {}: {:?}", name, value);
     // }
 
+    // let mut parser = EventStreamParser::new();
     // let mut stream = response.bytes_stream();
+    // let mut result_document = serde_json::Map::new();
+
     // while let Some(chunk) = stream.next().await {
-    //     let chunk = chunk?;
-    //     let chunk = String::from_utf8_lossy(&chunk);
-    //     println!("chunk: {}", chunk);
+    //     parser.push(chunk?);
+    //     while let Some(data) = parser.pull()? {
+    //         don't forget the ending [DONE]!
+    //         let delta_document: serde_json::Value = serde_json::from_str(&data)?;
+    //         // TODO things outside delta only append property entry (ignore property already exist)
+    //         // things inside delta if not falsy (undefined, null, 0) always append string
+    //         delta_document.as_object().unwrap().keys()
+    //     }
     // }
+
+    // let formatted = format_session(session)?;
+    // fs::write("example-output.yml", formatted)?;
 
     Ok(())
 }
@@ -646,4 +818,302 @@ fn test_write() -> Result<()> {
     ));
 
     Ok(())
+}
+
+#[test]
+fn test_decode() {
+    use std::assert_matches;
+    let mut rm = Vec::new();
+    // chrome's test case is at
+    // https://github.com/chromium/chromium/blob/5774ba7f90c367cf32a17dc65f530d63cd09d01a/third_party/blink/renderer/modules/eventsource/event_source_parser_test.cc
+
+    // single line
+    let mut parser = EventStreamParser::new();
+    // b"1".into() reports no impl for &[u8;1], but this is ok
+    parser.push("data: value1\n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "value1");
+    // no additional trim
+    parser.push("data:   value2   \n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "  value2   ");
+
+    // discard no data
+    let mut parser = EventStreamParser::new();
+    parser.push("data:\n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    let mut parser = EventStreamParser::new();
+    // oh, multiple line data will make data buffer full of \ns, is this spec's empty string?
+    parser.push("data: \ndata:\nid:\nevent:\ndata:\ndata: \n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "\n\n\n");
+
+    // cut inside event
+    let mut parser = EventStreamParser::new();
+    parser.push(Bytes::from_static(b""));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    parser.push(Bytes::from_static(b"data:1"));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    parser.push(Bytes::from_static(b"\n"));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    parser.push(Bytes::from_static(b"\n"));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "1");
+
+    // multiple line
+    let mut parser = EventStreamParser::new();
+    parser.push("data:1\ndata: 234\ndata: 456   \n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "1\n234\n456   ");
+
+    // multiple events, different kinds of eol by the way
+    let mut parser = EventStreamParser::new();
+    parser.push("data: message1\n\rdata: message2\r\ndata:message2line2\r\n\r\ndata:  message3\rdata:message3line2\n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "message1");
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "message2\nmessage2line2");
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == " message3\nmessage3line2");
+
+    // comment and other fields
+    let mut parser = EventStreamParser::new();
+    parser.push(": comment content\n\0:a field called NUL\n :a field called empty\n  : a field called multiple whitespace\r\r\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    let mut parser = EventStreamParser::new();
+    parser.push(": comment content\n\0:a field called NUL\n  : a field called multiple whitespace\rdata:hello\n\r\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "hello");
+
+    // cjk
+    let mut parser = EventStreamParser::new();
+    parser.push("data: 你好\n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "你好");
+    let mut parser = EventStreamParser::new();
+    parser.push("data: 你好\ndata: せかい\n\n".into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "你好\nせかい");
+
+    // cut in cjk
+    //              0123456   7   8   9   10  11  1213    19  20  21  22  23  24  25  26  27  2829
+    let encoded = b"data: \xe4\xbd\xa0\xe5\xa5\xbd\ndata: \xe3\x81\x9b\xe3\x81\x8b\xe3\x81\x84\n\n";
+    let mut parser = EventStreamParser::new();
+    parser.push(Bytes::from_static(&encoded[..10]));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    parser.push(Bytes::from_static(&encoded[10..23]));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+    parser.push(Bytes::from_static(&encoded[23..]));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "你好\nせかい");
+    // push one byte by one byte
+    let mut parser = EventStreamParser::new();
+    for b in encoded.into_iter().take(encoded.len() - 1) {
+        parser.push(Bytes::copy_from_slice(&[*b]));
+        assert_matches!(parser.pull(&mut rm), Ok(None));
+    }
+    parser.push(Bytes::from_static(b"\n"));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "你好\nせかい");
+}
+
+#[test]
+fn test_decode_kind_of_real() {
+    use std::assert_matches;
+    let mut rm = Vec::new();
+
+    // nearly a real data
+    let mut parser = EventStreamParser::new();
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1",choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1",choices":[{"index":0,"delta":{"role":"assistant","content":""},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"I"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"I"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"'ll"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"'ll"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" read"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" read"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" the"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" file"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" for"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" the"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" file"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" for"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" you"},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"."},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":" you"},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":"."},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"tool-call-id-1","type":"function","function":{"name":"read-file","arguments":""}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"tool-call-id-1","type":"function","function":{"name":"read-file","arguments":""}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"path"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"name"}}]},"logprobs":null,"finish_reason":null}]"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerp"#,
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"path"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"name"}}]},"logprobs":null,"finish_reason":null}]"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+
+    parser.push(concat!(
+        r#"rint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":": "}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":": "}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"src"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"/main"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":".rs"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"src"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"/main"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":".rs"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"logprobs":null,"finish_reason":null}]}"#,
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\""}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"}"}}]},"logprobs":null,"finish_reason":null}]}"#,
+    ));
+
+    parser.push(concat!(
+        r#"data: {"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":427,"#,
+        r#"completion_tokens":47,"total_tokens":474,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":427}}"#,
+        "\n\n",
+        "data: [DONE]",
+        "\n\n",
+    ).into());
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == concat!(
+        r#"{"id":"completion-id-1","object":"chat.completion.chunk","created":1792918070,"model":"deepseek-flash","system_fingerprint":""#,
+        r#"system-fingerprint-1","choices":[{"index":0,"delta":{"content":""},"logprobs":null,"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":427,"#,
+        r#"completion_tokens":47,"total_tokens":474,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":0,"prompt_cache_miss_tokens":427}}"#,
+    ));
+    assert_matches!(parser.pull(&mut rm), Ok(Some(m)) if m == "[DONE]");
+    assert_matches!(parser.pull(&mut rm), Ok(None));
+
+    parser.push("".into());
+    assert_matches!(parser.pull(&mut rm), Ok(None));
 }
