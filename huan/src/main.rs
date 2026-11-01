@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::fs;
 use anyhow::{Context as _, Result, anyhow, bail};
 use bytes::{BufMut as _, Bytes, BytesMut};
@@ -46,7 +45,7 @@ enum ContentBlock {
     ToolResult(ToolResultBlock),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum ThinkingMode {
     Disabled,
     Enabled,
@@ -620,7 +619,6 @@ fn prepare_request(session: &Session) -> Result<serde_json::Value> {
             },
         },
     ]));
-    println!("request body {}", serde_json::to_string(&body)?);
     Ok(Node::Object(body))
 }
 
@@ -727,11 +725,11 @@ impl EventStreamParser {
                     // note the result value may be empty
                     (&field[..colon_index], &field[colon_index + 1..])
                 } else {
-                    extra.push(format!("event-stream-parser-full-name-field: you really have this? {:?}", field));
+                    extra.push(format!("you really have field without value? {:?}", field));
                     (field, &[] as &[u8]) // you need this as to convert from &[{unknown};0] to &[u8]?
                 };
                 if name.is_empty() {
-                    extra.push(format!("event-stream-parser-comment-field: you really have comment? {:?}: {:?}", name, value));
+                    extra.push(format!("you really have comment? {:?}: {:?}", name, value));
                 } else if name == b"data" {
                     // according to spec, remove one ascii whitespace from beginning of value
                     let value = if !value.is_empty() && value[0] == b' ' { &value[1..] } else { value };
@@ -744,36 +742,16 @@ impl EventStreamParser {
                     // overwrite if duplicate field name
                     self.current_event = Some(value.to_vec());
                 } else {
-                    extra.push(format!("event-stream-parser-non-data-field: you really have non data field? {:?}: {:?}", name, value));
+                    extra.push(format!("you really have field other than event and data? {:?}: {:?}", name, value));
                 }
             }
         }
     }
 }
 
-fn merge_delta(result: &mut serde_json::Value, delta: serde_json::Value) -> Result<()> {
-    
-    // there is no spec for this delta format, they (the designers of chat completion api) think up of this on their own
-    // an event (a json document) is mainly
-    // - content leading object (for the role=assistant?)
-    // - content delta (or reasoning content delta), append to existing content by choice-object.index, are there really multiple choice responses?
-    // - tool call leading object (for tool call id and function name),
-    // - tool call arguments delta, append to argument content by tool-call-object.index
-    // - ending object, finish reason = stop/tool call, token usage statistics
-    //
-    // oh good, deepseek harness is compacting delta objects to make memory efficient while lossless, results in
-    // { kind: text-chunks, index: 0, time0: 1000, time_deltas: [5, 10, 7], texts: ['hello', ' world', '!'] },
-    // { kind: tool-call-chunks, index: 0, id: tool-call-id-1, name: read-file, time0: 2000, time_deltas: [...], texts: ['{', ' path',, 'name', ..., '}'] },
-    // { kind: other, finish-reason: tool call, token-usage: ... }
-    // see https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/llm/llm/tests/assistant-stream.spec.ts
-    //
-    // oh good, a/ messages api is using an efficient { type: content-block-delta, delta: { type: text-delta/thinking-delta, text: 'token' } }
-
-    Ok(())
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
+    use serde_json::Value as Node;
 
     let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
         bail!("env var HUAN_API_KEY missing");
@@ -785,41 +763,433 @@ async fn main() -> Result<()> {
     println!("{:?}", session);
 
     let body = prepare_request(&session)?;
+    println!("request body {}", serde_json::to_string(&body)?);
 
     // let client = reqwest::Client::builder().build()?;
     // let request = client
-    //     .post("https://api.deepseek.com/chat/completions")
+    //     .post("https://api.deepseek.com/anthropic/v1/messages")
     //     .header("content-type", "application/json")
     //     .bearer_auth(api_key)
-    //     .body(body).build()?;
+    //     .body(body.to_string()).build()?;
+    let start_time = Utc::now();
     // let response = client.execute(request).await?;
 
+    let status = reqwest::StatusCode::from_u16(200).unwrap();
     // let status = response.status();
     // if !status.is_success() {
     //     let body = response.text().await?;
     //     bail!("response error {}: {}", status, body);
     // }
+    let mut headers = Vec::new();
     // for (name, value) in response.headers() {
+    //     headers.push((name.to_string(), format!("{:?}", value)));
     //     println!("header {}: {:?}", name, value);
     // }
 
-    // let mut parser = EventStreamParser::new();
     // let mut stream = response.bytes_stream();
-    // let mut result_document = serde_json::Map::new();
+    let mut parser = EventStreamParser::new();
+
+    let mut has_error = false;
+    let mut message_started = false;
+    let mut message_finished = false;
+    let mut result_document = serde_json::Map::new();
+    let mut extra = Vec::new();
 
     // while let Some(chunk) = stream.next().await {
-    //     parser.push(chunk?);
-    //     while let Some(data) = parser.pull()? {
-    //         don't forget the ending [DONE]!
-    //         let delta_document: serde_json::Value = serde_json::from_str(&data)?;
-    //         // TODO things outside delta only append property entry (ignore property already exist)
-    //         // things inside delta if not falsy (undefined, null, 0) always append string
-    //         delta_document.as_object().unwrap().keys()
-    //     }
-    // }
+    //     let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
 
-    // let formatted = format_session(session)?;
-    // fs::write("example-output.yml", formatted)?;
+    for chunk in [
+        b"event: message_start\n" as &[u8],
+        br#"data: {"type":"message_start","message":{"id":"e6ef6a63-a078-4f53-a73b-38c8d1d46310","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}}
+"#,
+        b"\n",
+        b"event: content_block_start\n",
+        br#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+"#,
+        b"\n",
+        b"event: ping\n",
+        br#"data: {"type":"ping"}
+"#,
+        b"\n",
+        b"event: content_block_delta\n",
+        br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}
+"#,
+        b"\n",
+        b"event: content_block_stop\n",
+        br#"data: {"type":"content_block_stop","index":0}
+"#,
+        b"\n",
+        b"event: message_delta\n",
+        br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}}
+"#,
+        b"\n",
+        b"event: message_stop\n",
+        br#"data: {"type":"message_stop"}
+"#,
+    ].map(|c| Bytes::from_static(c)) {
+        parser.push(chunk);
+        while let Some(event) = parser.pull(&mut extra)? {
+            println!("event {:?} {}", event.name, event.data);
+            let Ok(mut object) = serde_json::from_str::<Node>(&event.data) else {
+                has_error = true; println!("failed to parse json?"); continue;
+            };
+            let Some(Node::String(data_type)) = object.get("type") else {
+                has_error = true; println!("missing type in json?"); continue;
+            };
+            if let Some(name) = &event.name {
+                if name != data_type {
+                    has_error = true; println!("event name not same as data type?"); // but not abort this event
+                }
+            } else {
+                has_error = true; println!("event don't have a name?"); // but not abort this event
+            }
+            if data_type == "ping" { println!("skip ping"); continue; }
+            match data_type.as_str() {
+                "message_start" => {
+                    if message_started { has_error = true; println!("message started again?"); }
+                    if message_finished { has_error = true; println!("message started after finished?"); }
+                    message_started = true;
+                    let Some(message_node) = object.get_mut("message") else {
+                        has_error = true; println!("missing message? (1)"); continue;
+                    };
+                    let Node::Object(mut message_node) = message_node.take() else {
+                        has_error = true; println!("message is not object? (1)"); continue;
+                    };
+                    if let Some(content) = message_node.get_mut("content") {
+                        if !content.is_array() {
+                            println!("content is not array? (1)");
+                            *content = Node::Array(Vec::new());
+                        }
+                    } else {
+                        println!("don't have a content property?");
+                        message_node.insert("content".to_string(), Node::Array(Vec::new()));
+                    }
+                    result_document = message_node;
+                },
+                "content_block_start" => {
+                    if !message_started { println!("content block started before message started?"); }
+                    if message_finished { println!("content block started after finished?"); }
+
+                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
+                        has_error = true; println!("block index missing or is not number?"); continue;
+                    };
+                    let Some(block_index) = block_index.as_u64() else {
+                        has_error = true; println!("block index not fit in u64?"); continue;
+                    };
+                    let block_index = block_index as usize;
+
+                    let Some(content_block_node) = object.get_mut("content_block").map(|v| v.take()) else {
+                        has_error = true; println!("content block itself missing?"); continue;
+                    };
+                    let Node::Object(mut content_block_node) = content_block_node else {
+                        has_error = true; println!("content block itself is not object?"); continue;
+                    };
+                    let Some(Node::String(block_type)) = content_block_node.get_mut("type").map(|v| v.take()) else {
+                        has_error = true; println!("block type missing or is not string?"); continue;
+                    };
+                    match block_type.as_str() {
+                        "text" => {
+                            println!("==========");
+                            println!("text start");
+                            println!("==========");
+                            if let Some(Node::String(text)) = content_block_node.get("text") && !text.is_empty() {
+                                println!("there is already text in content_block_start event? {}", text);
+                            }
+                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
+                            if result_content.len() < block_index {
+                                println!("result content length and block index mismatch?");
+                                // e.g. left=3, right=5, need insert 3,4 and later common logic to insert 5
+                                for _ in result_content.len()..block_index {
+                                    result_content.push(Node::Null);
+                                }
+                            }
+                            if result_content.len() == block_index {
+                                result_content.push(Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("text".to_string())),
+                                    ("text".to_string(), Node::String("".to_string())),
+                                ].into_iter())));
+                            }
+                            if result_content.len() > block_index && result_content[block_index].is_null() {
+                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("text".to_string())),
+                                    ("text".to_string(), Node::String("".to_string())),
+                                ].into_iter()));
+                            }
+                        },
+                        "thinking" => {
+                            println!("==============");
+                            println!("thinking start");
+                            println!("==============");
+                            if let Some(Node::String(text)) = content_block_node.get("thinking") && !text.is_empty() {
+                                println!("there is already thinking text in content_block_start event? {}", text);
+                            }
+                            if let Some(Node::String(text)) = content_block_node.get("signature") && !text.is_empty() {
+                                println!("there is already signature text in content_block_start event? {}", text);
+                            }
+                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
+                            if result_content.len() < block_index {
+                                println!("result content length and block index mismatch? (2)");
+                                for _ in result_content.len()..block_index {
+                                    result_content.push(Node::Null);
+                                }
+                            }
+                            if result_content.len() == block_index {
+                                result_content.push(Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("thinking".to_string())),
+                                    ("thinking".to_string(), Node::String("".to_string())),
+                                    ("signature".to_string(), Node::String("".to_string())),
+                                ].into_iter())));
+                            }
+                            if result_content.len() > block_index && result_content[block_index].is_null() {
+                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("thinking".to_string())),
+                                    ("thinking".to_string(), Node::String("".to_string())),
+                                    ("signature".to_string(), Node::String("".to_string())),
+                                ].into_iter()));
+                            }
+                        },
+                        "tool_use" => {
+                            let Some(Node::String(tool_use_id)) = content_block_node.get("id") else {
+                                has_error = true; println!("missing tool use id?"); continue;
+                            };
+                            let Some(Node::String(tool_use_name)) = content_block_node.get("name") else {
+                                has_error = true; println!("missing tool use name?"); continue;
+                            };
+                            println!("==============");
+                            println!("tool use {} {}", tool_use_id, tool_use_name);
+                            println!("==============");
+                            if let Some(Node::String(text)) = content_block_node.get("input") && !text.is_empty() {
+                                println!("there is already input text in content_block_start event? {}", text);
+                            }
+                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
+                            if result_content.len() < block_index {
+                                println!("result content length and block index mismatch? (3)");
+                                for _ in result_content.len()..block_index {
+                                    result_content.push(Node::Null);
+                                }
+                            }
+                            if result_content.len() == block_index {
+                                result_content.push(Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("tool_use".to_string())),
+                                    ("id".to_string(), Node::String(tool_use_id.to_string())),
+                                    ("name".to_string(), Node::String(tool_use_name.to_string())),
+                                ].into_iter())));
+                            }
+                            if result_content.len() > block_index && result_content[block_index].is_null() {
+                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
+                                    ("type".to_string(), Node::String("tool_use".to_string())),
+                                    ("id".to_string(), Node::String(tool_use_id.to_string())),
+                                    ("name".to_string(), Node::String(tool_use_name.to_string())),
+                                ].into_iter()));
+                            }
+                        },
+                        unknown => {
+                            has_error = true; println!("unknown content block type? {}", unknown); continue;
+                        },
+                    }
+                },
+                "content_block_delta" => {
+                    if !message_started { println!("content block delta before message started?"); }
+                    if message_finished { println!("content block delta after finished?"); }
+
+                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
+                        has_error = true; println!("block index missing or is not number? (2)"); continue;
+                    };
+                    let Some(block_index) = block_index.as_u64() else {
+                        has_error = true; println!("block index not fit in u64? (2)"); continue;
+                    };
+                    let block_index = block_index as usize;
+
+                    let Some(delta_node) = object.get_mut("delta").map(|v| v.take()) else {
+                        has_error = true; println!("delta missing?"); continue;
+                    };
+                    let Node::Object(mut delta_node) = delta_node else {
+                        has_error = true; println!("delta is not object?"); continue;
+                    };
+                    let Some(Node::String(delta_type)) = delta_node.get_mut("type").map(|v| v.take()) else {
+                        has_error = true; println!("delta type missing or is not string?"); continue;
+                    };
+                    let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
+                    if result_content.len() <= block_index {
+                        has_error = true; println!("block index delta'd before started?"); continue;
+                    }
+                    let result_content_block = &mut result_content[block_index];
+                    let Node::Object(result_content_block) = result_content_block else {
+                        has_error = true; println!("block index delta'd before started?"); continue;
+                    };
+                    match delta_type.as_str() {
+                        "text_delta" => {
+                            let Some(Node::String(text)) = delta_node.get("text") else {
+                                has_error = true; println!("missing text?"); continue;
+                            };
+                            print!("{}", text);
+                            let Node::String(result_block_text) = result_content_block.get_mut("text").unwrap() else {
+                                unreachable!();
+                            };
+                            result_block_text.push_str(text);
+                        },
+                        "thinking_delta" => {
+                            let Some(Node::String(text)) = delta_node.get("thinking") else {
+                                has_error = true; println!("thinking missing?"); continue;
+                            };
+                            print!("{}", text);
+                            let Node::String(result_block_text) = result_content_block.get_mut("thinking").unwrap() else {
+                                unreachable!();
+                            };
+                            result_block_text.push_str(text);
+                        },
+                        "signature_delta" => {
+                            let Some(Node::String(text)) = delta_node.get("signature") else {
+                                has_error = true; println!("signature missing?"); continue;
+                            };
+                            print!("(signature delta){}", text);
+                            let Node::String(result_block_text) = result_content_block.get_mut("signature").unwrap() else {
+                                unreachable!();
+                            };
+                            result_block_text.push_str(text);
+                        },
+                        "input_json_delta" => {
+                            let Some(Node::String(text)) = delta_node.get("partial_json") else {
+                                has_error = true; println!("partial_json missing?"); continue;
+                            };
+                            print!("(signature delta){}", text);
+                            let Node::String(result_block_text) = result_content_block.get_mut("input").unwrap() else {
+                                unreachable!();
+                            };
+                            result_block_text.push_str(text);
+                        },
+                        unknown => {
+                            has_error = true; println!("unknown content block type? {}", unknown); continue;
+                        },
+                    }
+                },
+                "content_block_stop" => {
+                    if !message_started { println!("content block stop before message started?"); }
+                    if message_finished { println!("content block stop after finished?"); }
+
+                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
+                        has_error = true; println!("block index missing or is not number? (2)"); continue;
+                    };
+                    let Some(block_index) = block_index.as_u64() else {
+                        has_error = true; println!("block index not fit in u64? (2)"); continue;
+                    };
+                    let block_index = block_index as usize;
+                    let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
+                    if result_content.len() <= block_index {
+                        has_error = true; println!("block index stopped before started?"); continue;
+                    }
+                    let result_content_block = &mut result_content[block_index];
+                    let Node::Object(_) = result_content_block else {
+                        has_error = true; println!("block index stopped before started?"); continue;
+                    };
+                },
+                "message_delta" => {
+                    if !message_started { println!("message delta before message started?"); }
+                    if message_finished { println!("message delta after stop?"); }
+
+                    let Some(delta_node) = object.get_mut("delta").map(|v| v.take()) else {
+                        has_error = true; println!("delta missing? (2)"); continue;
+                    };
+                    let Node::Object(mut delta_node) = delta_node else {
+                        has_error = true; println!("delta is not object?"); continue;
+                    };
+                    let Some(Node::String(stop_reason)) = delta_node.get_mut("stop_reason").map(|v| v.take()) else {
+                        has_error = true; println!("stop reason missing or is not string?"); continue;
+                    };
+                    println!("stop reason {}", stop_reason);
+                    if let Some(stop_reason_node) = result_document.get_mut("stop_reason") {
+                        *stop_reason_node = Node::String(stop_reason);
+                    } else {
+                        result_document.insert("stop_reason".to_string(), Node::String(stop_reason));
+                    }
+                    let Some(usage) = object.get_mut("usage").map(|v| v.take()) else {
+                        has_error = true; println!("usage missing? (1)"); continue;
+                    };
+                    let Ok(display_usage) = serde_json::to_string(&usage) else {
+                        has_error = true; println!("stringify usage error?"); continue;
+                    };
+                    if let Some(usage_node) = result_document.get_mut("usage") {
+                        *usage_node = usage;
+                    } else {
+                        result_document.insert("usage".to_string(), usage);
+                    }
+                    println!("usage {}", display_usage);
+                },
+                "message_stop" => {
+                    if !message_started { println!("message stop before message started?"); }
+                    if message_finished { println!("message stop again?"); }
+                    message_finished = true;
+                },
+                other => {
+                    has_error = true; println!("unknown event type? {}", other); continue;
+                },
+            }
+        }
+    }
+
+    let complete_time = Utc::now();
+    println!("{:?}", result_document);
+    if has_error {
+        bail!("has error");
+    }
+
+    let Node::String(model) = result_document.get_mut("model").unwrap().take() else { unreachable!() };
+    let Node::Array(result_content_blocks) = result_document.get_mut("content").unwrap().take() else { unreachable!(); };
+    let Node::String(stop_reason) = result_document.get_mut("stop_reason").unwrap().take() else { unreachable!() };
+    let usage = result_document.get_mut("usage").unwrap().take();
+    let usage = serde_json::to_string(&usage)?;
+
+    // result document has model, content: { type: text, text: string } | { type: thinking, thinking: string, signature: string } | { type: tool_use, id: string, name: string, input: string }[], stop_reason, usage
+    let target_message = session.messages.iter().find(|m| m.request_config.is_some()).unwrap();
+    let result_message = Message {
+        id: target_message.id,
+        parent_id: target_message.parent_id,
+        role: Role::Assistant,
+        content: result_content_blocks.into_iter().map(|mut r| match r.get("type").unwrap().as_str().unwrap() {
+            "text" => {
+                let Node::String(text) = r.get_mut("text").unwrap().take() else {
+                    unreachable!("missing text");
+                };
+                ContentBlock::Text(TextBlock{ name: None, value: text })
+            },
+            "thinking" => {
+                let Node::String(text) = r.get_mut("thinking").unwrap().take() else {
+                    unreachable!("missing thinking");
+                };
+                ContentBlock::Reasoning(TextBlock{ name: None, value: text })
+            },
+            "tool_use" => {
+                let Node::String(id) = r.get_mut("id").unwrap().take() else {
+                    unreachable!("missing id");
+                };
+                let Node::String(name) = r.get_mut("name").unwrap().take() else {
+                    unreachable!("missing name");
+                };
+                let Node::String(input) = r.get_mut("input").unwrap().take() else {
+                    unreachable!("missing input");
+                };
+                ContentBlock::ToolUse(ToolUseBlock{ id, name, input })
+            },
+            _ => unreachable!(),
+        }).collect(),
+        request_config: None,
+        response_metadata: Some(ResponseMetadata {
+            thinking: target_message.request_config.as_ref().unwrap().thinking,
+            request_tools: target_message.request_config.as_ref().unwrap().tools.clone(),
+            start_time,
+            complete_time,
+            status_code: status.as_u16() as usize,
+            headers,
+            model,
+            stop_reason,
+            usage,
+            extra,
+        }),
+    };
+
+    let serialized_assistant_message = serialize_assistant_message(result_message)?;
+    let result_serialized = format!("{}\n\n{}", serialized_session, serialized_assistant_message);
+    fs::write("example-output.yml", result_serialized)?;
 
     Ok(())
 }
