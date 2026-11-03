@@ -13,7 +13,6 @@ use serde::de::{MapAccess, SeqAccess, IgnoredAny, Error as DeserializeError};
 // // preceed j makes it looks like java library
 use serde_json::Value as JValue;
 type JMap = serde_json::Map<String, JValue>;
-use serde_yaml_ng::{Value as YValue, Mapping as YMap};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum Role {
@@ -73,6 +72,8 @@ where
 #[derive(Serialize)]
 // untagged's error message is not clear if anything not match content block structure
 // #[serde(untagged)]
+// what's the effect of deny_unknown_fields here?
+#[serde(deny_unknown_fields)]
 enum Content {
     String(String),
     Blocks(Vec<ContentBlock>),
@@ -111,7 +112,8 @@ impl<'de> Deserialize<'de> for Content {
 }
 
 #[derive(Serialize, Deserialize)]
-#[serde(untagged)]
+// what's the effect of deny_unknown_fields here?
+#[serde(untagged, deny_unknown_fields)]
 enum ThinkingMode {
     Switch(bool),
     // low, high, max
@@ -131,6 +133,20 @@ impl fmt::Debug for ThinkingMode {
             Self::Effort(v) => write!(f, "{:?}", v),
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RequestConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    // default to disabled
+    #[serde(default)]
+    think: ThinkingMode,
+    #[serde(rename = "tools")]
+    tool_names: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -173,6 +189,7 @@ impl Serialize for ResponseMetadata {
 
 // system message don't have all other properties
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SystemMessage {
     content: Content,
 }
@@ -192,23 +209,22 @@ struct Message {
     response_metadata: Option<ResponseMetadata>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct RequestConfig {
-    model: Option<String>,
-    // default to disabled
-    #[serde(default)]
-    think: ThinkingMode,
-    #[serde(rename = "tools")]
-    tool_names: Vec<String>,
-    max_tokens: Option<usize>,
+// Message::serialize serializes message without id, this put id in key
+fn serialize_message(message: &Message) -> Result<String> {
+
+    let mut buffer = Vec::with_capacity(128);
+    let mut serializer = serde_yaml_ng::Serializer::new(&mut buffer);
+    let mut map = serializer.serialize_map(Some(1))?;
+    map.serialize_entry(&format!("message-{}", message.id), &message)?;
+    map.end()?;
+    Ok(String::from_utf8(buffer)?)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RequestConfigAndId {
     message_id: usize,
-    parent_id: usize,
+    parent_message_id: usize,
     #[serde(flatten)]
     config: RequestConfig,
 }
@@ -243,10 +259,13 @@ impl<'de> Deserialize<'de> for Session {
                         "request" => request_config = Some(map.next_value()?),
                         "system" => system_message = Some(map.next_value()?),
                         message_key if let Some(message_id) = message_key.strip_prefix("message-") => {
-                            let message_id = message_id.parse().map_err(DeserializeError::custom)?;
+                            // "-2" cannot parse as u64 if you didn't notice
+                            let message_id = message_id.parse().map_err(|_| DeserializeError
+                                ::invalid_value(serde::de::Unexpected::Str(message_id), &"positive integer"))?;
+                            // so this actually only checks 0
                             if message_id <= 0 {
                                 return Err(DeserializeError::invalid_value(
-                                    serde::de::Unexpected::Unsigned(message_id), &"positive integer"));
+                                    serde::de::Unexpected::Unsigned(message_id), &"positive value"));
                             }
                             let mut message = map.next_value::<Message>()?;
                             message.id = message_id as usize;
@@ -266,49 +285,9 @@ impl<'de> Deserialize<'de> for Session {
     }
 }
 
-trait YValueIntoInner {
-    fn into_usize(self) -> Option<usize>;
-    fn into_string(self) -> Option<String>;
-    fn into_mapping(self) -> Option<YMap>;
-    fn into_sequence(self) -> Option<Vec<YValue>>;
-}
-impl YValueIntoInner for YValue {
-    fn into_usize(self) -> Option<usize> {
-        if let YValue::Number(value) = self { value.as_u64().map(|v| v as usize) } else { None }
-    }
-    fn into_string(self) -> Option<String> {
-        if let YValue::String(value) = self { Some(value) } else { None }
-    }
-    fn into_mapping(self) -> Option<YMap> {
-        if let YValue::Mapping(value) = self { Some(value) } else { None }
-    }
-    fn into_sequence(self) -> Option<Vec<YValue>> {
-        if let YValue::Sequence(values) = self { Some(values) } else { None }
-    }
-}
-trait JValueIntoInner {
-    fn into_usize(self) -> Option<usize>;
-    fn into_string(self) -> Option<String>;
-    fn into_object(self) -> Option<JMap>;
-    fn into_array(self) -> Option<Vec<JValue>>;
-}
-impl JValueIntoInner for JValue {
-    fn into_usize(self) -> Option<usize> {
-        if let JValue::Number(value) = self { value.as_u64().map(|v| v as usize) } else { None }
-    }
-    fn into_string(self) -> Option<String> {
-        if let JValue::String(value) = self { Some(value) } else { None }
-    }
-    fn into_object(self) -> Option<JMap> {
-        if let JValue::Object(value) = self { Some(value) } else { None }
-    }
-    fn into_array(self) -> Option<Vec<JValue>> {
-        if let JValue::Array(values) = self { Some(values) } else { None }
-    }
-}
-
 fn validate_session(session: &Session) -> Result<()> {
 
+    // x. missing property or primitive type mismatch is rejected by basic deserializing
     // x. multiple system message is rejected by yaml parse
     // 1. system message don't have other content block type
     // x. multiple request config is rejected by yaml parse
@@ -317,316 +296,112 @@ fn validate_session(session: &Session) -> Result<()> {
     // 3. user message don't have think and tool use blocks
     // 4. assistant message don't have tool result blocks
 
-    let raw = "";
-    let document: YValue = serde_yaml_ng::from_str(raw)?;
-    let mut document = document.into_mapping().ok_or_else(|| anyhow!("top level not mapping?"))?;
-    println!("{:?}", document);
+    let mut has_error = false;
+    macro_rules! raise { ($($arg:tt)*) => {{ has_error = true; println!($($arg)*); }} }
 
-    let session_name = document.remove("name")
-        .unwrap_or_else(|| "name".into())
-        .into_string().ok_or_else(|| anyhow!("session name not string?"))?;
-    let mut messages = Vec::new();
+    if let Some(system_message) = &session.system_message {
+        if let Content::Blocks(blocks) = &system_message.content {
+            for (block_index, block) in blocks.iter().enumerate() {
+                match block {
+                    ContentBlock::Text{..} => {}, // ok
+                    ContentBlock::Think{..} =>
+                        raise!("system message: content#{}: kind: unknown variant think, expect text", block_index),
+                    ContentBlock::ToolUse{..} =>
+                        raise!("system message: content#{}: kind: unknown variant tool-use, expect text", block_index),
+                    ContentBlock::ToolResult{..} =>
+                        raise!("system message: content#{}: kind: unknown variant tool-result, expect text", block_index),
+                }
+            }
+        }
+    }
 
-    for (key, value) in document {
-        let key = key.into_string()
-            .ok_or_else(|| anyhow!("oh very cool non-plain mapping key"))?;
-        // allow some additional properties while don't actually read them
-        if matches!(key.as_str(), "create-time") { continue; }
-
-        // now that system message's key is called system, multiple system message is rejected by yaml parse
-        let message_id = if key == "system" {
-            0
-        } else if let Some(message_id) = key.strip_prefix("message-") {
-            message_id.parse()
-                .with_context(|| format!("{}: failed to read message id", key))?
-        } else {
-            bail!("{}: unknown top level key", key)
-        };
-        let mut message_node = value.into_mapping().ok_or_else(|| anyhow!("{}: message node not mapping?", key))?;
-
-        // system message should not include these, skip them and later report as unknown property
-        let (role, parent_id) = if key == "system" {
-            (Role::System, 0)
-        } else {
-            let role = message_node.remove("role")
-                .ok_or_else(|| anyhow!("{}: expect role", key))?
-                .into_string().ok_or_else(|| anyhow!("{}: role not string?", key))?;
-            let role = match role.as_str() {
-                "user" => Role::User,
-                "assistant" => Role::Assistant,
-                _ => bail!("{}: expect role to be user or assistant", key),
-            };
-            let parent_id = message_node.remove("parent-id").unwrap_or(0.into())
-                .into_usize().ok_or_else(|| anyhow!("{}: expect parent-id to be positive integer", key))?;
-            (role, parent_id)
-        };
-
-        let request_config = if role != Role::Assistant {
-            None // don't read the property and later report as unknown property
-        } else if message_node.get("request").map(|n| n.is_null()).unwrap_or(false) {
-            message_node.remove("request");
-            // accept empty request config entry, thinking default to disabled
-            Some(RequestConfig{ model: None, thinking: ThinkingMode::Disabled, tool_names: Vec::new(), max_tokens: None })
-        } else if let Some(node) = message_node.remove("request") {
-            let mut request_config_node = node.into_mapping()
-                .ok_or_else(|| anyhow!("{}: request config node is not mapping?", key))?;
-
-            let model = request_config_node.remove("model").map(|v| match v {
-                YValue::String(value) if
-                    matches!(value.as_str(), "deepseek-flash" | "deepseek-pro") => Ok(value),
-                YValue::String(_) => Err(anyhow!(
-                    "{}: unknown model name, currently only know deepseek-flash and deepseek-pro", key)),
-                _ => Err(anyhow!("{}: model not string?", key)),
-            }).transpose()?;
-
-            let thinking = request_config_node.remove("thinking").map(|v| match v {
-                YValue::Bool(true) => Ok(ThinkingMode::Enabled),
-                YValue::Bool(false) => Ok(ThinkingMode::Disabled),
-                YValue::String(value) => match value.as_str() {
-                    "on" => Ok(ThinkingMode::Enabled),
-                    "no" => Ok(ThinkingMode::Disabled),
-                    "low" => Ok(ThinkingMode::Effort(value)),
-                    "high" => Ok(ThinkingMode::Effort(value)),
-                    "max" => Ok(ThinkingMode::Effort(value)),
-                    _ => Err(anyhow!("{}: unknown thinking mode, currently only know true/false/low/high/max", key)),
-                },
-                _ => Err(anyhow!("{}: thinking mode not string or bool?", key)),
-            }).transpose()?.unwrap_or(ThinkingMode::Disabled);
+    let mut message_ids = HashSet::new();
+    for message in &session.messages {
+        if !message_ids.insert(message.id) {
+            raise!("message-{}: duplicate message id", message.id);
+        }
+        if message.id == message.parent_id {
+            raise!("message-{}: parent id cannot be same as id", message.id);
+        } else if message.parent_id > 0 {
+            if let Some(parent_message) = session.messages.iter().find(|m| m.id == message.parent_id) {
+                if !matches!((&message.role, &parent_message.role), (Role::User,  Role::Assistant) | (Role::Assistant, Role::User)) {
+                    raise!("message-{}: unexpected parent message role relationship", message.id);
+                }
+            } else {
+                raise!("message-{}: parent-id {} not exist", message.id, message.parent_id);
+            }
+        }
+        if let Content::Blocks(blocks) = &message.content {
+            for (block_index, block) in blocks.iter().enumerate() {
+                match block {
+                    ContentBlock::Text{ name, .. } if message.role.is_assistant() && name.is_some() =>
+                        raise!("message-{}: content#{}: unknown field name, expect kind, value for assistant message", message.id, block_index),
+                    ContentBlock::Think{..} if message.role.is_user() => 
+                        raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index),
+                    ContentBlock::ToolUse{..} if message.role.is_user() =>
+                        raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index),
+                    ContentBlock::ToolResult{..} if message.role.is_assistant() =>
+                        raise!("message-{}: content#{}: kind: unknown variant tool-result, expect text, think, tool-use for assistant message", message.id, block_index),
+                    ContentBlock::ToolResult{ id: result_id, ..} => {
+                        if let Some(parent_message) = session.messages.iter().find(|m| m.id == message.parent_id) {
+                            if let Content::Blocks(blocks) = &parent_message.content {
+                                if !blocks.iter().any(|p| matches!(p, ContentBlock::ToolUse{ id: use_id, .. } if use_id == result_id)) {
+                                    raise!("message-{}: expect tool result id find in parent message's tool use blocks", message.id);
+                                }
+                            } else {
+                                raise!("message-{}: expect tool result id find in parent message's tool use blocks (1)", message.id);
+                            }
+                        } else {
+                            raise!("message-{}: expect parent-id exist when there is tool-result block", message.id);
+                        }
+                    },
+                    _ => {}, // others are ok
+                }
+            }
+        }
+    }
     
-            let tool_names = request_config_node.remove("tools").map(|value|
-                value.into_sequence()
-                    .ok_or_else(|| anyhow!("{}: request config tools not sequence?", key))?
-                    .into_iter().map(|value| value.into_string()
-                        .ok_or_else(|| anyhow!("{}: request config tools element not string?", key)))
-                    .collect::<Result<Vec<String>>>()
-            ).transpose()?.unwrap_or_default();
-
-            let max_tokens = request_config_node.remove("max-tokens").map(|v|
-                v.into_usize().ok_or_else(|| anyhow!("{}: max-tokens not number?", key))).transpose()?;
-            Some(RequestConfig{ model, thinking, tool_names, max_tokens })
-        } else { None };
-
-        // no need to read completed assistant message's response metadata, they are not used again
-        message_node.remove("response");
-
-        let mut content_blocks = Vec::new();
-        match message_node.remove("content") {
-            // should be no content if there is request config
-            None if request_config.is_some() => {},
-            // should be no content if there is request config
-            Some(_) if request_config.is_some() =>
-                bail!("{}: should not have content if have request config", key),
-            // otherwise it is required
-            None => bail!("{}: expect content", key),
-            // normal plain string
-            Some(YValue::String(value)) => 
-                content_blocks.push(ContentBlock::Text(TextBlock{ value, name: None })),
-            // normal content blocks
-            Some(YValue::Sequence(block_nodes)) => for (block_index, block_node) in block_nodes.into_iter().enumerate() {
-                // error message header
-                let key = format!("{}: content#{}", key, block_index);
-                let mut block_node = block_node.into_mapping().ok_or_else(|| anyhow!("{}: not mapping?", key))?;
-
-                let kind = block_node.remove("kind")
-                    .ok_or_else(|| anyhow!("{}: expect kind", key))?
-                    .into_string().ok_or_else(|| anyhow!("{}: kind not string?", key))?;
-                match kind.as_str() {
-                    "text" if role != Role::Assistant => {
-                        // if you find all other properties is using .and_then while this
-                        // is using .map, that's because this is the only optional property
-                        let name = block_node.remove("name").map(|v| v.into_string()
-                            .ok_or_else(|| anyhow!("{}: name not string?", key))).transpose()?;
-                        let value = block_node.remove("value").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect value exist and is string", key))?;
-                        content_blocks.push(ContentBlock::Text(TextBlock{ name, value }));
-                    },
-                    "text" /* assistant */ => {
-                        let value = block_node.remove("value").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect value exist and is string", key))?;
-                        // assistant message text block don't use name mechanism
-                        content_blocks.push(ContentBlock::Text(TextBlock{ name: None, value }));
-                    },
-                    "reasoning" if role != Role::Assistant =>
-                        bail!("{}: reasoning block only allowed in assistant message", key),
-                    "reasoning" => {
-                        let value = block_node.remove("value").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect value exist and is string", key))?;
-                        // assistant message reasoning block don't use name mechanism
-                        content_blocks.push(ContentBlock::Reasoning(TextBlock{ value, name: None }));
-                    },
-                    "tool-use" if role != Role::Assistant =>
-                        bail!("{}: tool-use block only allowed in assistant message", key),
-                    "tool-use" => {
-                        let id = block_node.remove("id").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect id exist and is string", key))?;
-                        let name = block_node.remove("name").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect name exist and is string", key))?;
-                        let input = block_node.remove("input").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect input exist and is string", key))?;
-                        content_blocks.push(ContentBlock::ToolUse(ToolUseBlock{ id, name, input }));
-                    },
-                    "tool-result" if role != Role::User =>
-                        bail!("{}: tool-result block only allowed in user message", key),
-                    "tool-result" => {
-                        let id = block_node.remove("id").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect id exist and is string", key))?;
-                        let value = block_node.remove("value").and_then(|v| v.into_string())
-                            .ok_or_else(|| anyhow!("{}: expect value exist and is string", key))?;
-                        // no need to read completed tool use's execution metadata, they are not used again
-                        block_node.remove("metadata");
-                        content_blocks.push(ContentBlock::ToolResult(ToolResultBlock{ id, value, metadata: Vec::new() }));
-                    },
-                    other => {
-                        bail!("{}: unknown kind {}, currently only know text, reasoning, tool-use, tool-result", key, other);
-                    },
+    if let Some(request_config) = &session.request_config {
+        if request_config.message_id <= 0 {
+            raise!("request config: message-id: invalid value 0, expect positive value");
+        }
+        if !message_ids.insert(request_config.message_id) {
+            raise!("request config: duplicate message id {}", request_config.message_id);
+        }
+        if request_config.message_id == request_config.parent_message_id {
+            raise!("request config: parent id cannot be same as message id");
+        } else if request_config.parent_message_id > 0 {
+            if let Some(parent_message) = session.messages.iter().find(|m| m.id == request_config.parent_message_id) {
+                if !matches!(parent_message.role, Role::User) {
+                    raise!("request config: unexpected parent message role relationship");
                 }
-                if !block_node.is_empty() {
-                    bail!("{}: unknown properties {:?}", key, block_node.keys().collect::<Vec<_>>());
-                }
-            },
-            Some(_) => bail!("{}: expect content to be plain string or sequence of content blocks", key),
+            } else {
+                raise!("request config: parent-id {} not exist", request_config.parent_message_id);
+            }
         }
-        if !message_node.is_empty() {
-            bail!("{}: unknown properties {:?}", key, message_node.keys().collect::<Vec<_>>());
-        }
-        messages.push(Message{
-            id: message_id,
-            parent_id,
-            role,
-            content: content_blocks,
-            request_config,
-            response_metadata: None,
-        });
-    }
 
-    let mut existing_message_ids = HashSet::with_capacity(messages.len());
-    for message in &messages {
-        // 1. duplicate id
-        if !existing_message_ids.insert(message.id) {
-            bail!("message-{}: duplicate id", message.id);
+        if let Some(model) = &request_config.config.model {
+            if !matches!(model.as_str(), "deepseek-flash" | "deepseek-v4-pro") {
+                raise!("request config: unknown model name, expect deepseek-flash and deepseek-v4-pro");
+            }
         }
-        // 2. parent id
-        // will not meet system message id not 0, system message parent id not 0 or non system message id 0 here
-        let parent_message = if message.parent_id != 0 {
-            Some(messages.iter().find(|m| m.id == message.parent_id)
-                .ok_or_else(|| anyhow!("message-{}: parent id {} not exist", message.id, message.parent_id))?)
-        } else { None };
-        // 3. parent role relationship
-        if !matches!((message.role, parent_message),
-            | (_, None)
-            | (Role::User, Some(Message{ role: Role::Assistant, .. }))
-            | (Role::Assistant, Some(Message{ role: Role::User, .. })))
-        {
-            bail!("message-{}: unexpected parent message role relationship", message.id);
+        if let ThinkingMode::Effort(effort) = &request_config.config.think {
+            if !matches!(effort.as_str(), "low" | "high" | "max") {
+                raise!("request config: unknown thinking mode, expect true/false/low/high/max");
+            }
         }
-        // 4. tool use id match
-        for content_block in &message.content {
-            if let ContentBlock::ToolResult(ToolResultBlock{ id: result_id, .. }) = content_block {
-                let parent_message = parent_message.ok_or_else(||
-                    anyhow!("message-{}: cannot have tool result block without parent message", message.id))?;
-                if !parent_message.content.iter().any(|p| matches!(p, ContentBlock::ToolUse(ToolUseBlock{ id: use_id, .. }) if use_id == result_id)) {
-                    bail!("message-{}: tool result id not found in parent message content blocks", message.id);
-                }
-           }
+        if let Some(max_tokens) = request_config.config.max_tokens {
+            if max_tokens <= 0 {
+                raise!("invalid max-tokens, expect positive value");
+            }
         }
     }
 
-    messages.sort_by_key(|m| m.id);
-    Ok(Session{ name: session_name, messages })
+    if has_error { bail!("has validation errors"); }
     Ok(())
 }
 
-fn serialize_message(message: Message) -> Result<String> {
-
-    let mut message_node = YMap::new();
-    if message.parent_id > 0 {
-        message_node.insert("parent-id".into(), message.parent_id.into());
-    }
-    message_node.insert("role".into(), match message.role {
-        Role::User => "user",
-        Role::Assistant => "assistant",
-        Role::System => bail!("do not send system message here"),
-    }.into());
-
-    // lazy to bracefully display a plain string for plain single text content block,
-    // you always need to manually adjust persistant file after one turn, so leave the
-    // minify operation for that
-
-    let mut block_nodes = Vec::new();
-    for content_block in message.content {
-        let mut block_node = YMap::new();
-        match content_block {
-            ContentBlock::Text(TextBlock { value, name }) => {
-                block_node.insert("kind".into(), "text".into());
-                if let Some(name) = name {
-                    block_node.insert("name".into(), name.into());
-                }
-                block_node.insert("value".into(), value.into());
-            },
-            ContentBlock::Reasoning(TextBlock { value, .. }) => {
-                block_node.insert("kind".into(), "reasoning".into());
-                // reasoning block don't use name mechanism
-                block_node.insert("value".into(), value.into());
-            },
-            ContentBlock::ToolUse(ToolUseBlock { id, name, input }) => {
-                block_node.insert("kind".into(), "tool-use".into());
-                block_node.insert("id".into(), id.into());
-                block_node.insert("name".into(), name.into());
-                block_node.insert("input".into(), input.into());
-            },
-            ContentBlock::ToolResult(ToolResultBlock { id, value, metadata }) => {
-                block_node.insert("kind".into(), "tool-result".into());
-                block_node.insert("id".into(), id.into());
-                block_node.insert("value".into(), value.into());
-                if !metadata.is_empty() {
-                    block_node.insert("metadata".into(),
-                        YValue::Sequence(metadata.into_iter().map(YValue::String).collect()));
-                }
-            },
-        }
-        block_nodes.push(YValue::Mapping(block_node));
-    }
-    message_node.insert("content".into(), YValue::Sequence(block_nodes));
-
-    if let Some(response_metadata) = message.response_metadata {
-        let mut response_metadata_node = YMap::new();
-        if let Some(request_model) = response_metadata.request_config.model {
-            response_metadata_node.insert("request-model".into(), request_model.into());
-        }
-        response_metadata_node.insert("request-thinking".into(), match response_metadata.request_config.thinking {
-            ThinkingMode::Disabled => YValue::Bool(false),
-            ThinkingMode::Enabled => YValue::Bool(true),
-            ThinkingMode::Effort(effort) => YValue::String(effort),
-        });
-        response_metadata_node.insert("request-tools".into(), YValue::Sequence(
-            response_metadata.request_config.tool_names.into_iter().map(YValue::String).collect()));
-        if let Some(request_max_tokens) = response_metadata.request_config.max_tokens {
-            response_metadata_node.insert("request-max-tokens".into(), request_max_tokens.into());
-        }
-        response_metadata_node.insert("start-time".into(), format!("{:?}", response_metadata.start_time).into());
-        response_metadata_node.insert("status-code".into(), response_metadata.status_code.into());
-        for (key, value) in response_metadata.headers {
-            response_metadata_node.insert(format!("header-{}", key).into(), value.into());
-        }
-        response_metadata_node.insert("complete-time".into(), format!("{:?}", response_metadata.complete_time).into());
-        response_metadata_node.insert("model".into(), response_metadata.model.into());
-        response_metadata_node.insert("stop-reason".into(), response_metadata.stop_reason.into());
-        response_metadata_node.insert("usage".into(), response_metadata.usage.into());
-        if !response_metadata.extra.is_empty() {
-            response_metadata_node.insert("extra".into(),
-                YValue::Sequence(response_metadata.extra.into_iter().map(YValue::String).collect()));
-        }
-        message_node.insert("response".into(), YValue::Mapping(response_metadata_node));
-    }
-
-    let mut new_section = YMap::new();
-    new_section.insert(YValue::String(format!("message-{}", message.id)), YValue::Mapping(message_node));
-    // not sure when this will return error
-    Ok(serde_yaml_ng::to_string(&YValue::Mapping(new_section))?)
-    unimplemented!()
-}
-
-// difference with contentblock1 is tag
+// difference with contentblock1 is tag property name and variant name
 // because currently serde don't support serialize/deserialize use different tags
 // persistant storage want to use kind, api have to use type
 // and I'm lazy to really manually implement the serialize or deserialize implementation,
@@ -643,7 +418,7 @@ enum ContentBlock2 {
         text: String,
     },
     #[serde(rename = "thinking")]
-    Thinking{
+    Think{
         thinking: String,
         // TODO is this really used and required?
         #[serde(skip)]
@@ -721,7 +496,7 @@ struct Request {
 
 // consume session and return (target message, request body)
 fn prepare_request(session: &Session) -> Result<Request> {
-
+    unimplemented!()
     let request_config_message_count = session.messages.iter().filter(|m| m.request_config.is_some()).count();
     if request_config_message_count == 0 {
         bail!("no message has request config, if you don't need related config, add an empty request element");
@@ -1090,8 +865,8 @@ async fn main() -> Result<()> {
     let mut result_document = serde_json::Map::new();
     // let mut extra = Vec::new();
 
-    // while let Some(chunk) = stream.next().await {
-    //     let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
 
     for chunk in [
         b"event: message_start\n" as &[u8],
@@ -1486,84 +1261,84 @@ async fn main() -> Result<()> {
 fn test_read() {
     use std::assert_matches;
 
-    let session = serde_yaml_ng::from_str(concat!(
-        "name: session name\n",
-        "create-time: 2026-10-22T07:59:01Z\n",
-        "\n",
-        "system:\n",
-        "  content: You are a coding agent\n",
-        "\n",
-        "message-1:\n",
-        "  role: user\n",
-        "  content:\n",
-        "    summary source code file src/main.rs\n",
-        "\n",
-        "message-3:\n",
-        "  parent-id: 1\n",
-        "  role: assistant\n",
-        "  content:\n",
-        "  - kind: think\n",
-        "    value: reasoning content\n",
-        "  - kind: text\n",
-        "    value: normal content\n",
-        "  - kind: tool-use\n",
-        "    id: tool-call-id-1\n",
-        "    name: read-file\n",
-        "    # although you can inline json inside yaml line, there is no need to do that\n",
-        "    input: '{ pathname: \"src/main.rs\" }'\n",
-        "  - kind: tool-use\n",
-        "    # even chat completion api support parallel tool calls if you didn't notice\n",
-        "    id: tool-call-id-2\n",
-        "    name: read-file\n",
-        "    input: '{ pathname: \"src/session.rs\" }'\n",
-        "  # store some of the response information in case they are useful\n",
-        "  response:\n",
-        "    create-time: TODO\n",
-        "    status-code: 200\n",
-        "    header-x-ds-trace-id: x-ds-trace-id1\n",
-        "    header-date: Sun, 25 Oct 2026 08:47:50 GMT\n",
-        "    header-eo-log-uuid: eo-log-uuid1\n",
-        "    model: deepseek-flasher\n",
-        "    complete-time: 2026-10-23T06:29:10Z\n",
-        "    token-usage: 42/325/799\n",
-        "\n",
-        "message-4:\n",
-        "  parent-id: 3\n",
-        "  role: user\n",
-        "  content:\n",
-        "  - kind: text\n",
-        "    name: additional-manual-description\n",
-        "    value: additional manual description\n",
-        "  - kind: tool-result\n",
-        "    id: tool-call-id-1\n",
-        "    value: |\n",
-        "      use std::fs...\n",
-        "      ...\n",
-        "      struct Message...\n",
-        "\n",
-        "      fn read_session...\n",
-        "      fn test_read...\n",
-        "    metadata:\n",
-        "      create-time: TODO\n",
-        "      complete-time: etc.1\n",
-        "      file-size: etc.2\n",
-        "      return-size: etc.3\n",
-        "      git-version: etc.4\n",
-        "  - kind: tool-result\n",
-        "    id: tool-call-id-2\n",
-        "    value: |\n",
-        "      use std::collections::{HashMap, BinaryHeap};...\n",
-        "      ...\n",
-        "\n",
-        "request:\n",
-        "  message-id: 5\n",
-        "  parent-id: 4\n",
-        "  model: deepseek-pro\n",
-        "  think: true\n",
-        "  tools: [read-file]\n",
-    )).expect("failed to read");
-
-    validate_session(&session).expect("failed validation");
+    let session = serde_yaml_ng::from_str(&vec![
+        "name: session name",
+        "create-time: 2026-10-22T07:59:01Z",
+        "",
+        "system:",
+        "  content: You are a coding agent",
+        "",
+        "message-1:",
+        "  role: user",
+        "  content:",
+        "    summary source code file src/main.rs",
+        "",
+        "message-3:",
+        "  parent-id: 1",
+        "  role: assistant",
+        "  content:",
+        "  - kind: think",
+        "    value: reasoning content",
+        "  - kind: text",
+        "    value: normal content",
+        "  - kind: tool-use",
+        "    id: tool-call-id-1",
+        "    name: read-file",
+        "    # although you can inline json inside yaml line, there is no need to do that",
+        "    input: '{ pathname: \"src/main.rs\" }'",
+        "  - kind: tool-use",
+        "    # even chat completion api support parallel tool calls if you didn't notice",
+        "    id: tool-call-id-2",
+        "    name: read-file",
+        "    input: '{ pathname: \"src/session.rs\" }'",
+        "  # store some of the response information in case they are useful",
+        "  response:",
+        "    create-time: TODO",
+        "    status-code: 200",
+        "    header-x-ds-trace-id: x-ds-trace-id1",
+        "    header-date: Sun, 25 Oct 2026 08:47:50 GMT",
+        "    header-eo-log-uuid: eo-log-uuid1",
+        "    model: deepseek-flasher",
+        "    complete-time: 2026-10-23T06:29:10Z",
+        "    token-usage: 42/325/799",
+        "",
+        "message-4:",
+        "  parent-id: 3",
+        "  role: user",
+        "  content:",
+        "  - kind: text",
+        "    name: additional-manual-description",
+        "    value: additional manual description",
+        "  - kind: tool-result",
+        "    id: tool-call-id-1",
+        "    value: |",
+        "      use std::fs...",
+        "      ...",
+        "      struct Message...",
+        "",
+        "      fn read_session...",
+        "      fn test_read...",
+        "    metadata:",
+        "      create-time: TODO",
+        "      complete-time: etc.1",
+        "      file-size: etc.2",
+        "      return-size: etc.3",
+        "      git-version: etc.4",
+        "  - kind: tool-result",
+        "    id: tool-call-id-2",
+        "    value: |",
+        "      use std::collections::{HashMap, BinaryHeap};...",
+        "      ...",
+        "",
+        "request:",
+        "  message-id: 5",
+        "  parent-message-id: 4",
+        "  model: deepseek-v4-pro",
+        "  think: true",
+        "  tools: [read-file]",
+    ].join("\n")).expect("deserialization failed");
+    println!("{:?}", session);
+    validate_session(&session).expect("validation failed");
 
     assert_eq!(session.name, "session name");
     let Some(system_message) = &session.system_message else {
@@ -1636,61 +1411,47 @@ fn test_read() {
         panic!("session.request_config not some");
     };
     assert_eq!(request_config.message_id, 5);
-    assert_eq!(request_config.parent_id, 4);
-    assert_eq!(request_config.config.model.as_deref(), Some("deepseek-pro"));
+    assert_eq!(request_config.parent_message_id, 4);
+    assert_eq!(request_config.config.model.as_deref(), Some("deepseek-v4-pro"));
     assert_matches!(request_config.config.think, ThinkingMode::Switch(true));
     assert_eq!(request_config.config.tool_names, vec!["read-file".to_string()]);
-
-    // null request config
-    // first message in thread is not user is checked in prepare request, not read
-    // let session = deserialize_session(concat!(
-    //     "message-5:\n",
-    //     "  role: assistant\n",
-    //     "  request:\n",
-    // )).expect("failed to read");
-    // assert_eq!(session.messages.len(), 1);
-    // assert_eq!(session.messages[0].id, 5);
-    // assert_eq!(session.messages[0].parent_id, 0);
-    // assert_matches!(session.messages[0].role, Role::Assistant);
-    // assert_eq!(session.messages[0].content.len(), 0);
-    // let Some(request_config) = &session.messages[0].request_config else {
-    //     panic!("session.messages[0].request_config not some");
-    // };
-    // assert_eq!(request_config.model.as_deref(), None);
-    // assert_matches!(request_config.thinking, ThinkingMode::Switch(false));
-    // assert_eq!(request_config.tool_names, Vec::<String>::new());
 }
 
 #[test]
 fn test_write() {
     use chrono::TimeZone;
 
-    assert_eq!(serialize_message(Message {
+    assert_eq!(serialize_message(&Message {
         id: 3,
         parent_id: 2,
         role: Role::Assistant,
-        content: vec![
-            ContentBlock::Reasoning(TextBlock{ value: "why do you enable reasoning for this simple work?".to_string(), name: None }),
-            ContentBlock::Text(TextBlock{ value: "let me read the files...".to_string(), name: None }),
-            ContentBlock::ToolUse(ToolUseBlock{
+        content: Content::Blocks(vec![
+            ContentBlock::Think{
+                value: "why do you enable reasoning for this simple work?".to_string(),
+                signature: "None".to_string(),
+            },
+            ContentBlock::Text{
+                value: "let me read the files...".to_string(),
+                name: None,
+            },
+            ContentBlock::ToolUse{
                 id: "id1".to_string(),
                 name: "read-file".to_string(),
                 input: "{ pathname: \"src/main.rs\" }".to_string(),
-            }),
-            ContentBlock::ToolUse(ToolUseBlock{
+            },
+            ContentBlock::ToolUse{
                 id: "id2".to_string(),
                 name: "read-file".to_string(),
                 input: "{ pathname: \"src/session.rs\" }".to_string(),
-            }),
-        ],
-        request_config: None,
-        response_metadata: Some(ResponseMetadata{
-            request_config: RequestConfig {
-                model: None,
-                thinking: ThinkingMode::Effort("high".to_string()),
-                tool_names: vec!["tool1".to_string(), "tool2".to_string()],
-                max_tokens: None,
             },
+        ]),
+        request_config: Some(RequestConfig {
+            model: None,
+            think: ThinkingMode::Effort("high".to_string()),
+            tool_names: vec!["tool1".to_string(), "tool2".to_string()],
+            max_tokens: None,
+        }),
+        response_metadata: Some(ResponseMetadata{
             start_time: Utc.with_ymd_and_hms(2026, 10, 31, 12, 33, 0).unwrap(),
             complete_time: Utc.with_ymd_and_hms(2026, 10, 31, 12, 35, 0).unwrap(),
             status_code: 200,
@@ -1700,55 +1461,54 @@ fn test_write() {
             usage: r#"{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}"#.to_string(),
             extra: Vec::new(),
         }),
-    }).expect("failed to serialize"), concat!(
-        "message-3:\n",
-        "  parent-id: 2\n",
-        "  role: assistant\n",
-        "  content:\n",
-        "  - kind: reasoning\n",
-        "    value: why do you enable reasoning for this simple work?\n",
-        "  - kind: text\n",
-        "    value: let me read the files...\n",
-        "  - kind: tool-use\n",
-        "    id: id1\n",
-        "    name: read-file\n",
-        "    input: '{ pathname: \"src/main.rs\" }'\n",
-        "  - kind: tool-use\n",
-        "    id: id2\n",
-        "    name: read-file\n",
-        "    input: '{ pathname: \"src/session.rs\" }'\n",
-        "  response:\n",
-        "    thinking: high\n",
-        "    request-tools:\n",
-        "    - tool1\n",
-        "    - tool2\n",
-        "    start-time: 2026-10-31T12:33:00Z\n",
-        "    complete-time: 2026-10-31T12:35:00Z\n",
-        "    status-code: 200\n",
-        "    header-x-ds-trace-id: x-ds-trace-id-1\n",
-        "    model: deepseek-flasher\n",
-        "    stop-reason: tool_use\n",
-        r#"    usage: '{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}'"#, "\n",
-    ));
+    }).expect("failed to serialize"), vec![
+        "message-3:",
+        "  parent-id: 2",
+        "  role: assistant",
+        "  content: !Blocks", // this is very advanced
+        "  - kind: think",
+        "    value: why do you enable reasoning for this simple work?",
+        "  - kind: text",
+        "    value: let me read the files...",
+        "  - kind: tool-use",
+        "    id: id1",
+        "    name: read-file",
+        "    input: '{ pathname: \"src/main.rs\" }'",
+        "  - kind: tool-use",
+        "    id: id2",
+        "    name: read-file",
+        "    input: '{ pathname: \"src/session.rs\" }'",
+        "  request:",
+        "    think: high",
+        "    tools:",
+        "    - tool1",
+        "    - tool2",
+        "  response:",
+        "    start-time: 2026-10-31T12:33:00Z",
+        "    status-code: 200",
+        "    header-x-ds-trace-id: x-ds-trace-id-1",
+        "    complete-time: 2026-10-31T12:35:00Z",
+        "    model: deepseek-flasher",
+        "    stop-reason: tool_use",
+        r#"    usage: '{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}'"#, "",
+    ].join("\n"));
 
-    assert_eq!(serialize_message(Message {
+    assert_eq!(serialize_message(&Message {
         id: 5,
         parent_id: 42,
         role: Role::Assistant,
-        content: vec![
-            ContentBlock::Text(TextBlock{ value: "this file contains...\nand this file...".to_string(), name: None }),
-        ],
+        content: Content::String("this file contains...\nand this file...".to_string()),
         request_config: None,
         response_metadata: None,
-    }).expect("failed to serialize"), concat!(
-        "message-5:\n",
-        "  parent-id: 42\n",
-        "  role: assistant\n",
+    }).expect("failed to serialize"), vec![
+        "message-5:",
+        "  parent-id: 42",
+        "  role: assistant",
         // what's this |-
-        "  content: |-\n",
-        "    this file contains...\n",
-        "    and this file...\n",
-    ));
+        "  content: !String |-",
+        "    this file contains...",
+        "    and this file...", "",
+    ].join("\n"));
 }
 
 #[test]
