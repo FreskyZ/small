@@ -1170,6 +1170,10 @@ async function handleWorkCommand(parameters: string[]) {
                 const [operator, value] = [match[1], +match[2]];
                 ctx.meta.score = operator == '=' ? value : operator == '+' ? ctx.meta.score + value : ctx.meta.score - value;
                 logInfo(`${workId}: score ${operator} ${value}${operator != '=' ? ` = ${ctx.meta.score}` : ''}`);
+                // score implies access
+                const currentTime = getCurrentTime();
+                logInfo(`${workId}: access ${currentTime}`);
+                ctx.meta.lastAccessTime = currentTime;
             }
         }
     } else if (parameters[1] == 'access') {
@@ -1297,6 +1301,13 @@ async function handleMakePage() {
         <input type="number" id="page-number" value="1"></input>
         <span id="page-count"></span>
         <button id="page-next">&gt;</button>
+        <select id="sort-method">
+            <option value="default">Default</option>
+            <option value="rjid-asc">Work ID</option>
+            <option value="time-asc">Access Time</option>
+            <option value="score-desc">Score</option>
+            <option value="time+score">Time and Score</option>
+        </select>
     </div>
   </header>
   <div id="summary-container"></div>
@@ -1324,7 +1335,7 @@ async function handleMakePage() {
     // sort to make index.html stable
     metadatas.sort((m1, m2) => m1.id.localeCompare(m2.id));
     for (const metadata of metadatas) { 
-        summaryContainerElement += `    <div class="summary" data-id="${metadata.id}">${metadata.title}</div>\n`;
+        summaryContainerElement += `    <div class="summary" data-id="${metadata.id}" data-time="${metadata.lastAccessTime}" data-score="${metadata.score}">${metadata.title}</div>\n`;
     }
     summaryContainerElement += '  </div>';
     template = template.replace('<div id="summary-container"></div>', summaryContainerElement);

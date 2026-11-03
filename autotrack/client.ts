@@ -39,6 +39,8 @@ function getAllWorks() {
         results.push({
             id: element.dataset['id'],
             title: element.innerText,
+            lastAccessTime: element.dataset['time'],
+            score: +element.dataset['score'],
         } as unknown as WorkMetadata);
         element.remove();
     });
@@ -70,6 +72,8 @@ const WorkPerPage = 16;
 
 // all page state
 interface PageState {
+    // default is the once shuffled order per page load
+    sortMethod: 'default' | 'rjid-asc' | 'time-asc' | 'score-desc' | 'time+score',
     pageNumber: number,
     scrollPosition: number,
     activeWorkId: string,
@@ -77,6 +81,7 @@ interface PageState {
     activeTrackPlainIndex: number,
 }
 const state: PageState = {
+    sortMethod: 'default',
     // start with invalid value, so that diff check in render can initial render page number = 1
     pageNumber: 0,
     scrollPosition: 0,
@@ -97,6 +102,7 @@ const pagerElements = {
     nextButton: document.querySelector<HTMLButtonElement>('button#page-next'),
     valueInput: document.querySelector<HTMLInputElement>('input#page-number'),
     totalCount: document.querySelector<HTMLSpanElement>('span#page-count'),
+    sortMethod: document.querySelector<HTMLSelectElement>('select#sort-method'),
 };
 pagerElements.container.classList.add('visible');
 pagerElements.totalCount.innerText = `/${Math.ceil(allworks.length / WorkPerPage)}`;
@@ -107,12 +113,18 @@ pagerElements.nextButton.addEventListener('click', () => {
     if (state.pageNumber < Math.ceil(allworks.length / WorkPerPage)) { render({ pageNumber: state.pageNumber + 1 }); }
 });
 pagerElements.valueInput.addEventListener('focusin', () => pagerElements.valueInput.select());
-pagerElements.valueInput.addEventListener('change', e => {
+pagerElements.valueInput.addEventListener('change', () => {
     const newPageNumber = +pagerElements.valueInput.value;
     if (!isNaN(newPageNumber) && newPageNumber >= 1 && newPageNumber <= Math.ceil(allworks.length / WorkPerPage)) {
         render({ pageNumber: newPageNumber });
     }
-})
+});
+pagerElements.sortMethod.addEventListener('change', () => {
+    const newSortMethod = pagerElements.sortMethod.options[pagerElements.sortMethod.selectedIndex].value as PageState['sortMethod'];
+    if (newSortMethod != state.sortMethod) {
+        render({ sortMethod: newSortMethod, pageNumber: 1 });
+    }
+});
 
 const summaryElements = {
     container: document.querySelector<HTMLDivElement>('div#summary-container'),
@@ -327,14 +339,29 @@ createPlayerElements();
 // input newstate here so you can diff them to make render more efficient
 async function render(newState: Partial<PageState>) {
 
-    if ('pageNumber' in newState && newState.pageNumber != state.pageNumber) {
+    if ('sortMethod' in newState || ('pageNumber' in newState && newState.pageNumber != state.pageNumber)) {
+        state.sortMethod = newState.sortMethod || state.sortMethod;
         state.pageNumber = newState.pageNumber;
         pagerElements.valueInput.value = state.pageNumber.toString();
         // summary
         summaryElements.container.scrollTo(0, 0);
         summaryElements.works.forEach(e => e.container.classList.remove('visible'));
+        const orderedWorks = [...allworks].sort((w1, w2) =>
+            // overall user story is find low impression works,
+            // recently used increase impression, high score increase impression
+            state.sortMethod == 'default' ? allworks.indexOf(w1) - allworks.indexOf(w2)
+            : state.sortMethod == 'rjid-asc' ? w1.id.localeCompare(w2.id)
+            // time asc: find long time no access works
+            : state.sortMethod == 'time-asc' ? w1.lastAccessTime.localeCompare(w2.lastAccessTime)
+            // score desc: find high score works
+            : state.sortMethod == 'score-desc' ? w2.score - w1.score
+            // unify time and score to find low impression, regard 1 score as 1 week, or 4 score as 1 month
+            : state.sortMethod == 'time+score'
+                ? +w1.lastAccessTime.substring(0, 4) * 12 + +w1.lastAccessTime.substring(4, 6) + w1.score / 4
+                    - (+w2.lastAccessTime.substring(0, 4) * 12 + +w2.lastAccessTime.substring(4, 6) + w2.score / 4)
+            : allworks.indexOf(w1) - allworks.indexOf(w2));
         // slice allow ending index overflow by the way
-        const displayWorks = allworks.slice(WorkPerPage * (state.pageNumber - 1), WorkPerPage * state.pageNumber);
+        const displayWorks = orderedWorks.slice(WorkPerPage * (state.pageNumber - 1), WorkPerPage * state.pageNumber);
         for (const [work, index] of displayWorks.map((w, i) => [w, i] as const)) {
             summaryElements.works[index].container.classList.add('visible');
             summaryElements.works[index].container.dataset['id'] = work.id;
