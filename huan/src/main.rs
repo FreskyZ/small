@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -406,7 +406,7 @@ fn validate_session(session: &Session) -> Result<()> {
 // persistant storage want to use kind, tool-use, etc., api have to use type, tool_use, etc.
 // and I'm lazy to really manually implement the serialize or deserialize implementation,
 // it's not very not ok to duplicate the types, because they will eventually be in far away modules
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 enum RequestContentBlock {
     #[serde(rename = "text")]
@@ -435,7 +435,7 @@ enum RequestContentBlock {
     },
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 enum RequestMessageContent {
     String(String),
@@ -628,6 +628,7 @@ struct Event {
     data: String,
 }
 
+// event stream parser: push bytes, pull events
 struct EventStreamParser {
     buffer: BytesMut,
     position: usize,
@@ -719,6 +720,196 @@ impl EventStreamParser {
     }
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type")]
+enum DeltaContentBlock {
+    #[serde(rename = "text_delta")]
+    Text{ text: String },
+    #[serde(rename = "thinking_delta")]
+    Think{ thinking: String },
+    #[serde(rename = "signature_delta")]
+    Signature{ signature: String },
+    #[serde(rename = "input_json_delta")]
+    ToolInput{ partial_json: String },
+}
+#[derive(Debug, Deserialize)]
+struct DeltaStopReason {
+    stop_reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum DeltaEvent {
+    MessageStart{
+        message: ResponseMessage,
+    },
+    ContentBlockStart{
+        index: usize,
+        content_block: RequestContentBlock,
+    },
+    ContentBlockDelta{
+        index: usize,
+        delta: DeltaContentBlock,
+    },
+    ContentBlockStop{
+        index: usize,
+    },
+    MessageDelta{
+        delta: DeltaStopReason,
+        usage: serde_json::Value,
+    },
+    MessageStop,
+    // document says there will be ping
+    Ping,
+    // document says there may be no error event?
+    // Error,
+}
+impl DeltaEvent {
+    // print event name without reading data or debug print
+    fn name(&self) -> &'static str {
+        match self {
+            Self::MessageStart{..} => "message_start",
+            Self::ContentBlockStart{..} => "content_block_start",
+            Self::ContentBlockDelta{..} => "content_block_delta",
+            Self::ContentBlockStop{..} => "content_block_stop",
+            Self::MessageDelta{..} => "message_delta",
+            Self::MessageStop => "message_stop",
+            Self::Ping => "ping",
+        }
+    }
+}
+
+// this result itself is not deserialized from text, but many of its
+// properties are in message-start event so this need to be deserialized for that
+#[derive(Debug, Deserialize, PartialEq)]
+struct ResponseMessage {
+    id: String,
+    // keep to validate constant values
+    r#type: String,
+    role: String,
+    model: String,
+    // streaming messages api don't have plain string content
+    content: Vec<RequestContentBlock>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: Option<String>,
+    usage: serde_json::Value,
+}
+
+struct DeltaAssembler {
+    message: ResponseMessage,
+    // started blocks
+    blocks: HashMap<usize, RequestContentBlock>,
+    // completed blocks, not sure whether will receive blocks by index,
+    // so completed blocks still need map and validate index gap after complete
+    completed_blocks: HashMap<usize, RequestContentBlock>,
+    stopped: bool,
+}
+impl DeltaAssembler {
+
+    // parse json and validate event.name is same as event.data.type
+    fn parse_event(event: Event) -> Result<DeltaEvent> {
+        let data: DeltaEvent = serde_json::from_str(&event.data)?;
+        if let Some(name) = event.name && name != data.name() {
+            bail!("event.name and event.data.type mismatch, {} != {}", name, data.name());
+        }
+        Ok(data)
+    }
+
+    // try create with message_start event
+    // return None if is expected ping event, return Err if json parse error or other event types
+    fn try_new(event: Event) -> Result<Option<Self>> {
+        let event = Self::parse_event(event)?;
+        match event {
+            DeltaEvent::Ping => Ok(None),
+            DeltaEvent::MessageStart { message } => Ok(Some(Self{
+                message,
+                blocks: HashMap::new(),
+                completed_blocks: HashMap::new(),
+                stopped: false,
+            })),
+            e => bail!("unexpected event {} before message_start", e.name()),
+        }
+    }
+    fn push(&mut self, event: Event) -> Result<()> {
+        let event = Self::parse_event(event)?;
+        if self.stopped { bail!("event after message stopped"); }
+
+        match event {
+            DeltaEvent::Ping => {},
+            DeltaEvent::MessageStart{..} => bail!("duplicate message_start event"),
+            DeltaEvent::ContentBlockStart { index, content_block } => {
+                if self.blocks.insert(index, content_block).is_some() {
+                    bail!("block {} started again", index);
+                } else if self.completed_blocks.contains_key(&index) {
+                    bail!("block {} started after completed", index);
+                }
+            },
+            DeltaEvent::ContentBlockDelta { index, delta } => {
+                if self.completed_blocks.contains_key(&index) {
+                    bail!("block {} delta after completed", index);
+                }
+                let Some(block) = self.blocks.get_mut(&index) else {
+                    bail!("block {} delta before start", index);
+                };
+                match (delta, block) {
+                        // std string is not rope, cannot merge 2 owned string together without copy
+                    (DeltaContentBlock::Text { text: text_delta },
+                        RequestContentBlock::Text { text }) => text.push_str(&text_delta),
+                    (DeltaContentBlock::Think { thinking: thinking_delta },
+                        RequestContentBlock::Think{ thinking, .. }) => thinking.push_str(&thinking_delta),
+                    (DeltaContentBlock::Signature { signature: signature_delta },
+                        RequestContentBlock::Think{ signature, .. }) => signature.push_str(&signature_delta),
+                    (DeltaContentBlock::ToolInput { partial_json },
+                        RequestContentBlock::ToolUse{ input, .. }) => input.push_str(&partial_json),
+                    (delta, block) => bail!("block delta type mismatch? {:?}, {:?}", delta, block),
+                }
+            },
+            DeltaEvent::ContentBlockStop{ index } => {
+                if let Some(block) = self.blocks.remove(&index) {
+                    match block {
+                        RequestContentBlock::Text{ text } if text.is_empty() =>
+                            bail!("block {} stopped before any content? (3)", index),
+                        RequestContentBlock::Think{ thinking, .. } if thinking.is_empty() =>
+                            bail!("block {} stopped before any content? (1)", index),
+                        RequestContentBlock::ToolUse{ input, .. } if input.is_empty() =>
+                            bail!("block {} stopped before any content? (2)", index),
+                        _ => {}, // ok
+                    }
+                    self.completed_blocks.insert(index, block);
+                } else {
+                    bail!("block {} stopped before started?", index);
+                }
+            },
+            DeltaEvent::MessageDelta{ delta, usage } => {
+                self.message.stop_reason = Some(delta.stop_reason);
+                self.message.usage = usage;
+            },
+            DeltaEvent::MessageStop => {
+                self.stopped = true;
+                // don't forget to move blocks into message
+                if !self.blocks.is_empty() {
+                    bail!("some blocks not stopped when message stopped {:?}", self.blocks.keys());
+                }
+                if self.completed_blocks.is_empty() {
+                    bail!("message stopped before any content blocks?");
+                }
+                // usize already restricted values >= 0, so compare max and len is enough for find holes
+                // unwrap: validated is not empty
+                let max_index = self.completed_blocks.keys().max().unwrap();
+                if *max_index + 1 > self.completed_blocks.len() {
+                    bail!("is it possible to have gaps in content block indexes?");
+                }
+                for index in 0..=*max_index {
+                    // unwrap: validated index is continuous start from 0
+                    self.message.content.push(self.completed_blocks.remove(&index).unwrap());
+                }
+            },
+        }
+        Ok(())
+    }
+}
+
+
 #[tokio::main]
 async fn main() -> Result<()> {
 
@@ -732,426 +923,86 @@ async fn main() -> Result<()> {
     let request = prepare_request(&session)?;
     println!("request {:?}", request);
 
-    // let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
-    //     bail!("env var HUAN_API_KEY missing");
-    // };
-    // let client = reqwest::Client::builder().build()?;
-    // let request = client
-    //     .post("https://api.deepseek.com/anthropic/v1/messages")
-    //     .header("content-type", "application/json")
-    //     .bearer_auth(api_key)
-    //     .json(request).build()?;
+    let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
+        bail!("env var HUAN_API_KEY missing");
+    };
+    let client = reqwest::Client::builder().build()?;
+    let request = client
+        .post("https://api.deepseek.com/anthropic/v1/messages")
+        .header("content-type", "application/json")
+        .bearer_auth(api_key)
+        .json(&request).build()?;
     let start_time = Utc::now();
-    // let response = client.execute(request).await?;
+    let response = client.execute(request).await?;
 
-    let status = reqwest::StatusCode::from_u16(200).unwrap();
-    // let status = response.status();
-    // if !status.is_success() {
-    //     let body = response.text().await?;
-    //     bail!("response error {}: {}", status, body);
-    // }
-    // let mut headers = Vec::new();
-    // for (name, value) in response.headers() {
-    //     headers.push((name.to_string(), format!("{:?}", value)));
-    //     println!("header {}: {:?}", name, value);
-    // }
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().await?;
+        bail!("response error {}: {}", status, body);
+    }
+    let mut headers = Vec::new();
+    for (name, value) in response.headers() {
+        headers.push((name.to_string(), format!("{:?}", value)));
+        println!("header {}: {:?}", name, value);
+    }
 
-    // let mut stream = response.bytes_stream();
+    let mut stream = response.bytes_stream();
     let mut parser = EventStreamParser::new();
+    let mut assembler = None;
+    let mut extra = Vec::new();
 
-    let mut has_error = false;
-    let mut message_started = false;
-    let mut message_finished = false;
-    let mut result_document = serde_json::Map::new();
-    // let mut extra = Vec::new();
-
-    // while let Some(chunk) = stream.next().await {
-    //     let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
-
-    for chunk in [
-        b"event: message_start\n" as &[u8],
-        br#"data: {"type":"message_start","message":{"id":"e6ef6a63-a078-4f53-a73b-38c8d1d46310","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}}"#,
-        b"\n\n",
-        b"event: content_block_start\n",
-        br#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
-        b"\n\n",
-        b"event: ping\n",
-        br#"data: {"type":"ping"}"#,
-        b"\n\n",
-        b"event: content_block_delta\n",
-        br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}"#,
-        b"\n\n",
-        b"event: content_block_stop\n",
-        br#"data: {"type":"content_block_stop","index":0}"#,
-        b"\n\n",
-        b"event: message_delta\n",
-        br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}}"#,
-        b"\n\n",
-        b"event: message_stop\n",
-        br#"data: {"type":"message_stop"}"#,
-        b"\n\n",
-    ].map(|c| Bytes::from_static(c)) {
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
+        println!("{}", String::from_utf8_lossy(chunk.as_ref()));
         parser.push(chunk);
         while let Some(event) = parser.pull(&mut extra)? {
-            println!("event {:?} {}", event.name, event.data);
-            let Ok(mut object) = serde_json::from_str::<Node>(&event.data) else {
-                has_error = true; println!("failed to parse json?"); continue;
-            };
-            let Some(Node::String(data_type)) = object.get("type") else {
-                has_error = true; println!("missing type in json?"); continue;
-            };
-            if let Some(name) = &event.name {
-                if name != data_type {
-                    has_error = true; println!("event name not same as data type?"); // but not abort this event
-                }
+            // TODO is if let capturing lifetime too long?
+            if assembler.is_none() {
+                assembler = DeltaAssembler::try_new(event)?;
             } else {
-                has_error = true; println!("event don't have a name?"); // but not abort this event
-            }
-            if data_type == "ping" { println!("skip ping"); continue; }
-            match data_type.as_str() {
-                "message_start" => {
-                    if message_started { has_error = true; println!("message started again?"); }
-                    if message_finished { has_error = true; println!("message started after finished?"); }
-                    message_started = true;
-                    let Some(message_node) = object.get_mut("message") else {
-                        has_error = true; println!("missing message? (1)"); continue;
-                    };
-                    let Node::Object(mut message_node) = message_node.take() else {
-                        has_error = true; println!("message is not object? (1)"); continue;
-                    };
-                    if let Some(content) = message_node.get_mut("content") {
-                        if !content.is_array() {
-                            println!("content is not array? (1)");
-                            *content = Node::Array(Vec::new());
-                        }
-                    } else {
-                        println!("don't have a content property?");
-                        message_node.insert("content".to_string(), Node::Array(Vec::new()));
-                    }
-                    result_document = message_node;
-                },
-                "content_block_start" => {
-                    if !message_started { println!("content block started before message started?"); }
-                    if message_finished { println!("content block started after finished?"); }
-
-                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
-                        has_error = true; println!("block index missing or is not number?"); continue;
-                    };
-                    let Some(block_index) = block_index.as_u64() else {
-                        has_error = true; println!("block index not fit in u64?"); continue;
-                    };
-                    let block_index = block_index as usize;
-
-                    let Some(content_block_node) = object.get_mut("content_block").map(|v| v.take()) else {
-                        has_error = true; println!("content block itself missing?"); continue;
-                    };
-                    let Node::Object(mut content_block_node) = content_block_node else {
-                        has_error = true; println!("content block itself is not object?"); continue;
-                    };
-                    let Some(Node::String(block_type)) = content_block_node.get_mut("type").map(|v| v.take()) else {
-                        has_error = true; println!("block type missing or is not string?"); continue;
-                    };
-                    match block_type.as_str() {
-                        "text" => {
-                            println!("==========");
-                            println!("text start");
-                            println!("==========");
-                            if let Some(Node::String(text)) = content_block_node.get("text") && !text.is_empty() {
-                                println!("there is already text in content_block_start event? {}", text);
-                            }
-                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
-                            if result_content.len() < block_index {
-                                println!("result content length and block index mismatch?");
-                                // e.g. left=3, right=5, need insert 3,4 and later common logic to insert 5
-                                for _ in result_content.len()..block_index {
-                                    result_content.push(Node::Null);
-                                }
-                            }
-                            if result_content.len() == block_index {
-                                result_content.push(Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("text".to_string())),
-                                    ("text".to_string(), Node::String("".to_string())),
-                                ].into_iter())));
-                            }
-                            if result_content.len() > block_index && result_content[block_index].is_null() {
-                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("text".to_string())),
-                                    ("text".to_string(), Node::String("".to_string())),
-                                ].into_iter()));
-                            }
-                        },
-                        "thinking" => {
-                            println!("==============");
-                            println!("thinking start");
-                            println!("==============");
-                            if let Some(Node::String(text)) = content_block_node.get("thinking") && !text.is_empty() {
-                                println!("there is already thinking text in content_block_start event? {}", text);
-                            }
-                            if let Some(Node::String(text)) = content_block_node.get("signature") && !text.is_empty() {
-                                println!("there is already signature text in content_block_start event? {}", text);
-                            }
-                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
-                            if result_content.len() < block_index {
-                                println!("result content length and block index mismatch? (2)");
-                                for _ in result_content.len()..block_index {
-                                    result_content.push(Node::Null);
-                                }
-                            }
-                            if result_content.len() == block_index {
-                                result_content.push(Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("thinking".to_string())),
-                                    ("thinking".to_string(), Node::String("".to_string())),
-                                    ("signature".to_string(), Node::String("".to_string())),
-                                ].into_iter())));
-                            }
-                            if result_content.len() > block_index && result_content[block_index].is_null() {
-                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("thinking".to_string())),
-                                    ("thinking".to_string(), Node::String("".to_string())),
-                                    ("signature".to_string(), Node::String("".to_string())),
-                                ].into_iter()));
-                            }
-                        },
-                        "tool_use" => {
-                            let Some(Node::String(tool_use_id)) = content_block_node.get("id") else {
-                                has_error = true; println!("missing tool use id?"); continue;
-                            };
-                            let Some(Node::String(tool_use_name)) = content_block_node.get("name") else {
-                                has_error = true; println!("missing tool use name?"); continue;
-                            };
-                            println!("==============");
-                            println!("tool use {} {}", tool_use_id, tool_use_name);
-                            println!("==============");
-                            if let Some(Node::String(text)) = content_block_node.get("input") && !text.is_empty() {
-                                println!("there is already input text in content_block_start event? {}", text);
-                            }
-                            let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
-                            if result_content.len() < block_index {
-                                println!("result content length and block index mismatch? (3)");
-                                for _ in result_content.len()..block_index {
-                                    result_content.push(Node::Null);
-                                }
-                            }
-                            if result_content.len() == block_index {
-                                result_content.push(Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("tool_use".to_string())),
-                                    ("id".to_string(), Node::String(tool_use_id.to_string())),
-                                    ("name".to_string(), Node::String(tool_use_name.to_string())),
-                                ].into_iter())));
-                            }
-                            if result_content.len() > block_index && result_content[block_index].is_null() {
-                                result_content[block_index] = Node::Object(serde_json::Map::from_iter([
-                                    ("type".to_string(), Node::String("tool_use".to_string())),
-                                    ("id".to_string(), Node::String(tool_use_id.to_string())),
-                                    ("name".to_string(), Node::String(tool_use_name.to_string())),
-                                ].into_iter()));
-                            }
-                        },
-                        unknown => {
-                            has_error = true; println!("unknown content block type? {}", unknown); continue;
-                        },
-                    }
-                },
-                "content_block_delta" => {
-                    if !message_started { println!("content block delta before message started?"); }
-                    if message_finished { println!("content block delta after finished?"); }
-
-                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
-                        has_error = true; println!("block index missing or is not number? (2)"); continue;
-                    };
-                    let Some(block_index) = block_index.as_u64() else {
-                        has_error = true; println!("block index not fit in u64? (2)"); continue;
-                    };
-                    let block_index = block_index as usize;
-
-                    let Some(delta_node) = object.get_mut("delta").map(|v| v.take()) else {
-                        has_error = true; println!("delta missing?"); continue;
-                    };
-                    let Node::Object(mut delta_node) = delta_node else {
-                        has_error = true; println!("delta is not object?"); continue;
-                    };
-                    let Some(Node::String(delta_type)) = delta_node.get_mut("type").map(|v| v.take()) else {
-                        has_error = true; println!("delta type missing or is not string?"); continue;
-                    };
-                    let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
-                    if result_content.len() <= block_index {
-                        has_error = true; println!("block index delta'd before started?"); continue;
-                    }
-                    let result_content_block = &mut result_content[block_index];
-                    let Node::Object(result_content_block) = result_content_block else {
-                        has_error = true; println!("block index delta'd before started?"); continue;
-                    };
-                    match delta_type.as_str() {
-                        "text_delta" => {
-                            let Some(Node::String(text)) = delta_node.get("text") else {
-                                has_error = true; println!("missing text?"); continue;
-                            };
-                            print!("{}", text);
-                            let Node::String(result_block_text) = result_content_block.get_mut("text").unwrap() else {
-                                unreachable!();
-                            };
-                            result_block_text.push_str(text);
-                        },
-                        "thinking_delta" => {
-                            let Some(Node::String(text)) = delta_node.get("thinking") else {
-                                has_error = true; println!("thinking missing?"); continue;
-                            };
-                            print!("{}", text);
-                            let Node::String(result_block_text) = result_content_block.get_mut("thinking").unwrap() else {
-                                unreachable!();
-                            };
-                            result_block_text.push_str(text);
-                        },
-                        "signature_delta" => {
-                            let Some(Node::String(text)) = delta_node.get("signature") else {
-                                has_error = true; println!("signature missing?"); continue;
-                            };
-                            print!("(signature delta){}", text);
-                            let Node::String(result_block_text) = result_content_block.get_mut("signature").unwrap() else {
-                                unreachable!();
-                            };
-                            result_block_text.push_str(text);
-                        },
-                        "input_json_delta" => {
-                            let Some(Node::String(text)) = delta_node.get("partial_json") else {
-                                has_error = true; println!("partial_json missing?"); continue;
-                            };
-                            print!("(signature delta){}", text);
-                            let Node::String(result_block_text) = result_content_block.get_mut("input").unwrap() else {
-                                unreachable!();
-                            };
-                            result_block_text.push_str(text);
-                        },
-                        unknown => {
-                            has_error = true; println!("unknown content block type? {}", unknown); continue;
-                        },
-                    }
-                },
-                "content_block_stop" => {
-                    if !message_started { println!("content block stop before message started?"); }
-                    if message_finished { println!("content block stop after finished?"); }
-
-                    let Some(Node::Number(block_index)) = object.get_mut("index").map(|v| v.take()) else {
-                        has_error = true; println!("block index missing or is not number? (2)"); continue;
-                    };
-                    let Some(block_index) = block_index.as_u64() else {
-                        has_error = true; println!("block index not fit in u64? (2)"); continue;
-                    };
-                    let block_index = block_index as usize;
-                    let Node::Array(result_content) = result_document.get_mut("content").unwrap() else { unreachable!() };
-                    if result_content.len() <= block_index {
-                        has_error = true; println!("block index stopped before started?"); continue;
-                    }
-                    let result_content_block = &mut result_content[block_index];
-                    let Node::Object(_) = result_content_block else {
-                        has_error = true; println!("block index stopped before started?"); continue;
-                    };
-                },
-                "message_delta" => {
-                    if !message_started { println!("message delta before message started?"); }
-                    if message_finished { println!("message delta after stop?"); }
-
-                    let Some(delta_node) = object.get_mut("delta").map(|v| v.take()) else {
-                        has_error = true; println!("delta missing? (2)"); continue;
-                    };
-                    let Node::Object(mut delta_node) = delta_node else {
-                        has_error = true; println!("delta is not object?"); continue;
-                    };
-                    let Some(Node::String(stop_reason)) = delta_node.get_mut("stop_reason").map(|v| v.take()) else {
-                        has_error = true; println!("stop reason missing or is not string?"); continue;
-                    };
-                    println!("stop reason {}", stop_reason);
-                    if let Some(stop_reason_node) = result_document.get_mut("stop_reason") {
-                        *stop_reason_node = Node::String(stop_reason);
-                    } else {
-                        result_document.insert("stop_reason".to_string(), Node::String(stop_reason));
-                    }
-                    let Some(usage) = object.get_mut("usage").map(|v| v.take()) else {
-                        has_error = true; println!("usage missing? (1)"); continue;
-                    };
-                    let Ok(display_usage) = serde_json::to_string(&usage) else {
-                        has_error = true; println!("stringify usage error?"); continue;
-                    };
-                    if let Some(usage_node) = result_document.get_mut("usage") {
-                        *usage_node = usage;
-                    } else {
-                        result_document.insert("usage".to_string(), usage);
-                    }
-                    println!("usage {}", display_usage);
-                },
-                "message_stop" => {
-                    if !message_started { println!("message stop before message started?"); }
-                    if message_finished { println!("message stop again?"); }
-                    message_finished = true;
-                },
-                other => {
-                    has_error = true; println!("unknown event type? {}", other); continue;
-                },
+                assembler.as_mut().map(|assembler| assembler.push(event));
             }
         }
     }
 
     let complete_time = Utc::now();
-    println!("{:?}", result_document);
-    if has_error {
-        bail!("has error");
+    let Some(assembler) = assembler else {
+        bail!("assembler even not created?");
+    };
+    if !assembler.stopped {
+        bail!("assembler not properly stopped");
     }
+    println!("{:?}", assembler.message);
+    let response_message = assembler.message;
 
-    let Node::String(model) = result_document.get_mut("model").unwrap().take() else { unreachable!() };
-    let Node::Array(result_content_blocks) = result_document.get_mut("content").unwrap().take() else { unreachable!(); };
-    let Node::String(stop_reason) = result_document.get_mut("stop_reason").unwrap().take() else { unreachable!() };
-    let usage = result_document.get_mut("usage").unwrap().take();
-    let usage = serde_json::to_string(&usage)?;
-
-    // result document has model, content: { type: text, text: string } | { type: thinking, thinking: string, signature: string } | { type: tool_use, id: string, name: string, input: string }[], stop_reason, usage
-    let target_message = session.messages.iter().find(|m| m.request_config.is_some()).unwrap();
+    // unwrap: validated in prepare request
+    let request_config = session.request_config.unwrap();
     let result_message = Message {
-        id: target_message.id,
-        parent_id: target_message.parent_id,
+        id: request_config.message_id,
+        parent_id: request_config.parent_message_id,
         role: Role::Assistant,
-        content: result_content_blocks.into_iter().map(|mut r| match r.get("type").unwrap().as_str().unwrap() {
-            "text" => {
-                let Node::String(text) = r.get_mut("text").unwrap().take() else {
-                    unreachable!("missing text");
-                };
-                ContentBlock::Text(TextBlock{ name: None, value: text })
-            },
-            "thinking" => {
-                let Node::String(text) = r.get_mut("thinking").unwrap().take() else {
-                    unreachable!("missing thinking");
-                };
-                ContentBlock::Reasoning(TextBlock{ name: None, value: text })
-            },
-            "tool_use" => {
-                let Node::String(id) = r.get_mut("id").unwrap().take() else {
-                    unreachable!("missing id");
-                };
-                let Node::String(name) = r.get_mut("name").unwrap().take() else {
-                    unreachable!("missing name");
-                };
-                let Node::String(input) = r.get_mut("input").unwrap().take() else {
-                    unreachable!("missing input");
-                };
-                ContentBlock::ToolUse(ToolUseBlock{ id, name, input })
-            },
-            _ => unreachable!(),
-        }).collect(),
-        request_config: None,
+        request_config: Some(request_config.config),
         response_metadata: Some(ResponseMetadata {
-            request_config: target_message.request_config.unwrap(),
             start_time,
-            complete_time,
             status_code: status.as_u16() as usize,
             headers,
-            model,
-            stop_reason,
-            usage,
-            extra,
+            complete_time,
+            model: response_message.model,
+            // unwrap: stop reason is required in message_delta event
+            stop_reason: response_message.stop_reason.unwrap(),
+            usage: response_message.usage.to_string(),
+            extra: Vec::new(), // TODO
         }),
+        content: Content::Blocks(response_message.content.into_iter().map(|block| match block {
+            RequestContentBlock::Text { text } => ContentBlock::Text{ name: None, value: text },
+            RequestContentBlock::Think { thinking, signature } => ContentBlock::Think{ value: thinking, signature },
+            RequestContentBlock::ToolUse { id, name, input } => ContentBlock::ToolUse{ id, name, input },
+            RequestContentBlock::ToolResult {..} => unreachable!("tool-result?"),
+        }).collect()),
     };
 
-    let serialized_message = serialize_message(&result_message)?;
-    let output_content = format!("{}\n{}", session_original_content, serialized_message);
+    let result_message = serialize_message(&result_message)?;
+    let output_content = format!("{}\n{}", session_original_content, result_message);
     fs::write("example-output.yml", output_content)?;
 
     Ok(())
@@ -1776,4 +1627,59 @@ data: {"type":"message_stop"}
     assert_eq!(event.name.as_deref(), Some("message_stop"));
     assert_eq!(event.data, r#"{"type":"message_stop"}"#);
     assert!(parser.pull(&mut ex).expect("failed to pull?").is_none());
+}
+
+#[test]
+fn test_assembler() {
+
+    let mut parser = EventStreamParser::new();
+    let mut assembler = None;
+    let mut extra = Vec::new();
+
+    for chunk in [
+        b"event: message_start\n" as &[u8],
+        br#"data: {"type":"message_start","message":{"id":"e6ef6a63-a078-4f53-a73b-38c8d1d46310","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}}"#,
+        b"\n\n",
+        b"event: content_block_start\n",
+        br#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+        b"\n\n",
+        b"event: ping\n",
+        br#"data: {"type":"ping"}"#,
+        b"\n\n",
+        b"event: content_block_delta\n",
+        br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}"#,
+        b"\n\n",
+        b"event: content_block_stop\n",
+        br#"data: {"type":"content_block_stop","index":0}"#,
+        b"\n\n",
+        b"event: message_delta\n",
+        br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}}"#,
+        b"\n\n",
+        b"event: message_stop\n",
+        br#"data: {"type":"message_stop"}"#,
+        b"\n\n",
+    ].map(|c| Bytes::from_static(c)) {
+        parser.push(chunk);
+        while let Some(event) = parser.pull(&mut extra).expect("parser pull failed") {
+            // TODO is if let capturing lifetime too long?
+            if assembler.is_none() {
+                assembler = DeltaAssembler::try_new(event).expect("try new error");
+            } else {
+                assembler.as_mut().map(|assembler| assembler.push(event));
+            }
+        }
+    }
+    let Some(assembler) = assembler else { panic!("not started") };
+    assert!(assembler.stopped);
+    assert_eq!(assembler.message, ResponseMessage {
+        id: "e6ef6a63-a078-4f53-a73b-38c8d1d46310".to_string(),
+        r#type: "message".to_string(),
+        role: "assistant".to_string(),
+        model: "deepseek-flash".to_string(),
+        content: vec![
+            RequestContentBlock::Text{ text: "Hello!".to_string() },
+        ],
+        stop_reason: Some("end_turn".to_string()),
+        usage: serde_json::json!({"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}),
+    });
 }
