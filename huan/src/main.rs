@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use anyhow::{Context as _, Result, anyhow, bail};
+use anyhow::{Result, bail};
 use bytes::{BufMut as _, Bytes, BytesMut};
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
@@ -9,10 +9,6 @@ use reqwest;
 use serde::{Serializer, Deserializer, Serialize, Deserialize};
 use serde::ser::SerializeMap as _;
 use serde::de::{MapAccess, SeqAccess, IgnoredAny, Error as DeserializeError};
-
-// // preceed j makes it looks like java library
-use serde_json::Value as JValue;
-type JMap = serde_json::Map<String, JValue>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum Role {
@@ -22,9 +18,6 @@ enum Role {
     Assistant,
 }
 impl Role {
-    // why do serde custom default require a ()?
-    fn assistant() -> Self { Self::Assistant }
-
     fn is_user(&self) -> bool { matches!(self, Role::User) }
     fn is_assistant(&self) -> bool { matches!(self, Role::Assistant) }
 }
@@ -42,13 +35,15 @@ enum ContentBlock {
     // think is shorter than thinking and reasoning
     Think{
         value: String,
-        #[serde(skip)]
         signature: String,
     },
     ToolUse{ 
         id: String,
         name: String,
-        input: String,
+        // api need this to be object, should not use plain string to represent any
+        // the value type in serde_json and serde_yaml_something is just a flexible object
+        // it's ok to serialize and deserialize between json value object and yaml text
+        input: serde_json::Value,
     },
     ToolResult{
         id: String,
@@ -426,7 +421,12 @@ enum RequestContentBlock {
     ToolUse{ 
         id: String,
         name: String,
-        input: String,
+        // this is empty object at content start event,
+        // but is incrementally built as string in content delta events,
+        // that mean you need this
+        input: serde_json::Value,
+        #[serde(default, skip_serializing)]
+        input_builder: String,
     },
     #[serde(rename = "tool_result")]
     ToolResult{
@@ -555,38 +555,58 @@ fn prepare_request(session: &Session) -> Result<Request> {
                 ContentBlock::Think{ value, signature } =>
                     RequestContentBlock::Think{ thinking: value.clone(), signature: signature.clone() },
                 ContentBlock::ToolUse{ id, name, input } =>
-                    RequestContentBlock::ToolUse{ id: id.clone(), name: name.clone(), input: input.clone() },
+                    RequestContentBlock::ToolUse{ id: id.clone(), name: name.clone(), input: input.clone(), input_builder: String::new() },
                 ContentBlock::ToolResult{ id, value, .. } =>
                     RequestContentBlock::ToolResult{ tool_use_id: id.clone(), content: value.clone() },
             }).collect()),
         },
     }).collect();
 
+    // currently deepseek api validate tool name duplicate, don't rely on that
     let tools = vec![
-        ToolDefinition{
-            name: "read-file".to_string(),
-            description: Some(concat!("Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines", 
-                " and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.").to_string()),
-            // now this part have to use json!
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "pathname": {
-                        "type": "string",
-                        "description": "The path of the file to read.",
-                    },
-                    "offset": {
-                        "type": "number",
-                        "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
-                    },
-                    "limit": {
-                        "type": "number",
-                        "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
-                    }
-                },
-                "required": ["pathname"],
-            }),
-        }
+        // ToolDefinition{
+        //     name: "read-file".to_string(),
+        //     description: Some(concat!("Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines", 
+        //         " and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.").to_string()),
+        //     // now this part have to use json!
+        //     input_schema: serde_json::json!({
+        //         "type": "object",
+        //         "properties": {
+        //             "pathname": {
+        //                 "type": "string",
+        //                 "description": "The path of the file to read.",
+        //             },
+        //             "offset": {
+        //                 "type": "number",
+        //                 "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
+        //             },
+        //             "limit": {
+        //                 "type": "number",
+        //                 "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
+        //             }
+        //         },
+        //         "required": ["pathname"],
+        //     }),
+        // },
+        // ToolDefinition{
+        //     name: "run-shell-command".to_string(),
+        //     description: Some(concat!("Run command in shell synchronously. The command may be audited by user or other mechanism. ",
+        //         "Output may be error, timeout or truncated if it is too long. Avoid dangerous commands and instruct user to determine and execute manually.").to_string()),
+        //     input_schema: serde_json::json!({
+        //         "type": "object",
+        //         "properties": {
+        //             "command": {
+        //                 "type": "string",
+        //                 "description": "The shell command.",
+        //             },
+        //             "description": {
+        //                 "type": "string",
+        //                 "description": "Provide a description to use when the agent prompt user for approval or later to diagnostic unexpected errors.",
+        //             },
+        //         },
+        //         "required": ["command", "description"],
+        //     }),
+        // }
     ];
 
     Ok(Request { model, system, messages, thinking, output_config, max_tokens, stream: true, tools })
@@ -838,6 +858,7 @@ impl DeltaAssembler {
             DeltaEvent::Ping => {},
             DeltaEvent::MessageStart{..} => bail!("duplicate message_start event"),
             DeltaEvent::ContentBlockStart { index, content_block } => {
+                println!("{} {:?} block_start", index, content_block);
                 if self.blocks.insert(index, content_block).is_some() {
                     bail!("block {} started again", index);
                 } else if self.completed_blocks.contains_key(&index) {
@@ -852,27 +873,36 @@ impl DeltaAssembler {
                     bail!("block {} delta before start", index);
                 };
                 match (delta, block) {
-                        // std string is not rope, cannot merge 2 owned string together without copy
-                    (DeltaContentBlock::Text { text: text_delta },
-                        RequestContentBlock::Text { text }) => text.push_str(&text_delta),
-                    (DeltaContentBlock::Think { thinking: thinking_delta },
-                        RequestContentBlock::Think{ thinking, .. }) => thinking.push_str(&thinking_delta),
-                    (DeltaContentBlock::Signature { signature: signature_delta },
-                        RequestContentBlock::Think{ signature, .. }) => signature.push_str(&signature_delta),
-                    (DeltaContentBlock::ToolInput { partial_json },
-                        RequestContentBlock::ToolUse{ input, .. }) => input.push_str(&partial_json),
+                    // std string is not rope, cannot merge 2 owned string together without copy
+                    (DeltaContentBlock::Text { text: text_delta }, RequestContentBlock::Text { text }) => {
+                        print!("{}", text_delta); text.push_str(&text_delta);
+                    },
+                    (DeltaContentBlock::Think { thinking: thinking_delta }, RequestContentBlock::Think{ thinking, .. }) => {
+                        print!("{}", thinking_delta); thinking.push_str(&thinking_delta);
+                    },
+                    (DeltaContentBlock::Signature { signature: signature_delta }, RequestContentBlock::Think{ signature, .. }) => {
+                        print!("{}", signature_delta); signature.push_str(&signature_delta);
+                    },
+                    (DeltaContentBlock::ToolInput { partial_json }, RequestContentBlock::ToolUse{ input_builder, .. }) => {
+                        print!("{}", partial_json); input_builder.push_str(&partial_json);
+                    },
                     (delta, block) => bail!("block delta type mismatch? {:?}, {:?}", delta, block),
                 }
             },
             DeltaEvent::ContentBlockStop{ index } => {
-                if let Some(block) = self.blocks.remove(&index) {
-                    match block {
+                println!("{} block_stop", index);
+                if let Some(mut block) = self.blocks.remove(&index) {
+                    match &mut block {
                         RequestContentBlock::Text{ text } if text.is_empty() =>
-                            bail!("block {} stopped before any content? (3)", index),
-                        RequestContentBlock::Think{ thinking, .. } if thinking.is_empty() =>
                             bail!("block {} stopped before any content? (1)", index),
-                        RequestContentBlock::ToolUse{ input, .. } if input.is_empty() =>
+                        RequestContentBlock::Think{ thinking, .. } if thinking.is_empty() =>
                             bail!("block {} stopped before any content? (2)", index),
+                        RequestContentBlock::ToolUse{ input, input_builder, .. } => {
+                            if input_builder.is_empty() {
+                                bail!("block {} stopped before any content? (3)", index);
+                            }
+                            *input = serde_json::from_str(&input_builder)?;
+                        },
                         _ => {}, // ok
                     }
                     self.completed_blocks.insert(index, block);
@@ -913,7 +943,7 @@ impl DeltaAssembler {
 #[tokio::main]
 async fn main() -> Result<()> {
 
-    let session_original_content = fs::read_to_string("example-input.yml")?;
+    let session_original_content = fs::read_to_string("example-6.yml")?;
     let session: Session = serde_yaml_ng::from_str(&session_original_content)?;
     println!("{:?}", session);
     validate_session(&session)?;
@@ -921,7 +951,8 @@ async fn main() -> Result<()> {
     println!("session name {}", session.name);
 
     let request = prepare_request(&session)?;
-    println!("request {:?}", request);
+    println!("{:?}", request);
+    // return Ok(());
 
     let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
         bail!("env var HUAN_API_KEY missing");
@@ -940,6 +971,12 @@ async fn main() -> Result<()> {
         let body = response.text().await?;
         bail!("response error {}: {}", status, body);
     }
+    // ATTENTION TODO condition is incorrect
+    // they current work because their content-type is text/event-stream; charset=utf8
+    let content_type = response.headers().get("content-type");
+    if content_type.map(|v| v == "text/event-stream").unwrap_or(true) {
+        bail!("content-type is not text/event-stream?, {:?}", content_type);
+    }
     let mut headers = Vec::new();
     for (name, value) in response.headers() {
         headers.push((name.to_string(), format!("{:?}", value)));
@@ -948,19 +985,19 @@ async fn main() -> Result<()> {
 
     let mut stream = response.bytes_stream();
     let mut parser = EventStreamParser::new();
-    let mut assembler = None;
+    let mut assembler: Option<DeltaAssembler> = None;
     let mut extra = Vec::new();
 
+    let mut chunks = Vec::new();
     while let Some(chunk) = stream.next().await {
         let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
-        println!("{}", String::from_utf8_lossy(chunk.as_ref()));
+        chunks.push(String::from_utf8_lossy(chunk.as_ref()).into_owned());
         parser.push(chunk);
         while let Some(event) = parser.pull(&mut extra)? {
-            // TODO is if let capturing lifetime too long?
-            if assembler.is_none() {
-                assembler = DeltaAssembler::try_new(event)?;
+            if let Some(assembler) = assembler.as_mut() {
+                assembler.push(event)?;
             } else {
-                assembler.as_mut().map(|assembler| assembler.push(event));
+                assembler = DeltaAssembler::try_new(event)?
             }
         }
     }
@@ -973,8 +1010,9 @@ async fn main() -> Result<()> {
         bail!("assembler not properly stopped");
     }
     println!("{:?}", assembler.message);
-    let response_message = assembler.message;
+    for chunk in chunks { println!("{:?}", chunk); }
 
+    let response_message = assembler.message;
     // unwrap: validated in prepare request
     let request_config = session.request_config.unwrap();
     let result_message = Message {
@@ -996,14 +1034,14 @@ async fn main() -> Result<()> {
         content: Content::Blocks(response_message.content.into_iter().map(|block| match block {
             RequestContentBlock::Text { text } => ContentBlock::Text{ name: None, value: text },
             RequestContentBlock::Think { thinking, signature } => ContentBlock::Think{ value: thinking, signature },
-            RequestContentBlock::ToolUse { id, name, input } => ContentBlock::ToolUse{ id, name, input },
+            RequestContentBlock::ToolUse { id, name, input, .. } => ContentBlock::ToolUse{ id, name, input },
             RequestContentBlock::ToolResult {..} => unreachable!("tool-result?"),
         }).collect()),
     };
 
     let result_message = serialize_message(&result_message)?;
     let output_content = format!("{}\n{}", session_original_content, result_message);
-    fs::write("example-output.yml", output_content)?;
+    fs::write("example-6.yml", output_content)?;
 
     Ok(())
 }
@@ -1030,6 +1068,7 @@ fn test_read() {
         "  content:",
         "  - kind: think",
         "    value: reasoning content",
+        "    signature: signature content",
         "  - kind: text",
         "    value: normal content",
         "  - kind: tool-use",
@@ -1179,7 +1218,7 @@ fn test_write() {
         content: Content::Blocks(vec![
             ContentBlock::Think{
                 value: "why do you enable reasoning for this simple work?".to_string(),
-                signature: "None".to_string(),
+                signature: "12345678-1234-1234-123456".to_string(),
             },
             ContentBlock::Text{
                 value: "let me read the files...".to_string(),
@@ -1188,12 +1227,12 @@ fn test_write() {
             ContentBlock::ToolUse{
                 id: "id1".to_string(),
                 name: "read-file".to_string(),
-                input: "{ pathname: \"src/main.rs\" }".to_string(),
+                input: serde_json::json!({ "pathname": "src/main.rs" }),
             },
             ContentBlock::ToolUse{
                 id: "id2".to_string(),
                 name: "read-file".to_string(),
-                input: "{ pathname: \"src/session.rs\" }".to_string(),
+                input: serde_json::json!({ "pathname": "src/session.rs" }),
             },
         ]),
         request_config: Some(RequestConfig {
@@ -1220,16 +1259,19 @@ fn test_write() {
         "  content:",
         "  - kind: think",
         "    value: why do you enable reasoning for this simple work?",
+        "    signature: 12345678-1234-1234-123456",
         "  - kind: text",
         "    value: let me read the files...",
         "  - kind: tool-use",
         "    id: id1",
         "    name: read-file",
-        "    input: '{ pathname: \"src/main.rs\" }'",
+        "    input:",
+        "      pathname: src/main.rs",
         "  - kind: tool-use",
         "    id: id2",
         "    name: read-file",
-        "    input: '{ pathname: \"src/session.rs\" }'",
+        "    input:",
+        "      pathname: src/session.rs",
         "  request:",
         "    think: high",
         "    tools:",
@@ -1682,4 +1724,6 @@ fn test_assembler() {
         stop_reason: Some("end_turn".to_string()),
         usage: serde_json::json!({"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}),
     });
+
+    // TODO signature delta is one delta event
 }
