@@ -1,9 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt;
+use std::fmt::{self, Write as _};
 use std::fs;
+use std::ops::Not as _;
 use anyhow::{Result, bail};
 use bytes::{BufMut as _, Bytes, BytesMut};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
+use clap::Parser as _;
 use futures_util::StreamExt;
 use reqwest;
 use serde::{Serializer, Deserializer, Serialize, Deserialize};
@@ -20,19 +22,27 @@ enum Role {
 impl Role {
     fn is_user(&self) -> bool { matches!(self, Role::User) }
     fn is_assistant(&self) -> bool { matches!(self, Role::Assistant) }
+    fn display(&self) -> &'static str { match self { Self::User => "user", Self::Assistant => "assistant" } }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 enum ContentBlock {
     Text{
-        // group text chunks by name
-        // will not be created for returned assistant message
+        // use this to wrap text chunks in xml tag: <name>value</name>
         #[serde(skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         value: String,
     },
-    // think is shorter than thinking and reasoning
+    // - use think as tag because it is shorter than thinking and reasoning
+    // - if you have learned that thinking content don't need to be sent in message history in
+    //   following conversation rounds, it is different in tool call scenario, it is required
+    //   for tool use turns to let the model "continue thinking", this also implies all requests
+    //   in same tool use turn should use same thinking switch, all enabled or all disabled,
+    //   thinking effort is not restricted, you can use low effort for minor requests
+    // - signature is required for a/ messages api to validate thinking content is not changed
+    //   or made up, it is currently not required for deepseek compatible api, but always save
+    //   and send the signature back is simpler and easier to understand
     Think{
         value: String,
         signature: String,
@@ -40,19 +50,42 @@ enum ContentBlock {
     ToolUse{ 
         id: String,
         name: String,
-        // api need this to be object, should not use plain string to represent any
-        // the value type in serde_json and serde_yaml_something is just a flexible object
-        // it's ok to serialize and deserialize between json value object and yaml text
+        // - the value types in serde_json and serde_yaml_anything are just flexible objects,
+        //   it's ok to serialize and deserialize between serde_json value type and yaml text
+        // - use custom serialize and deserialize functions to inline this in a string
+        #[serde(serialize_with = "serialize_with_json", deserialize_with = "deserialize_with_json")]
         input: serde_json::Value,
     },
     ToolResult{
         id: String,
         value: String,
-        // tool execution metadata, logs, etc.
-        // custom deserialize function is the correct way to skip deserializing while allow the name with deny_unknown_fields
+        // - tool execution metadata, logs, etc.
+        // - the value types in serde_json and serde_yaml_anything are just flexible objects,
+        //   it's ok to serialize and deserialize between serde_json value type and yaml text
+        // - custom deserialize function is the correct way to skip deserializing while allow
+        //   the name with deny_unknown_fields
         #[serde(default, deserialize_with = "skip_deserializing_while_allow_name")]
-        metadata: Vec<(String, String)>,
+        metadata: Vec<(String, serde_json::Value)>,
     },
+}
+
+fn serialize_with_json<S>(value: &serde_json::Value, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    let serialized = serde_json::to_string(value).map_err(|e| serde::ser::Error::custom(format!("{}", e)))?;
+    serializer.serialize_str(&serialized)
+}
+fn deserialize_with_json<'de, D>(deserializer: D) -> Result<serde_json::Value, D::Error> where D: Deserializer<'de> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = serde_json::Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("json value")
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError {
+            Ok(serde_json::from_str(v).map_err(|e| DeserializeError
+                ::invalid_value(serde::de::Unexpected::Str(&format!("{}", e)), &"valid json value"))?)
+        }
+    }
+    deserializer.deserialize_any(Visitor)
 }
 // you don't need explicit std::result::Result when imported anyhow Result?
 fn skip_deserializing_while_allow_name<'de, T, D>(deserializer: D) -> Result<T, D::Error>
@@ -64,25 +97,14 @@ where
     Ok(T::default())
 }
 
-#[derive(Serialize)]
-// untagged's error message is not clear if anything not match content block structure
-// #[serde(untagged)]
-// what's the effect of deny_unknown_fields here?
-#[serde(untagged, deny_unknown_fields)]
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
 enum Content {
     String(String),
     Blocks(Vec<ContentBlock>),
 }
-// transparent
-impl fmt::Debug for Content {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::String(v) => write!(f, "{:?}", v),
-            Self::Blocks(v) => write!(f, "{:?}", v),
-        }
-    }
-}
-// use this because untagged's error message is not clear if anything not match content block structure
+// untagged's error message is not clear if anything not match content block structure,
+// use custom deserialize implementation to aovid that while keep the setting to avoid tags appear in serializing result
 impl<'de> Deserialize<'de> for Content {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
         struct Visitor;
@@ -106,9 +128,8 @@ impl<'de> Deserialize<'de> for Content {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-// what's the effect of deny_unknown_fields here?
-#[serde(untagged, deny_unknown_fields)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
 enum ThinkingMode {
     Switch(bool),
     // low, high, max
@@ -120,36 +141,44 @@ impl Default for ThinkingMode {
         Self::Switch(false)
     }
 }
-// transparent
-impl fmt::Debug for ThinkingMode {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::Switch(v) => write!(f, "{:?}", v),
-            Self::Effort(v) => write!(f, "{:?}", v),
-        }
+impl ThinkingMode {
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Switch(false))
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RequestConfig {
+    // need deserialize from persistant file, need skip when serialize into result message
+    #[serde(skip_serializing)]
+    message_id: usize,
+    #[serde(skip_serializing)]
+    // parent message id is required in request config if you didn't notice
+    parent_message_id: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     // default to disabled
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ThinkingMode::is_default")]
     think: ThinkingMode,
-    #[serde(rename = "tools")]
+    // why do Option fields allowed to missing with skip_serializing_if, vec don't?
+    #[serde(rename = "tools", default, skip_serializing_if = "Vec::is_empty")]
     tool_names: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<usize>,
+    // - traditional parameters, temperature, top_p, top_k, presence_penalty and frequency_penalty
+    //   don't work with thinking mode, actually they are not that useful or respected in nowadays
+    //   models even without thinking mode, so not include them here
+    // - non traditional parameter tool_choice don't work with thinking mode either, so not include
 }
 
 #[derive(Debug)]
 struct ResponseMetadata {
-    // request time
     start_time: DateTime<Utc>,
-    // response status and headers
     status_code: usize,
+    // include some not constant header values in case they are useful
     headers: Vec<(String, String)>,
     // response stream complete time
     complete_time: DateTime<Utc>,
@@ -159,13 +188,15 @@ struct ResponseMetadata {
     // save json text here, currently no need to parse them precisely, actually
     // you can use postgresql's rich json functionality to query values if need
     usage: String,
-    // extra information if useful
-    extra: Vec<(String, String)>,
+    // additional information if useful
+    // serde_json::Value can be serialized into yaml text if you ask
+    additional: Vec<(String, serde_json::Value)>,
 }
 // flatten header+extra, note that serde flatten don't support ordered map types like vec<(string, string)>
 impl Serialize for ResponseMetadata {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        let mut map = serializer.serialize_map(Some(7 + self.headers.len() + self.extra.len()))?;
+        let mut map = serializer.serialize_map(
+            Some(6 + self.headers.len() + self.additional.len()))?;
         map.serialize_entry("start-time", &self.start_time)?;
         map.serialize_entry("status-code", &self.status_code)?;
         for (key, value) in &self.headers {
@@ -175,53 +206,92 @@ impl Serialize for ResponseMetadata {
         map.serialize_entry("model", &self.model)?;
         map.serialize_entry("stop-reason", &self.stop_reason)?;
         map.serialize_entry("usage", &self.usage)?;
-        for (key, value) in &self.extra {
+        for (key, value) in &self.additional {
             map.serialize_entry(key, value)?;
         }
         map.end()
     }
 }
 
-// system message don't have all other properties
+// system message don't have all other properties in user and assitant messages
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SystemMessage {
     content: Content,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+// now that id, pid and role is not in message itself serializing and deserializing,
+// request config and response metadata need rename and is not in deserializing but
+// need special handling to allow the name, etc., so the result is fully manual
+#[derive(Debug)]
 struct Message {
-    #[serde(skip)]
     id: usize,
-    #[serde(default, rename = "parent-id")]
-    parent_id: usize,
+    parent_id: Option<usize>,
     role: Role,
     content: Content,
-    #[serde(default, rename = "request", skip_serializing_if = "Option::is_none", deserialize_with = "skip_deserializing_while_allow_name")]
+    // only in assistant message, the request config to create this message
     request_config: Option<RequestConfig>,
-    #[serde(default, rename = "response", skip_serializing_if = "Option::is_none", deserialize_with = "skip_deserializing_while_allow_name")]
+    // only in assistant message, the response metadata of the response to create this message
     response_metadata: Option<ResponseMetadata>,
 }
 
-// Message::serialize serializes message without id, this put id in key
-fn serialize_message(message: &Message) -> Result<String> {
-
-    let mut buffer = Vec::with_capacity(128);
-    let mut serializer = serde_yaml_ng::Serializer::new(&mut buffer);
-    let mut map = serializer.serialize_map(Some(1))?;
-    map.serialize_entry(&format!("message-{}", message.id), &message)?;
-    map.end()?;
-    Ok(String::from_utf8(buffer)?)
+// this serialize a document that include message key and value
+impl Serialize for Message {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        // you have lifetime errors for simple single usize value ??
+        // let parent_id = if let Some(v) = self.parent_id { format_args!("<-{}", v) } else { format_args("") };
+        let parent_id = if let Some(v) = self.parent_id { format!("<-{}", v) } else { String::new() };
+        let key = format!("{}[{}{}]", self.role.display(), self.id, parent_id);
+        
+        // custom serialize does not directly support nested map, that mean you need this
+        struct MessageBody<'a>(&'a Message);
+        impl<'a> Serialize for MessageBody<'a> {
+            fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+                let size = 1
+                    + if self.0.request_config.is_some() { 1 } else { 0 }
+                    + if self.0.response_metadata.is_some() { 1 } else { 0 };
+                let mut map = serializer.serialize_map(Some(size))?;
+                map.serialize_entry("content", &self.0.content)?;
+                if let Some(request_config) = &self.0.request_config {
+                    map.serialize_entry("request", request_config)?;
+                }
+                if let Some(response_metadata) = &self.0.response_metadata {
+                    map.serialize_entry("response", response_metadata)?;
+                }
+                map.end()
+            }
+        }
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry(&key, &MessageBody(self))?;
+        map.end()
+    }
 }
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct RequestConfigAndId {
-    message_id: usize,
-    parent_message_id: usize,
-    #[serde(flatten)]
-    config: RequestConfig,
+// this only deserialize message body, currently only the content,
+// and allow request config and response metadata but does not actually read them
+impl<'de> Deserialize<'de> for Message {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        struct Visitor;
+        impl<'de> serde::de::Visitor<'de> for Visitor {
+            type Value = Message;
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("message content")
+            }
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error> where A: MapAccess<'de> {
+                let mut content = None;
+                while let Some(key) = map.next_key::<&str>()? {
+                    match key {
+                        "content" => content = Some(map.next_value()?),
+                        "request" => { map.next_value::<IgnoredAny>()?; },
+                        "response" => { map.next_value::<IgnoredAny>()?; },
+                        other => return Err(DeserializeError::unknown_field(other, &["content", "request", "response"])),
+                    }
+                }
+                let Some(content) = content else { return Err(DeserializeError::missing_field("content")); };
+                Ok(Message{ id: 0, parent_id: None, role: Role::Assistant, content, request_config: None, response_metadata: None })
+            }
+        }
+        deserializer.deserialize_any(Visitor)
+    }
 }
 
 // this is not deserialize to handle special message id naming convention
@@ -231,7 +301,7 @@ struct Session {
     system_message: Option<SystemMessage>,
     // this is a flattened array of message tree structure, items reference parent node by id and parent id
     messages: Vec<Message>,
-    request_config: Option<RequestConfigAndId>,
+    request_config: Option<RequestConfig>,
 }
 
 impl<'de> Deserialize<'de> for Session {
@@ -253,17 +323,28 @@ impl<'de> Deserialize<'de> for Session {
                         "name" => name = Some(map.next_value()?),
                         "request" => request_config = Some(map.next_value()?),
                         "system" => system_message = Some(map.next_value()?),
-                        message_key if let Some(message_id) = message_key.strip_prefix("message-") => {
-                            // "-2" cannot parse as u64 if you didn't notice
-                            let message_id = message_id.parse().map_err(|_| DeserializeError
-                                ::invalid_value(serde::de::Unexpected::Str(message_id), &"positive integer"))?;
-                            // so this actually only checks 0
-                            if message_id <= 0 {
-                                return Err(DeserializeError::invalid_value(
-                                    serde::de::Unexpected::Unsigned(message_id), &"positive value"));
-                            }
+                        key if key.ends_with(']')
+                            && let Some(remain) = key.strip_prefix("user[").or_else(|| key.strip_prefix("assistant[")) =>
+                        {
+                            // trim end ], unwrap: validated endswith
+                            let remain = &remain[..remain.len() - 1];
+                            let mut split = remain.split("<-");
+                            // unwrap: split must have at least 1 element
+                            let id = split.next().unwrap().parse().map_err(|_| DeserializeError
+                                ::invalid_value(serde::de::Unexpected::Str(remain), &"positive integer"))?;
+                            if id <= 0 { return Err(DeserializeError
+                                ::invalid_value(serde::de::Unexpected::Str(remain), &"positive value")); }
+                            let parent_id = split.next().map(|parent_id| {
+                                let parent_id = parent_id.parse::<usize>().map_err(|_| DeserializeError
+                                    ::invalid_value(serde::de::Unexpected::Str(remain), &"positive integer"))?;
+                                if parent_id <= 0 { return Err(DeserializeError
+                                    ::invalid_value(serde::de::Unexpected::Str(remain), &"positive value")); }
+                                Ok(parent_id)
+                            }).transpose()?;
                             let mut message = map.next_value::<Message>()?;
-                            message.id = message_id as usize;
+                            message.id = id;
+                            message.parent_id = parent_id;
+                            message.role = if key.starts_with("user") { Role::User } else { Role::Assistant };
                             messages.push(message);
                         },
                         // allow some other properties while don't actually read them
@@ -280,7 +361,69 @@ impl<'de> Deserialize<'de> for Session {
     }
 }
 
-fn validate_session(session: &Session) -> Result<()> {
+fn get_session_display(session: &Session) -> Result<String> {
+    let mut b = String::new();
+
+    // display major text chunks by limit length to 80, add ellipsis and replace \n with \n
+    fn write_text(b: &mut String, text: &str) -> Result<()> {
+        if text.len() < 80 {
+            writeln!(b, "   {}", text.replace('\n', "\\n"))?;
+        } else {
+            let leading = text[0..80].replace('\n', "\\n");
+            writeln!(b, "   {}...({} characters)", leading, text.len())?;
+        }
+        Ok(())
+    }
+    fn write_content(b: &mut String, content: &Content) -> Result<()> {
+        match content {
+            Content::String(value) => write_text(b, value)?,
+            Content::Blocks(blocks) => for block in blocks {
+                match block {
+                    ContentBlock::Text{ name: Some(name), value } => {
+                        writeln!(b, "   <{}>", name)?;
+                        write_text(b, value)?;
+                    },
+                    ContentBlock::Text{ value, .. } => write_text(b, value)?,
+                    ContentBlock::Think{ value, .. } => {
+                        writeln!(b, "   <think>")?;
+                        write_text(b, value)?;
+                    },
+                    ContentBlock::ToolUse{ id, name, input } => {
+                        writeln!(b, "   <tool-use>\n   {}({})[{}]", name, input, id)?;
+                    },
+                    ContentBlock::ToolResult{ id, value, .. } => {
+                        writeln!(b, "   <tool-result>\n   {}", id)?;
+                        write_text(b, &value)?;
+                    },
+                }
+            }
+        }
+        Ok(())
+    }
+
+    writeln!(b, "session:\n{}", session.name)?;
+    if let Some(system_message) = &session.system_message {
+        writeln!(b, "system:\n")?;
+        write_content(&mut b, &system_message.content)?;
+    }
+    for message in &session.messages {
+        writeln!(b, "{} [{}<-{}]:", message.role.display(), message.id, message.parent_id.unwrap_or(0))?;
+        write_content(&mut b, &message.content)?;
+    }
+    if let Some(request_config) = &session.request_config {
+        writeln!(b, "request config [{}<-{}]:", request_config.message_id, request_config.parent_message_id)?;
+        if let Some(base_url) = &request_config.base_url { writeln!(b, "   base url: {}", base_url)?; }
+        if let Some(model) = &request_config.model { writeln!(b, "   model: {}", model)?; }
+        if !matches!(request_config.think, ThinkingMode::Switch(false)) { writeln!(b, "   think mode: {:?}", request_config.think)?; }
+        if request_config.tool_names.is_empty().not() { writeln!(b, "   tool names: [{}]", request_config.tool_names.join(","))?; }
+        if let Some(max_tokens) = request_config.max_tokens { writeln!(b, "   max tokens: {}", max_tokens)?; }
+    }
+
+    Ok(b)
+}
+
+// return expected errors
+fn validate_session(session: &Session) -> Result<Vec<String>> {
 
     // x. missing property or primitive type mismatch is rejected by basic deserializing
     // x. multiple system message is rejected by yaml parse
@@ -290,9 +433,10 @@ fn validate_session(session: &Session) -> Result<()> {
     // 2. parent id exist, include request config
     // 3. user message don't have think and tool use blocks
     // 4. assistant message don't have tool result blocks
+    // 6. same thinking switch in tool call turns
 
-    let mut has_error = false;
-    macro_rules! raise { ($($arg:tt)*) => {{ has_error = true; println!($($arg)*); }} }
+    let mut errors = Vec::new();
+    macro_rules! raise { ($($arg:tt)*) => {{ errors.push(format!($($arg)*)); }} }
 
     if let Some(system_message) = &session.system_message {
         if let Content::Blocks(blocks) = &system_message.content {
@@ -311,19 +455,22 @@ fn validate_session(session: &Session) -> Result<()> {
     }
 
     let mut message_ids = HashSet::new();
+    let mut remaining_tool_use_ids = Vec::new();
+    let mut current_tool_turn_thinking = false;
     for message in &session.messages {
         if !message_ids.insert(message.id) {
             raise!("message-{}: duplicate message id", message.id);
         }
-        if message.id == message.parent_id {
+        // this correctly handles pid is Some or None
+        if Some(message.id) == message.parent_id {
             raise!("message-{}: parent id cannot be same as id", message.id);
-        } else if message.parent_id > 0 {
-            if let Some(parent_message) = session.messages.iter().find(|m| m.id == message.parent_id) {
+        } else if let Some(parent_id) = message.parent_id {
+            if let Some(parent_message) = session.messages.iter().find(|m| m.id == parent_id) {
                 if !matches!((&message.role, &parent_message.role), (Role::User,  Role::Assistant) | (Role::Assistant, Role::User)) {
                     raise!("message-{}: unexpected parent message role relationship", message.id);
                 }
             } else {
-                raise!("message-{}: parent-id {} not exist", message.id, message.parent_id);
+                raise!("message-{}: parent-id {} not exist", message.id, parent_id);
             }
         }
         if let Content::Blocks(blocks) = &message.content {
@@ -333,21 +480,40 @@ fn validate_session(session: &Session) -> Result<()> {
                         raise!("message-{}: content#{}: unknown field name, expect kind, value for assistant message", message.id, block_index),
                     ContentBlock::Think{..} if message.role.is_user() => 
                         raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index),
-                    ContentBlock::ToolUse{..} if message.role.is_user() =>
-                        raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index),
+                    ContentBlock::ToolUse{..} if message.role.is_user() => {
+                        raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index);
+                    }
+                    ContentBlock::ToolUse{ id, ..} => {
+                        // regard empty as start new tool use turn
+                        if remaining_tool_use_ids.is_empty() {
+                            current_tool_turn_thinking = blocks.iter().any(|b| matches!(b, ContentBlock::Think{..}));
+                        }
+                        remaining_tool_use_ids.push(id);
+                    }
                     ContentBlock::ToolResult{..} if message.role.is_assistant() =>
                         raise!("message-{}: content#{}: kind: unknown variant tool-result, expect text, think, tool-use for assistant message", message.id, block_index),
                     ContentBlock::ToolResult{ id: result_id, ..} => {
-                        if let Some(parent_message) = session.messages.iter().find(|m| m.id == message.parent_id) {
-                            if let Content::Blocks(blocks) = &parent_message.content {
-                                if !blocks.iter().any(|p| matches!(p, ContentBlock::ToolUse{ id: use_id, .. } if use_id == result_id)) {
-                                    raise!("message-{}: expect tool result id find in parent message's tool use blocks", message.id);
+                        if let Some(position) = remaining_tool_use_ids.iter().position(|v| v == &result_id) {
+                            remaining_tool_use_ids.remove(position);
+                            // history tool-result message's thinking mode is not recorded, so this can only validate request-config.parent-message-id
+                            if let Some(RequestConfig{ parent_message_id, think, .. }) = &session.request_config {
+                                if parent_message_id == &message.id && current_tool_turn_thinking != !matches!(think, ThinkingMode::Switch(false)) {
+                                    raise!("message-{}: content#{}: thinking switch is different from tool use turn, expect {}", message.id, block_index, current_tool_turn_thinking);
                                 }
-                            } else {
-                                raise!("message-{}: expect tool result id find in parent message's tool use blocks (1)", message.id);
                             }
                         } else {
-                            raise!("message-{}: expect parent-id exist when there is tool-result block", message.id);
+                            raise!("message-{}: content#{}: tool result id not found in remaining id", message.id, block_index);
+                        }
+                        if let Some(parent_message) = session.messages.iter().find(|m| Some(m.id) == message.parent_id) {
+                            if let Content::Blocks(blocks) = &parent_message.content {
+                                if !blocks.iter().any(|p| matches!(p, ContentBlock::ToolUse{ id: use_id, .. } if use_id == result_id)) {
+                                    raise!("message-{}: content#{}: expect tool result id find in parent message's tool use blocks", message.id, block_index);
+                                }
+                            } else {
+                                raise!("message-{}: content#{}: expect tool result id find in parent message's tool use blocks (1)", message.id, block_index);
+                            }
+                        } else {
+                            raise!("message-{}: content#{}: expect parent-id exist when there is tool-result block", message.id, block_index);
                         }
                     },
                     _ => {}, // others are ok
@@ -357,6 +523,7 @@ fn validate_session(session: &Session) -> Result<()> {
     }
     
     if let Some(request_config) = &session.request_config {
+
         if request_config.message_id <= 0 {
             raise!("request config: message-id: invalid value 0, expect positive value");
         }
@@ -375,31 +542,34 @@ fn validate_session(session: &Session) -> Result<()> {
             }
         }
 
-        if let Some(model) = &request_config.config.model {
+        if let Some(base_url) = &request_config.base_url {
+            if let Err(error) = reqwest::Url::parse(base_url) {
+                raise!("request config: base url parse error: {}", error);
+            }
+        }
+        if let Some(model) = &request_config.model {
             if !matches!(model.as_str(), "deepseek-flash" | "deepseek-v4-pro") {
                 raise!("request config: unknown model name, expect deepseek-flash and deepseek-v4-pro");
             }
         }
-        if let ThinkingMode::Effort(effort) = &request_config.config.think {
+        if let ThinkingMode::Effort(effort) = &request_config.think {
             if !matches!(effort.as_str(), "low" | "high" | "max") {
                 raise!("request config: unknown thinking mode, expect true/false/low/high/max");
             }
         }
-        if let Some(max_tokens) = request_config.config.max_tokens {
+        if let Some(max_tokens) = request_config.max_tokens {
             if max_tokens <= 0 {
                 raise!("invalid max-tokens, expect positive value");
             }
         }
     }
 
-    if has_error { bail!("has validation errors"); }
-    Ok(())
+    Ok(errors)
 }
 
-// difference with contentblock1 is tag property name and variant name
-// because currently serde don't support serialize/deserialize use different tags
+// difference with main content block is tag property name and variant name
+// because currently serde don't support multiple serialize/deserialize settings on same type,
 // persistant storage want to use kind, tool-use, etc., api have to use type, tool_use, etc.
-// and I'm lazy to really manually implement the serialize or deserialize implementation,
 // it's not very not ok to duplicate the types, because they will eventually be in far away modules
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
@@ -411,9 +581,6 @@ enum RequestContentBlock {
     },
     #[serde(rename = "thinking")]
     Think{
-        // thinking content is required for tool use turns to let model continue thinking,
-        // signature is required in original api, it is currently not required in deepseek compatible api,
-        // but always provide the signature should be simpler and easier to explain
         thinking: String,
         signature: String,
     },
@@ -435,26 +602,12 @@ enum RequestContentBlock {
     },
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum RequestMessageContent {
-    String(String),
-    Blocks(Vec<RequestContentBlock>),
-}
-// transparent
-impl fmt::Debug for RequestMessageContent {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Self::String(v) => write!(f, "{:?}", v),
-            Self::Blocks(v) => write!(f, "{:?}", v),
-        }
-    }
-}
-
 #[derive(Debug, Serialize)]
-struct RequestMessageRoleAndContent {
+struct RequestMessage {
     role: Role,
-    content: RequestMessageContent,
+    // no need to precisely map plain string to plain string in request object,
+    // I guess api backend will still convert plain string format to block schema
+    content: Vec<RequestContentBlock>,
 }
 
 #[derive(Debug, Serialize)]
@@ -486,8 +639,8 @@ struct ToolDefinition {
 struct Request {
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<RequestMessageContent>,
-    messages: Vec<RequestMessageRoleAndContent>,
+    system: Option<Vec<RequestContentBlock>>,
+    messages: Vec<RequestMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<usize>,
     stream: bool,
@@ -499,18 +652,17 @@ struct Request {
     tools: Vec<ToolDefinition>,
 }
 
-// consume session and return (target message, request body)
 fn prepare_request(session: &Session) -> Result<Request> {
 
     let Some(request_config) = &session.request_config else { bail!("missing request config") };
 
     let mut thread = Vec::new();
-    let mut parent_id = request_config.parent_message_id;
-    while parent_id != 0 {
+    let mut next_parent_id = Some(request_config.parent_message_id);
+    while let Some(parent_id) = next_parent_id {
         // unwrap: validated parent id exist
         let parent_message = session.messages.iter().find(|m| m.id == parent_id).unwrap();
         thread.push(parent_message);
-        parent_id = parent_message.parent_id;
+        next_parent_id = parent_message.parent_id;
     }
 
     /* reverse is here */ thread.reverse(); /* reverse is here */
@@ -521,95 +673,151 @@ fn prepare_request(session: &Session) -> Result<Request> {
         bail!("thread not start with user message, thread: {:?}", thread_ids);
     }
 
-    let model = request_config.config.model.as_deref().unwrap_or("deepseek-flash").to_string();
-    let (thinking, output_config) = match &request_config.config.think {
+    let model = request_config.model.as_deref().unwrap_or("deepseek-flash").to_string();
+    let (thinking, output_config) = match &request_config.think {
         ThinkingMode::Switch(true) => (Some(RequestThinking{ r#type: "enabled".to_string() }), None),
         ThinkingMode::Switch(false) => (Some(RequestThinking{ r#type: "disabled".to_string() }), None),
         ThinkingMode::Effort(effort) => (None, Some(RequestOutputConfig{ effort: effort.clone() })),
     };
-    let max_tokens = request_config.config.max_tokens;
+    let max_tokens = request_config.max_tokens;
 
     let system = session.system_message.as_ref().map(|m| match &m.content {
-        Content::String(value) => RequestMessageContent::String(value.clone()),
-        Content::Blocks(blocks) => RequestMessageContent::Blocks(blocks.iter().map(|b| match b {
+        Content::String(value) => vec![RequestContentBlock::Text{ text: value.clone() }],
+        Content::Blocks(blocks) => blocks.iter().map(|b| match b {
             ContentBlock::Text{ name: None, value } => 
                 RequestContentBlock::Text{ text: value.clone() },
             ContentBlock::Text{ name: Some(name), value } => 
                 RequestContentBlock::Text{ text: format!("<{}>{}</{}>", name, value, name) },
             _ => unreachable!("system message content block type"),
-        }).collect()),
+        }).collect(),
     });
-    let messages = thread.into_iter().map(|message| RequestMessageRoleAndContent{
+    let messages = thread.into_iter().map(|message| RequestMessage{
         role: message.role,
         content: match &message.content {
-            Content::String(value) => RequestMessageContent::String(value.clone()),
-            Content::Blocks(blocks) => RequestMessageContent::Blocks(blocks.iter().map(|b| match b {
+            Content::String(value) => vec![RequestContentBlock::Text{ text: value.clone() }],
+            Content::Blocks(blocks) => blocks.iter().map(|b| match b {
                 ContentBlock::Text{ name: None, value } => 
                     RequestContentBlock::Text{ text: value.clone() },
                 ContentBlock::Text{ name: Some(name), value } => 
                     RequestContentBlock::Text{ text: format!("<{}>{}</{}>", name, value, name) },
-                // if you have learned that reasoning text don't need to be send in message history,
-                // it is required for tool calling turns to allow the model to "continue thinking",
-                // additionally, a/ messages api want to validate thinking signature, although deepseek
-                // document currently don't require the signature, the simpler way is to always send
                 ContentBlock::Think{ value, signature } =>
                     RequestContentBlock::Think{ thinking: value.clone(), signature: signature.clone() },
                 ContentBlock::ToolUse{ id, name, input } =>
-                    RequestContentBlock::ToolUse{ id: id.clone(), name: name.clone(), input: input.clone(), input_builder: String::new() },
+                    RequestContentBlock::ToolUse{
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                        input_builder: String::new(),
+                    },
                 ContentBlock::ToolResult{ id, value, .. } =>
                     RequestContentBlock::ToolResult{ tool_use_id: id.clone(), content: value.clone() },
-            }).collect()),
+            }).collect(),
         },
     }).collect();
 
     // currently deepseek api validate tool name duplicate, don't rely on that
     let tools = vec![
-        // ToolDefinition{
-        //     name: "read-file".to_string(),
-        //     description: Some(concat!("Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines", 
-        //         " and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.").to_string()),
-        //     // now this part have to use json!
-        //     input_schema: serde_json::json!({
-        //         "type": "object",
-        //         "properties": {
-        //             "pathname": {
-        //                 "type": "string",
-        //                 "description": "The path of the file to read.",
-        //             },
-        //             "offset": {
-        //                 "type": "number",
-        //                 "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
-        //             },
-        //             "limit": {
-        //                 "type": "number",
-        //                 "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
-        //             }
-        //         },
-        //         "required": ["pathname"],
-        //     }),
-        // },
-        // ToolDefinition{
-        //     name: "run-shell-command".to_string(),
-        //     description: Some(concat!("Run command in shell synchronously. The command may be audited by user or other mechanism. ",
-        //         "Output may be error, timeout or truncated if it is too long. Avoid dangerous commands and instruct user to determine and execute manually.").to_string()),
-        //     input_schema: serde_json::json!({
-        //         "type": "object",
-        //         "properties": {
-        //             "command": {
-        //                 "type": "string",
-        //                 "description": "The shell command.",
-        //             },
-        //             "description": {
-        //                 "type": "string",
-        //                 "description": "Provide a description to use when the agent prompt user for approval or later to diagnostic unexpected errors.",
-        //             },
-        //         },
-        //         "required": ["command", "description"],
-        //     }),
-        // }
-    ];
+        ToolDefinition{
+            name: "read-file".to_string(),
+            description: Some(concat!("Read the contents of a file. Line numbers are 1-indexed. This tool will truncate its output at 2000 lines", 
+                " and may be called repeatedly with offset and limit parameters to read larger files in chunks. Binary files use offset/limit as byte offsets.").to_string()),
+            // now this part have to use json!
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "pathname": {
+                        "type": "string",
+                        "description": "The path of the file to read.",
+                    },
+                    "offset": {
+                        "type": "number",
+                        "description": "Optional: the 1-based line number to start reading from. Only use this if the file is too large to read at once. If not specified, the file will be read from the beginning.",
+                    },
+                    "limit": {
+                        "type": "number",
+                        "description": "Optional: the maximum number of lines to read. Only use this together with `offset` if the file is too large to read at once.",
+                    }
+                },
+                "required": ["pathname"],
+            }),
+        },
+        ToolDefinition{
+            name: "run-shell-command".to_string(),
+            description: Some(concat!("Run command in shell synchronously. The command may be audited by user or other mechanism. ",
+                "Output may be error, timeout or truncated if it is too long. Avoid dangerous commands and instruct user to determine and execute manually.").to_string()),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The shell command.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Provide a description to use when the agent prompt user for approval or later to diagnostic unexpected errors.",
+                    },
+                },
+                "required": ["command", "description"],
+            }),
+        }
+    ].into_iter().filter(|t| request_config.tool_names.contains(&t.name)).collect();
 
     Ok(Request { model, system, messages, thinking, output_config, max_tokens, stream: true, tools })
+}
+
+fn get_request_display(request: &Request) -> Result<String> {
+    let mut b = String::new();
+
+    // display major text chunks by limit length to 80, add ellipsis and replace \n with \n
+    fn write_text(b: &mut String, text: &str) -> Result<()> {
+        if text.len() < 80 {
+            writeln!(b, "   {}", text.replace('\n', "\\n"))?;
+        } else {
+            let leading = text[0..80].replace('\n', "\\n");
+            writeln!(b, "   {}...({} characters)", leading, text.len())?;
+        }
+        Ok(())
+    }
+    fn write_content(b: &mut String, blocks: &[RequestContentBlock]) -> Result<()> {
+        for block in blocks {
+            match block {
+                RequestContentBlock::Text{ text } => write_text(b, text)?,
+                RequestContentBlock::Think{ thinking, signature } => {
+                    writeln!(b, "   <think>\n   {}", signature)?;
+                    write_text(b, thinking)?;
+                },
+                RequestContentBlock::ToolUse{ id, name, input, .. } => {
+                    writeln!(b, "   <tool-use>\n   {}({})[{}]", name, input, id)?;
+                },
+                RequestContentBlock::ToolResult{ tool_use_id, content, .. } => {
+                    writeln!(b, "   <tool-result>\n   {}", tool_use_id)?;
+                    write_text(b, &content)?;
+                },
+            }
+        }
+        Ok(())
+    }
+
+    writeln!(b, "request:")?;
+    writeln!(b, "model: {}", request.model)?;
+    writeln!(b, "thining: {:?}", request.thinking)?;
+    writeln!(b, "output config: {:?}", request.output_config)?;
+    if let Some(max_tokens) = request.max_tokens { writeln!(b, "max tokens: {}", max_tokens)?; }
+    writeln!(b, "stream: true")?;
+    if let Some(system_message) = &request.system {
+        writeln!(b, "system:\n")?;
+        write_content(&mut b, system_message)?;
+    }
+    for message in &request.messages {
+        // id is not that relavent after request resolved thread
+        writeln!(b, "{}:", message.role.display())?;
+        write_content(&mut b, &message.content)?;
+    }
+    for tool in &request.tools {
+        writeln!(b, "tool: {}", tool.name)?;
+    }
+
+    Ok(b)
 }
 
 // html spec (why is this not rfc) https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream
@@ -817,7 +1025,7 @@ struct ResponseMessage {
 
 struct DeltaAssembler {
     message: ResponseMessage,
-    // started blocks
+    // started and not completed blocks
     blocks: HashMap<usize, RequestContentBlock>,
     // completed blocks, not sure whether will receive blocks by index,
     // so completed blocks still need map and validate index gap after complete
@@ -858,7 +1066,7 @@ impl DeltaAssembler {
             DeltaEvent::Ping => {},
             DeltaEvent::MessageStart{..} => bail!("duplicate message_start event"),
             DeltaEvent::ContentBlockStart { index, content_block } => {
-                println!("{} {:?} block_start", index, content_block);
+                println!("\nblock_start {} {:?}", index, content_block);
                 if self.blocks.insert(index, content_block).is_some() {
                     bail!("block {} started again", index);
                 } else if self.completed_blocks.contains_key(&index) {
@@ -890,7 +1098,7 @@ impl DeltaAssembler {
                 }
             },
             DeltaEvent::ContentBlockStop{ index } => {
-                println!("{} block_stop", index);
+                println!("\nblock_stop {}", index);
                 if let Some(mut block) = self.blocks.remove(&index) {
                     match &mut block {
                         RequestContentBlock::Text{ text } if text.is_empty() =>
@@ -939,19 +1147,31 @@ impl DeltaAssembler {
     }
 }
 
+#[derive(clap::Parser)]
+#[command(name = "huan")]
+#[command(about = "huan cli")]
+struct Command {
+    #[arg(long)]
+    not_dry: bool,
+    filename: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let command = Command::parse();
+    println!("file name {}", command.filename);
 
-    let session_original_content = fs::read_to_string("example-6.yml")?;
+    let session_original_content = fs::read_to_string(&command.filename)?;
     let session: Session = serde_yaml_ng::from_str(&session_original_content)?;
-    println!("{:?}", session);
-    validate_session(&session)?;
-    // need to explicitly print session name or else the property is completely not used
-    println!("session name {}", session.name);
+    println!("{}", get_session_display(&session)?);
+    let errors = validate_session(&session)?;
+    if errors.is_empty().not() {
+        errors.iter().for_each(|e| eprintln!("{}", e));
+        bail!("has validation errors, abort");
+    }
 
     let request = prepare_request(&session)?;
-    println!("{:?}", request);
+    println!("{}", get_request_display(&request)?);
     // return Ok(());
 
     let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
@@ -963,7 +1183,8 @@ async fn main() -> Result<()> {
         .header("content-type", "application/json")
         .bearer_auth(api_key)
         .json(&request).build()?;
-    let start_time = Utc::now();
+    // unwrap: provided nanosecond is valid
+    let start_time = Utc::now().with_nanosecond(0).unwrap();
     let response = client.execute(request).await?;
 
     let status = response.status();
@@ -971,29 +1192,53 @@ async fn main() -> Result<()> {
         let body = response.text().await?;
         bail!("response error {}: {}", status, body);
     }
-    // ATTENTION TODO condition is incorrect
-    // they current work because their content-type is text/event-stream; charset=utf8
-    let content_type = response.headers().get("content-type");
-    if content_type.map(|v| v == "text/event-stream").unwrap_or(true) {
-        bail!("content-type is not text/event-stream?, {:?}", content_type);
+    let headers = response.headers();
+    // NOTE that content-type may be "text/event-stream; charset=utf8"
+    // https://www.rfc-editor.org/info/rfc9110/#name-content-type
+    // https://www.rfc-editor.org/info/rfc2046/
+    // ignore no such header, will that happen?
+    if let Some(content_type) = headers.get("content-type") {
+        // ignore to str error, how does that happen?
+        if let Ok(content_type) = content_type.to_str() {
+            // unwrap: split result must have at least 1 element
+            let content_type_wo_parameters = content_type.split(';').next().unwrap().trim_ascii();
+            if content_type_wo_parameters != "text/event-stream" {
+                println!("content-type is not text/event-stream?, {:?}", content_type);
+            }
+        }
     }
-    let mut headers = Vec::new();
+
+    let mut noticeable_headers = Vec::new();
     for (name, value) in response.headers() {
-        headers.push((name.to_string(), format!("{:?}", value)));
-        println!("header {}: {:?}", name, value);
+        // to include unexpected headers, filter by exclude known boring headers
+        if matches!(name.as_str(),
+            | "server"
+            | "vary"
+            | "access-control-allow-credentials"
+            | "strict-transport-security"
+            | "x-content-type-options"
+            | "cache-control"
+        ) {
+            continue;
+        }
+        match value.to_str() {
+            Ok(value) => noticeable_headers.push((name.to_string(), value.to_string())),
+            Err(error) => noticeable_headers.push((name.to_string(), format!("{:?}: {}", value.as_bytes(), error))),
+        }
     }
 
     let mut stream = response.bytes_stream();
     let mut parser = EventStreamParser::new();
     let mut assembler: Option<DeltaAssembler> = None;
-    let mut extra = Vec::new();
+    let additional = Vec::new();
 
     let mut chunks = Vec::new();
     while let Some(chunk) = stream.next().await {
         let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
         chunks.push(String::from_utf8_lossy(chunk.as_ref()).into_owned());
         parser.push(chunk);
-        while let Some(event) = parser.pull(&mut extra)? {
+        // TODO not vec::new
+        while let Some(event) = parser.pull(&mut Vec::new())? {
             if let Some(assembler) = assembler.as_mut() {
                 assembler.push(event)?;
             } else {
@@ -1002,7 +1247,8 @@ async fn main() -> Result<()> {
         }
     }
 
-    let complete_time = Utc::now();
+    // unwrap: provided nanosecond is valid
+    let complete_time = Utc::now().with_nanosecond(0).unwrap();
     let Some(assembler) = assembler else {
         bail!("assembler even not created?");
     };
@@ -1010,26 +1256,31 @@ async fn main() -> Result<()> {
         bail!("assembler not properly stopped");
     }
     println!("{:?}", assembler.message);
-    for chunk in chunks { println!("{:?}", chunk); }
+
+    let stream_log = chunks.join("\n");
+    if let Err(error) = fs::write("stream.log", &stream_log) {
+        eprintln!("failed to write stream.log: {}", error);
+        eprintln!("{}", stream_log);
+    }
 
     let response_message = assembler.message;
     // unwrap: validated in prepare request
     let request_config = session.request_config.unwrap();
     let result_message = Message {
         id: request_config.message_id,
-        parent_id: request_config.parent_message_id,
+        parent_id: Some(request_config.parent_message_id),
         role: Role::Assistant,
-        request_config: Some(request_config.config),
+        request_config: Some(request_config),
         response_metadata: Some(ResponseMetadata {
             start_time,
             status_code: status.as_u16() as usize,
-            headers,
+            headers: noticeable_headers,
             complete_time,
             model: response_message.model,
             // unwrap: stop reason is required in message_delta event
             stop_reason: response_message.stop_reason.unwrap(),
             usage: response_message.usage.to_string(),
-            extra: Vec::new(), // TODO
+            additional,
         }),
         content: Content::Blocks(response_message.content.into_iter().map(|block| match block {
             RequestContentBlock::Text { text } => ContentBlock::Text{ name: None, value: text },
@@ -1039,9 +1290,9 @@ async fn main() -> Result<()> {
         }).collect()),
     };
 
-    let result_message = serialize_message(&result_message)?;
+    let result_message = serde_yaml_ng::to_string(&result_message)?;
     let output_content = format!("{}\n{}", session_original_content, result_message);
-    fs::write("example-6.yml", output_content)?;
+    fs::write(&command.filename, output_content)?;
 
     Ok(())
 }
@@ -1057,14 +1308,11 @@ fn test_read() {
         "system:",
         "  content: You are a coding agent",
         "",
-        "message-1:",
-        "  role: user",
+        "user[1]:",
         "  content:",
         "    summary source code file src/main.rs",
         "",
-        "message-3:",
-        "  parent-id: 1",
-        "  role: assistant",
+        "assistant[3<-1]:",
         "  content:",
         "  - kind: think",
         "    value: reasoning content",
@@ -1075,12 +1323,12 @@ fn test_read() {
         "    id: tool-call-id-1",
         "    name: read-file",
         "    # although you can inline json inside yaml line, there is no need to do that",
-        "    input: '{ pathname: \"src/main.rs\" }'",
+        "    input: '{ \"pathname\": \"src/main.rs\" }'",
         "  - kind: tool-use",
         "    # even chat completion api support parallel tool calls if you didn't notice",
         "    id: tool-call-id-2",
         "    name: read-file",
-        "    input: '{ pathname: \"src/session.rs\" }'",
+        "    input: '{ \"pathname\": \"src/session.rs\" }'",
         "  # store some of the response information in case they are useful",
         "  response:",
         "    create-time: TODO",
@@ -1092,9 +1340,7 @@ fn test_read() {
         "    complete-time: 2026-10-23T06:29:10Z",
         "    token-usage: 42/325/799",
         "",
-        "message-4:",
-        "  parent-id: 3",
-        "  role: user",
+        "user[4<-3]:",
         "  content:",
         "  - kind: text",
         "    name: additional-manual-description",
@@ -1140,7 +1386,7 @@ fn test_read() {
     assert_eq!(content, "You are a coding agent");
     assert_eq!(session.messages.len(), 3);
     assert_eq!(session.messages[0].id, 1);
-    assert_eq!(session.messages[0].parent_id, 0);
+    assert_eq!(session.messages[0].parent_id, None);
     assert_matches!(session.messages[0].role, Role::User);
     assert!(session.messages[0].request_config.is_none());
     assert!(session.messages[0].response_metadata.is_none());
@@ -1149,7 +1395,7 @@ fn test_read() {
     };
     assert_eq!(content, "summary source code file src/main.rs");
     assert_eq!(session.messages[1].id, 3);
-    assert_eq!(session.messages[1].parent_id, 1);
+    assert_eq!(session.messages[1].parent_id, Some(1));
     assert_matches!(session.messages[1].role, Role::Assistant);
     let Content::Blocks(content_blocks) = &session.messages[1].content else {
         panic!("session.messages[1].content is not block array")
@@ -1162,13 +1408,13 @@ fn test_read() {
     };
     assert_eq!(id, "tool-call-id-1");
     assert_eq!(name, "read-file");
-    assert_eq!(input, "{ pathname: \"src/main.rs\" }");
+    assert_eq!(input, &serde_json::json!({ "pathname": "src/main.rs" }));
     let ContentBlock::ToolUse{ id, name, input } = &content_blocks[3] else {
         panic!("session.messages[1].content[3] not toolcall");
     };
     assert_eq!(id, "tool-call-id-2");
     assert_eq!(name, "read-file");
-    assert_eq!(input, "{ pathname: \"src/session.rs\" }");
+    assert_eq!(input, &serde_json::json!({ "pathname": "src/session.rs" }));
     // read don't read response metadata
     assert!(session.messages[1].request_config.is_none());
     assert!(session.messages[1].response_metadata.is_none());
@@ -1176,7 +1422,7 @@ fn test_read() {
     // assert_matches!(&session.messages[2].response_metadata[0].1, serde_yaml_ng::Value::String(value) if value == "TODO");
     
     assert_eq!(session.messages[2].id, 4);
-    assert_eq!(session.messages[2].parent_id, 3);
+    assert_eq!(session.messages[2].parent_id, Some(3));
     assert_matches!(session.messages[2].role, Role::User);
     let Content::Blocks(content_blocks) = &session.messages[2].content else {
         panic!("session.messages[2].content is not block array")
@@ -1202,18 +1448,18 @@ fn test_read() {
     };
     assert_eq!(request_config.message_id, 5);
     assert_eq!(request_config.parent_message_id, 4);
-    assert_eq!(request_config.config.model.as_deref(), Some("deepseek-v4-pro"));
-    assert_matches!(request_config.config.think, ThinkingMode::Switch(true));
-    assert_eq!(request_config.config.tool_names, vec!["read-file".to_string()]);
+    assert_eq!(request_config.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_matches!(request_config.think, ThinkingMode::Switch(true));
+    assert_eq!(request_config.tool_names, vec!["read-file".to_string()]);
 }
 
 #[test]
 fn test_write() {
     use chrono::TimeZone;
 
-    assert_eq!(serialize_message(&Message {
+    assert_eq!(serde_yaml_ng::to_string(&Message {
         id: 3,
-        parent_id: 2,
+        parent_id: Some(2),
         role: Role::Assistant,
         content: Content::Blocks(vec![
             ContentBlock::Think{
@@ -1236,6 +1482,9 @@ fn test_write() {
             },
         ]),
         request_config: Some(RequestConfig {
+            message_id: 0,
+            parent_message_id: 0,
+            base_url: None,
             model: None,
             think: ThinkingMode::Effort("high".to_string()),
             tool_names: vec!["tool1".to_string(), "tool2".to_string()],
@@ -1249,12 +1498,10 @@ fn test_write() {
             model: "deepseek-flasher".to_string(),
             stop_reason: "tool_use".to_string(),
             usage: r#"{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}"#.to_string(),
-            extra: Vec::new(),
+            additional: Vec::new(),
         }),
     }).expect("failed to serialize"), vec![
-        "message-3:",
-        "  parent-id: 2",
-        "  role: assistant",
+        "assistant[3<-2]:",
         // by the way, if you forgget the untagged, it will be content: !Blocks
         "  content:",
         "  - kind: think",
@@ -1265,13 +1512,11 @@ fn test_write() {
         "  - kind: tool-use",
         "    id: id1",
         "    name: read-file",
-        "    input:",
-        "      pathname: src/main.rs",
+        "    input: '{\"pathname\":\"src/main.rs\"}'",
         "  - kind: tool-use",
         "    id: id2",
         "    name: read-file",
-        "    input:",
-        "      pathname: src/session.rs",
+        "    input: '{\"pathname\":\"src/session.rs\"}'",
         "  request:",
         "    think: high",
         "    tools:",
@@ -1287,17 +1532,15 @@ fn test_write() {
         r#"    usage: '{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}'"#, "",
     ].join("\n"));
 
-    assert_eq!(serialize_message(&Message {
+    assert_eq!(serde_yaml_ng::to_string(&Message {
         id: 5,
-        parent_id: 42,
+        parent_id: Some(42),
         role: Role::Assistant,
         content: Content::String("this file contains...\nand this file...".to_string()),
         request_config: None,
         response_metadata: None,
     }).expect("failed to serialize"), vec![
-        "message-5:",
-        "  parent-id: 42",
-        "  role: assistant",
+        "assistant[5<-42]:",
         // what's this |-
         "  content: |-",
         "    this file contains...",
