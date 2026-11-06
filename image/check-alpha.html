@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<head>
+<meta charset="utf-8">
+<title>Alpha Checker</title>
+<style>
+  body { font: 14px system-ui; margin: 20px; background:#111; color:#eee; }
+  .wrap {
+    display:inline-block; padding:8px;
+    /* CSS checkerboard, independent of the image */
+    background-image:
+      linear-gradient(45deg,#888 25%,transparent 25%),
+      linear-gradient(-45deg,#888 25%,transparent 25%),
+      linear-gradient(45deg,transparent 75%,#888 75%),
+      linear-gradient(-45deg,transparent 75%,#888 75%);
+    background-size:20px 20px;
+    background-position:0 0,0 10px,10px -10px,-10px 0;
+    background-color:#fff;
+  }
+  canvas { display:block; }
+</style>
+</head>
+<body>
+<h3>Drop an image here</h3>
+<div class="wrap"><canvas id="c"></canvas></div>
+<pre id="out">No image yet.</pre>
+
+<script>
+const c = document.getElementById('c');
+const ctx = c.getContext('2d');
+const out = document.getElementById('out');
+
+function analyze(img) {
+  c.width = img.naturalWidth;
+  c.height = img.naturalHeight;
+  ctx.clearRect(0,0,c.width,c.height);
+  ctx.drawImage(img,0,0);
+
+  const {width:w, height:h} = c;
+  const data = ctx.getImageData(0,0,w,h).data;
+
+  let minA = 255, maxA = 0, fullyTransparent = 0, semi = 0, opaque = 0;
+  // sample every pixel (fine for typical images; skip if huge)
+  const step = (w*h > 4_000_000) ? 4 : 1;
+  for (let i = 3; i < data.length; i += 4*step) {
+    const a = data[i];
+    if (a < minA) minA = a;
+    if (a > maxA) maxA = a;
+    if (a === 0) fullyTransparent++;
+    else if (a === 255) opaque++;
+    else semi++;
+  }
+
+  out.textContent =
+    `Size: ${w}x${h}\n` +
+    `Alpha min/max: ${minA}/${maxA}\n` +
+    `Fully transparent pixels: ${fullyTransparent}\n` +
+    `Semi-transparent pixels: ${semi}\n` +
+    `Opaque pixels: ${opaque}\n\n` +
+    (minA < 255
+      ? '✅ Image HAS transparency (alpha channel present).'
+      : '❌ No transparency — every pixel is fully opaque.');
+}
+
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  const img = new Image();
+  img.onload = () => { analyze(img); URL.revokeObjectURL(url); };
+  img.src = url;
+});
+
+// also allow paste
+document.addEventListener('paste', e => {
+  const item = [...e.clipboardData.items].find(i => i.type.startsWith('image/'));
+  if (!item) return;
+  const img = new Image();
+  img.onload = () => analyze(img);
+  img.src = URL.createObjectURL(item.getAsFile());
+});
+</script>
+</body>

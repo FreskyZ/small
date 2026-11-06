@@ -22,8 +22,18 @@ span.char-container>span{font-size:14px}
   <div id="all-languages"></div>
   <script type="module">
 
+// note for creation work:
+// most arcs can be approximate by bezier curve, so normally when you really need a circle especially a full circle or else use bezier curve
+// // why cubic bezier have 4 control points while quadratic bezier have 3 control points? UPDATE quadratic means 2 not 4 here
+// TODO icon size, especially visual weight normalization?
 const AllLanguageData = [{
-  name: 'priest',
+  name: 'DEVOTEE',
+  charset: [
+    'c1-1;god;basic;;M 500 250 l 300 350 l -300 200 l -300 -200 z m -300 350 h 600 m -300 -350 v 550',
+  ],
+  // TODO convert to new data structure
+  // TOOD change viewbox to 100 100, or 64 64? 128 128? divide everything by 10
+  // TODO change all curves to bezier curve, except full circles
   characterGroups: [{
     name: 'primitive symbols',
     characters: [
@@ -64,7 +74,7 @@ const AllLanguageData = [{
       { name: 'like', desc: 'like', path: 'M 600 300 l 125 176 h -500 M 200 700 h 600' },
     ],
   }, {
-    name: 'instruments: left parenthesis',
+    name: 'TODO objects: left parenthesis',
     characters: [
       { name: 'door', desc: 'door: a device to stop pass through?', path: 'M 400 200 c -240 200, -240 400, 0 600 M 650 200 v 360 m -180 0 h 360' },
       { name: 'key', desc: 'key: a device to change to open state', path: 'M 400 200 c -240 200, -240 400, 0 600 M 780 350 h -350 c 0 200, 250 280, 350 280' },
@@ -82,6 +92,7 @@ const AllLanguageData = [{
       { name: 'graveyard', desc: 'graveyard: a place for the dead', path: 'M 225 250 h 575 v 525 h -575 v -150 M 300 625 h 375 l 10 -125 M 325 445 h 64 v 64 h -64 z' },
     ],
   }],
+  // TODO change to scenarios
   sentences: [{
     characters: ['you', 'help', 'me'],
     desc: 'You help me.',
@@ -235,11 +246,20 @@ const AllLanguageData = [{
     desc: 'Glasses can find god',
     context: 'level 1 area 2 preacher note',
   }],
-  // the man looks at the priest
-  // the priest looks at god
-  // god looks at the instrument
-  // preacher talk to the man
+}, {
+  name: 'warrior',
+  characters: [
+    { id: 'c2-1', group: 'no', name: '?', desc: '?', path: 'M 500 200 l -300 600 m 0 -600 l 300 600' },
+  ],
+  scenarios: [{
+    name: 'scenario 1',
+    sentences: [{
+      characters: [],
+      translation: '',
+    }],
+  }],
 }];
+window.AllLanguageData = AllLanguageData;
 
 const allLanguagesElement = document.querySelector('div#all-languages');
 

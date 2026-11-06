@@ -2,6 +2,7 @@ target
 node_modules
 akari.json
 .env
+.envrc
 .venv
 .cache
 autotrack/config.json
