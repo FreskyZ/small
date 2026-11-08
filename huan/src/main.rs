@@ -150,13 +150,12 @@ impl ThinkingMode {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RequestConfig {
-    // need deserialize from persistant file, need skip when serialize into result message
+    // skip serializing into result message, the parent message id is already in the message key
     #[serde(skip_serializing)]
+    // requesting user message id, the assistant message id will be auto allocated
     message_id: usize,
-    #[serde(skip_serializing)]
-    // parent message id is required in request config if you didn't notice
-    parent_message_id: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
+    // the url to append /v1/messages
     base_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
@@ -410,7 +409,7 @@ fn get_session_display(session: &Session) -> Result<String> {
         write_content(&mut b, &message.content)?;
     }
     if let Some(request_config) = &session.request_config {
-        writeln!(b, "request config [{}<-{}]:", request_config.message_id, request_config.parent_message_id)?;
+        writeln!(b, "request config [<-{}]:", request_config.message_id)?;
         if let Some(base_url) = &request_config.base_url { writeln!(b, "   base url: {}", base_url)?; }
         if let Some(model) = &request_config.model { writeln!(b, "   model: {}", model)?; }
         if !matches!(request_config.think, ThinkingMode::Switch(false)) { writeln!(b, "   think mode: {:?}", request_config.think)?; }
@@ -495,8 +494,8 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
                         if let Some(position) = remaining_tool_use_ids.iter().position(|v| v == &result_id) {
                             remaining_tool_use_ids.remove(position);
                             // history tool-result message's thinking mode is not recorded, so this can only validate request-config.parent-message-id
-                            if let Some(RequestConfig{ parent_message_id, think, .. }) = &session.request_config {
-                                if parent_message_id == &message.id && current_tool_turn_thinking != !matches!(think, ThinkingMode::Switch(false)) {
+                            if let Some(RequestConfig{ message_id, think, .. }) = &session.request_config {
+                                if message_id == &message.id && current_tool_turn_thinking != !matches!(think, ThinkingMode::Switch(false)) {
                                     raise!("message-{}: content#{}: thinking switch is different from tool use turn, expect {}", message.id, block_index, current_tool_turn_thinking);
                                 }
                             }
@@ -522,25 +521,17 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
     }
     
     if let Some(request_config) = &session.request_config {
-
-        if request_config.message_id <= 0 {
-            raise!("request config: message-id: invalid value 0, expect positive value");
-        }
-        if !message_ids.insert(request_config.message_id) {
-            raise!("request config: duplicate message id {}", request_config.message_id);
-        }
-        if request_config.message_id == request_config.parent_message_id {
-            raise!("request config: parent id cannot be same as message id");
-        } else if request_config.parent_message_id > 0 {
-            if let Some(parent_message) = session.messages.iter().find(|m| m.id == request_config.parent_message_id) {
+        if request_config.message_id > 0 {
+            if let Some(parent_message) = session.messages.iter().find(|m| m.id == request_config.message_id) {
                 if !matches!(parent_message.role, Role::User) {
-                    raise!("request config: unexpected parent message role relationship");
+                    raise!("request config: message-id {} should be user message", request_config.message_id);
                 }
             } else {
-                raise!("request config: parent-id {} not exist", request_config.parent_message_id);
+                raise!("request config: message-id {} not exist", request_config.message_id);
             }
+        } else {
+            raise!("request config: message-id: invalid value 0, expect positive value");
         }
-
         if let Some(base_url) = &request_config.base_url {
             if let Err(error) = reqwest::Url::parse(base_url) {
                 raise!("request config: base url parse error: {}", error);
@@ -636,6 +627,9 @@ struct ToolDefinition {
 
 #[derive(Debug, Serialize)]
 struct Request {
+    // don't serialize this into request body
+    #[serde(skip_serializing)]
+    url: reqwest::Url,
     model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<Vec<RequestContentBlock>>,
@@ -656,7 +650,7 @@ fn prepare_request(session: &Session) -> Result<Request> {
     let Some(request_config) = &session.request_config else { bail!("missing request config") };
 
     let mut thread = Vec::new();
-    let mut next_parent_id = Some(request_config.parent_message_id);
+    let mut next_parent_id = Some(request_config.message_id);
     while let Some(parent_id) = next_parent_id {
         // unwrap: validated parent id exist
         let parent_message = session.messages.iter().find(|m| m.id == parent_id).unwrap();
@@ -671,6 +665,12 @@ fn prepare_request(session: &Session) -> Result<Request> {
         let thread_ids = thread.iter().map(|m| format!("{}({:?})", m.id, m.role)).collect::<Vec<_>>();
         bail!("thread not start with user message, thread: {:?}", thread_ids);
     }
+
+    let base_url = request_config.base_url.as_deref().unwrap_or("https://api.deepseek.com/anthropic");
+    let mut url = reqwest::Url::parse(&base_url)?;
+    let path_name = std::path::PathBuf::from(url.path()).join("v1/messages");
+    let path_name = path_name.to_str().ok_or_else(|| anyhow::anyhow!("failed to create request url?"))?;
+    url.set_path(path_name);
 
     let model = request_config.model.as_deref().unwrap_or("deepseek-flash").to_string();
     let (thinking, output_config) = match &request_config.think {
@@ -716,7 +716,7 @@ fn prepare_request(session: &Session) -> Result<Request> {
     }).collect();
 
     // currently deepseek api validate tool name duplicate, don't rely on that
-    let tools = vec![
+    let all_tools = vec![
         ToolDefinition{
             name: "read-file",
             description: "Read the contents of a file.",
@@ -777,9 +777,17 @@ fn prepare_request(session: &Session) -> Result<Request> {
                 },
             }),
         },
-    ].into_iter().filter(|t| request_config.tool_names.iter().any(|n| n == t.name)).collect();
+    ];
 
-    Ok(Request { model, system, messages, thinking, output_config, max_tokens, stream: true, tools })
+    let unknown_tool_names =  request_config.tool_names.iter()
+        .map(|n| n.as_str())
+        .filter(|n| !all_tools.iter().any(|e| &e.name == n)).collect::<Vec<_>>();
+    if unknown_tool_names.is_empty().not() {
+        bail!("unknown tool names {}", unknown_tool_names.join(","));
+    }
+    let tools = all_tools.into_iter().filter(|t| request_config.tool_names.iter().any(|n| n == t.name)).collect();
+
+    Ok(Request { url, model, system, messages, thinking, output_config, max_tokens, stream: true, tools })
 }
 
 fn get_request_display(request: &Request) -> Result<String> {
@@ -802,6 +810,7 @@ fn get_request_display(request: &Request) -> Result<String> {
     }
 
     writeln!(b, "request:")?;
+    writeln!(b, "url: {}", request.url)?;
     writeln!(b, "model: {}", request.model)?;
     writeln!(b, "thining: {:?}", request.thinking)?;
     writeln!(b, "output config: {:?}", request.output_config)?;
@@ -1222,7 +1231,7 @@ async fn main() -> Result<()> {
     };
     let client = reqwest::Client::builder().build()?;
     let request = client
-        .post("https://api.deepseek.com/anthropic/v1/messages")
+        .post(request.url.clone())
         .header("content-type", "application/json")
         .bearer_auth(api_key)
         .json(&request).build()?;
@@ -1302,9 +1311,12 @@ async fn main() -> Result<()> {
     let response_message = assembler.message;
     // unwrap: validated in prepare request
     let request_config = session.request_config.unwrap();
+    // unwrap: session.messages is not empty
+    let result_message_id = session.messages.iter().map(|m| m.id).max().unwrap() + 1;
+
     let result_message = Message {
-        id: request_config.message_id,
-        parent_id: Some(request_config.parent_message_id),
+        id: result_message_id,
+        parent_id: Some(request_config.message_id),
         role: Role::Assistant,
         request_config: Some(request_config),
         response_metadata: Some(ResponseMetadata {
@@ -1368,7 +1380,7 @@ fn test_read() {
         "    input: '{ \"pathname\": \"src/session.rs\" }'",
         "  # store some of the response information in case they are useful",
         "  response:",
-        "    create-time: TODO",
+        "    create-time: 1",
         "    status-code: 200",
         "    header-x-ds-trace-id: x-ds-trace-id1",
         "    header-date: Sun, 25 Oct 2026 08:47:50 GMT",
@@ -1392,7 +1404,7 @@ fn test_read() {
         "      fn read_session...",
         "      fn test_read...",
         "    metadata:",
-        "      create-time: TODO",
+        "      create-time: 2",
         "      complete-time: etc.1",
         "      file-size: etc.2",
         "      return-size: etc.3",
@@ -1404,8 +1416,7 @@ fn test_read() {
         "      ...",
         "",
         "request:",
-        "  message-id: 5",
-        "  parent-message-id: 4",
+        "  message-id: 4",
         "  model: deepseek-v4-pro",
         "  think: true",
         "  tools: [read-file]",
@@ -1455,8 +1466,6 @@ fn test_read() {
     // read don't read response metadata
     assert!(session.messages[1].request_config.is_none());
     assert!(session.messages[1].response_metadata.is_none());
-    // assert_eq!(session.messages[2].response_metadata[0].0, "create-time");
-    // assert_matches!(&session.messages[2].response_metadata[0].1, serde_yaml_ng::Value::String(value) if value == "TODO");
     
     assert_eq!(session.messages[2].id, 4);
     assert_eq!(session.messages[2].parent_id, Some(3));
@@ -1483,8 +1492,7 @@ fn test_read() {
     let Some(request_config) = &session.request_config else {
         panic!("session.request_config not some");
     };
-    assert_eq!(request_config.message_id, 5);
-    assert_eq!(request_config.parent_message_id, 4);
+    assert_eq!(request_config.message_id, 4);
     assert_eq!(request_config.model.as_deref(), Some("deepseek-v4-pro"));
     assert_matches!(request_config.think, ThinkingMode::Switch(true));
     assert_eq!(request_config.tool_names, vec!["read-file".to_string()]);
@@ -1520,7 +1528,6 @@ fn test_write() {
         ]),
         request_config: Some(RequestConfig {
             message_id: 0,
-            parent_message_id: 0,
             base_url: None,
             model: None,
             think: ThinkingMode::Effort("high".to_string()),
