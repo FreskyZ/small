@@ -181,8 +181,9 @@ struct ResponseMetadata {
     headers: Vec<(String, String)>,
     // response stream complete time
     complete_time: DateTime<Utc>,
-    // result model
     model: String,
+    // returned message object have a guid id
+    provider_message_id: String,
     stop_reason: String,
     // save json text here, currently no need to parse them precisely, actually
     // you can use postgresql's rich json functionality to query values if need
@@ -203,6 +204,7 @@ impl Serialize for ResponseMetadata {
         }
         map.serialize_entry("complete-time", &self.complete_time)?;
         map.serialize_entry("model", &self.model)?;
+        map.serialize_entry("their-message-id", &self.provider_message_id)?;
         map.serialize_entry("stop-reason", &self.stop_reason)?;
         map.serialize_entry("usage", &self.usage)?;
         for (key, value) in &self.additional {
@@ -347,7 +349,7 @@ impl<'de> Deserialize<'de> for Session {
                             messages.push(message);
                         },
                         // allow some other properties while don't actually read them
-                        "create-time" => { map.next_value::<IgnoredAny>()?; },
+                        "metadata" => { map.next_value::<IgnoredAny>()?; },
                         other => return Err(DeserializeError::unknown_field(other, &["name", "message-*", "request"])),
                     }
                 }
@@ -719,7 +721,7 @@ fn prepare_request(session: &Session) -> Result<Request> {
     let all_tools = vec![
         ToolDefinition{
             name: "read-file",
-            description: "Read the contents of a file.",
+            description: "Read the contents of a file. Can specify a line range to read using start-line and end-line parameter, default to read 400 lines of content start from first line.",
             // now this part have to use json!
             input_schema: serde_json::json!({
                 "type": "object",
@@ -728,13 +730,47 @@ fn prepare_request(session: &Session) -> Result<Request> {
                         "type": "string",
                         "description": "The path of the file to read.",
                     },
+                    "start-line": {
+                        "type": "integer",
+                        "description": "Beginning line to read, start from 1, inclusive, default to 1",
+                    },
+                    "end-line": {
+                        "type": "integer",
+                        "description": "Ending line to read, start from 1, exclusive, default to 400 lines of content after start-line."
+                    },
                 },
                 "required": ["path"],
             }),
         },
         ToolDefinition{
+            name: "edit-file",
+            description: "Edit contents of a file. Specify a line range to overwrite, range is left inclusive right exclusive, use same value to insert before the line.",
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "The path of the file to write.",
+                    },
+                    "start-line": {
+                        "type": "integer",
+                        "description": "Beginning line to overwrite, start from 1, inclusive",
+                    },
+                    "end-line": {
+                        "type": "integer",
+                        "description": "Ending line to overwrite, start from 1, exclusive"
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "new content to overwrite"
+                    }
+                },
+                "required": ["path", "start-line", "end-line", "content"],
+            }),
+        },
+        ToolDefinition{
             name: "list-directory",
-            description: concat!("List file system entries in directory."),
+            description: "List file system entries in directory.",
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1093,6 +1129,12 @@ impl DeltaAssembler {
             DeltaEvent::MessageStart{ message } if !self.started => {
                 self.started = true;
                 self.message = message;
+                if self.message.r#type != "message" {
+                    raise!("{}: message.type is not message", event.data);
+                }
+                if self.message.role != "assistant" {
+                    raise!("{}: message.role is not assistant", event.data);
+                }
             },
             DeltaEvent::MessageStart{..} /* if self.started */ =>
                 raise!("{}: duplicate message_start event", event.data),
@@ -1199,8 +1241,7 @@ impl DeltaAssembler {
 }
 
 #[derive(clap::Parser)]
-#[command(name = "huan")]
-#[command(about = "huan cli")]
+#[command(name = "huan", about = "huan cli")]
 struct Command {
     #[arg(long)]
     not_dry: bool,
@@ -1325,6 +1366,7 @@ async fn main() -> Result<()> {
             headers: noticeable_headers,
             complete_time,
             model: response_message.model,
+            provider_message_id: response_message.id,
             // unwrap: stop reason is required in message_delta event
             stop_reason: response_message.stop_reason.unwrap(),
             usage: response_message.usage.to_string(),
@@ -1540,6 +1582,7 @@ fn test_write() {
             status_code: 200,
             headers: vec![("x-ds-trace-id".to_string(), "x-ds-trace-id-1".to_string())],
             model: "deepseek-flasher".to_string(),
+            provider_message_id: "their-message-id".to_string(),
             stop_reason: "tool_use".to_string(),
             usage: r#"{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}"#.to_string(),
             additional: Vec::new(),
@@ -1572,6 +1615,7 @@ fn test_write() {
         "    header-x-ds-trace-id: x-ds-trace-id-1",
         "    complete-time: 2026-10-31T12:35:00Z",
         "    model: deepseek-flasher",
+        "    their-message-id: their-message-id",
         "    stop-reason: tool_use",
         r#"    usage: '{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}'"#, "",
     ].join("\n"));

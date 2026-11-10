@@ -6,7 +6,8 @@
     "mounts": [
         // source cannot use ~
         // source does not respsect temporary `export VAR=value` in the shell to run `code .`, need to add to .zshrc
-        { "source": "${localEnv:CARGO_DOWNLOAD_CACHE}", "target": "/usr/local/cargo/registry", "type": "bind" }
+        { "source": "${localEnv:CARGO_DOWNLOAD_CACHE}", "target": "/usr/local/cargo/registry", "type": "bind" },
+        { "source": "${localEnv:HUAN_DATA_DIR}", "target": "/data", "type": "bind" }
     ],
     // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
     "customizations": {
