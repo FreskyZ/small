@@ -204,7 +204,7 @@ impl Serialize for ResponseMetadata {
         }
         map.serialize_entry("complete-time", &self.complete_time)?;
         map.serialize_entry("model", &self.model)?;
-        map.serialize_entry("their-message-id", &self.provider_message_id)?;
+        map.serialize_entry("provider-message-id", &self.provider_message_id)?;
         map.serialize_entry("stop-reason", &self.stop_reason)?;
         map.serialize_entry("usage", &self.usage)?;
         for (key, value) in &self.additional {
@@ -224,6 +224,7 @@ struct SystemMessage {
 // now that id, pid and role is not in message itself serializing and deserializing,
 // request config and response metadata need rename and is not in deserializing but
 // need special handling to allow the name, etc., so the result is fully manual
+// TODO user message also don't have other properties?
 #[derive(Debug)]
 struct Message {
     id: usize,
@@ -1243,17 +1244,133 @@ impl DeltaAssembler {
 #[derive(clap::Parser)]
 #[command(name = "huan", about = "huan cli")]
 struct Command {
-    #[arg(long)]
-    not_dry: bool,
-    filename: String,
+    #[command(subcommand)]
+    subcommand: SubCommand,
+}
+
+#[derive(clap::Subcommand)]
+enum SubCommand {
+    #[command(about = "run a session")]
+    Run {
+        #[arg(long)]
+        not_dry: bool,
+        filename: String,
+    },
+    #[command(about = "migrate something")]
+    Migrate,
+}
+
+fn migrate() -> Result<()> {
+    println!("migrate");
+    
+    let original_content1 = fs::read_to_string("/data/20261108-140900.yml")?;
+    let document1: Session = serde_yaml_ng::from_str(&original_content1)?;
+    let Content::Blocks(blocks1) = &document1.messages[3].content else { unreachable!() };
+    let ContentBlock::Text{ value: value1, .. } = &blocks1[0] else { unreachable!() };
+    println!("{:?}", &value1[0..100]);
+
+    // let mut b = String::new();
+    // b.push_str("name: name\nassistant[4<-3]:\n  content:\n  - kind: think\n    value: |-\n");
+    // for line in value1.lines() {
+    //     if line.is_empty().not() {
+    //         b.push_str("      ");
+    //         b.push_str(line);
+    //         b.push('\n');
+    //     }
+    // }
+    // b.push_str("    signature: signature value\n");
+    // b.push_str("request:\n  message-id: 1\n");
+    // fs::write("/data/temp2.yml", &b)?;
+
+    let result_message = Message{
+        id: 1,
+        parent_id: None,
+        role: Role::Assistant,
+        content: Content::Blocks(vec![
+            // total length 50550
+            // 50000.. ok
+            // 25000..50000 not ok
+            // ..25000 not ok
+            // 40000.. not ok
+            // 45000.. not ok
+            // 48000.. ok, result in "|2-"!
+            // 47998.. ok
+            // 46000.. not ok
+            // ..3000 ok
+            // ..5000 not ok
+            // ..4000 not ok
+            // ..3500 ok
+            // ..3750 not ok
+            // ..3675 not ok
+            // ..3580 ok
+            // ..3630 ok
+            // ..3655 not ok
+            // ..3654 ok, 3655 ends with trailing whitespace, but why rangefrom series not ok
+            // ..3668 ok, ends with multiple new lines
+            // ..3667 ok, ends with new line
+            // ..3658 not ok, ends with whitespace
+            // ..3657 ok
+            // 3..3657 ok with |2-, this is because start with whitespace
+            // 3..13657 not ok, this start with whitespace, not end with whitespace
+            // ..13657 not ok
+            // 3657..8657 not ok, this start with whitespace, not end with whitespace
+            // 3658..8657 not ok
+            // 3658..5000 not ok
+            // 5000..8657 ok
+            // 4000..5000 ok
+            // 3650..3800 not ok
+            // 3670..3720 not ok: "t me just go with: \n- Split into lines\n- Accumulat"
+            // 3686..3700 not ok: "h: \n- Split in"
+            // ContentBlock::Think{ value: value1[3686..3700].to_string(), signature: "signature value".to_string() },
+            // ContentBlock::Think{ value: "h: \n- Split in".to_string(), signature: "signature value".to_string() },
+            // that's because of trailing whitespace
+            ContentBlock::Think{ value: "h:\n- Split in".to_string(), signature: "signature value".to_string() },
+        ]),
+        request_config: None,
+        response_metadata: None,
+    };
+    let serialized = serde_yaml_ng::to_string(&result_message)?;
+    fs::write("/data/temp2.yml", serialized)?;
+
+    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str("assistant[1]:\n  content:\n  - kind: think\n    value1: \"h: \\n- Split in\"\n    value2: |-\n      h: \n      - Split in\n    signature: signature value")?;
+    let object = &document.as_mapping().unwrap().get("assistant[1]").unwrap().as_mapping().unwrap().get("content").unwrap().as_sequence().unwrap()[0];
+    println!("{:?}, {:?}", object.get("value1"), object.get("value2"));
+    // ok, that's serde_yaml_ng bug to regard leading hyphen in content as has to escape
+    // also confirmed by nodejs yaml package to produce correct result
+    assert_eq!(object.get("value1"), object.get("value2"));
+
+    assert_eq!(serde_yaml_ng::from_str::<serde_yaml_ng::Value>("key: |-\n  line1 \n  line2\n").unwrap().as_mapping().unwrap().get("key").unwrap().as_str().unwrap(), "line1 \nline2");
+
+    // let original_content2 = fs::read_to_string("/data/temp2.yml")?;
+    // let document2: Session = serde_yaml_ng::from_str(&original_content2)?;
+    // let Content::Blocks(blocks2) = &document2.messages[0].content else { unreachable!("this?") };
+    // let ContentBlock::Think{ value: value2, .. } = &blocks2[0] else { unreachable!() };
+
+    // assert_eq!(value1, value2);
+
+    assert_eq!(serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping({
+        let mut map = serde_yaml_ng::Mapping::new();
+        map.insert(serde_yaml_ng::Value::String("key".to_string()), serde_yaml_ng::Value::String("line1\nline2".to_string()));
+        map
+    })).expect("failed to serialize"), "key: |-\n  line1\n  line2\n");
+    assert_eq!(serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping({
+        let mut map = serde_yaml_ng::Mapping::new();
+        map.insert(serde_yaml_ng::Value::String("key".to_string()), serde_yaml_ng::Value::String("line1 \nline2".to_string()));
+        map
+    })).expect("failed to serialize"), "key: \"line1 \\nline2\"\n");
+
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let command = Command::parse();
-    println!("file name {}", command.filename);
+    let SubCommand::Run{ filename, not_dry } = command.subcommand else {
+        return migrate();
+    };
+    println!("file name {}", filename);
 
-    let session_original_content = fs::read_to_string(&command.filename)?;
+    let session_original_content = fs::read_to_string(&filename)?;
     let session: Session = serde_yaml_ng::from_str(&session_original_content)?;
     println!("{}", get_session_display(&session)?);
     let errors = validate_session(&session)?;
@@ -1264,7 +1381,7 @@ async fn main() -> Result<()> {
 
     let request = prepare_request(&session)?;
     println!("{}", get_request_display(&request)?);
-    if !command.not_dry { println!("this is dry run, use --not-dry to actually run"); return Ok(()); }
+    if !not_dry { println!("this is dry run, use --not-dry to actually run"); return Ok(()); }
     // return Ok(());
 
     let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
@@ -1382,8 +1499,8 @@ async fn main() -> Result<()> {
 
     let result_message = serde_yaml_ng::to_string(&result_message)?;
     let output_content = format!("{}\n{}", session_original_content, result_message);
-    println!("write {}", command.filename);
-    fs::write(&command.filename, output_content)?;
+    println!("write {}", filename);
+    fs::write(&filename, output_content)?;
 
     Ok(())
 }
@@ -1394,7 +1511,7 @@ fn test_read() {
 
     let session = serde_yaml_ng::from_str(&vec![
         "name: session name",
-        "create-time: 2026-10-22T07:59:01Z",
+        "metadata: 2026-10-22T07:59:01Z",
         "",
         "system:",
         "  content: You are a coding agent",
@@ -1630,9 +1747,29 @@ fn test_write() {
     }).expect("failed to serialize"), vec![
         "assistant[5<-42]:",
         // what's this |-
+        // compare to |, |- means remove trailing new line
         "  content: |-",
         "    this file contains...",
         "    and this file...", "",
+    ].join("\n"));
+
+    assert_eq!(serde_yaml_ng::to_string(&Message {
+        id: 5,
+        parent_id: Some(42),
+        role: Role::Assistant,
+        content: Content::Blocks(vec![
+            ContentBlock::Think{ value: "this file contains...\nand this file...\n".to_string(), signature: "signature value".to_string() }
+        ]),
+        request_config: None,
+        response_metadata: None,
+    }).expect("failed to serialize"), vec![
+        "assistant[5<-42]:",
+        "  content:",
+        "  - kind: think",
+        "    value: |",
+        "      this file contains...",
+        "      and this file...",
+        "    signature: signature value", "",
     ].join("\n"));
 }
 
