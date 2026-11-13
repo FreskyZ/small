@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::fs;
 use std::ops::Not as _;
-use anyhow::{Result, bail};
+use anyhow::{Context as _, Result, bail};
 use bytes::{BufMut as _, Bytes, BytesMut};
 use chrono::{DateTime, Timelike, Utc};
 use clap::Parser as _;
@@ -11,6 +11,9 @@ use reqwest;
 use serde::{Serializer, Deserializer, Serialize, Deserialize};
 use serde::ser::SerializeMap as _;
 use serde::de::{MapAccess, SeqAccess, IgnoredAny, Error as DeserializeError};
+
+mod session;
+mod text_repr;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum Role {
@@ -46,8 +49,10 @@ enum ContentBlock {
     Think{
         value: String,
         signature: String,
+        // #[serde(skip_serializing_if = "Option::is_none", serialize_with = "serialize_with_json_opt", deserialize_with = "deserialize_with_json_opt")]
+        // trailing_whitespaces: Option<serde_json::Value>,
     },
-    ToolUse{ 
+    ToolUse{
         id: String,
         name: String,
         // - the value types in serde_json and serde_yaml_anything are just flexible objects,
@@ -55,6 +60,7 @@ enum ContentBlock {
         // - use custom serialize and deserialize functions to inline this in a string
         #[serde(serialize_with = "serialize_with_json", deserialize_with = "deserialize_with_json")]
         input: serde_json::Value,
+        // this don't need trailing whitespaces
     },
     ToolResult{
         id: String,
@@ -86,6 +92,29 @@ fn deserialize_with_json<'de, D>(deserializer: D) -> Result<serde_json::Value, D
         }
     }
     deserializer.deserialize_any(Visitor)
+}
+fn serialize_with_json_opt<S>(value: &Option<serde_json::Value>, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    if let Some(value) = value {
+        let serialized = serde_json::to_string(value).map_err(|e| serde::ser::Error::custom(format!("{}", e)))?;
+        serializer.serialize_str(&serialized)
+    } else {
+        unreachable!("I guess this is unreachable with skip_serializing_if")
+    }
+}
+fn deserialize_with_json_opt<'de, D>(deserializer: D) -> Result<Option<serde_json::Value>, D::Error> where D: Deserializer<'de> {
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = serde_json::Value;
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("json value")
+        }
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError {
+            Ok(serde_json::from_str(v).map_err(|e| DeserializeError
+                ::invalid_value(serde::de::Unexpected::Str(&format!("{}", e)), &"valid json value"))?)
+        }
+    }
+    // I guess this will be only called when not skipped with skip_serializing_if
+    deserializer.deserialize_any(Visitor).map(Some)
 }
 // you don't need explicit std::result::Result when imported anyhow Result?
 fn skip_deserializing_while_allow_name<'de, T, D>(deserializer: D) -> Result<T, D::Error>
@@ -386,7 +415,7 @@ fn get_session_display(session: &Session) -> Result<String> {
                 writeln!(b, "   {}", TextDisplay(value))?,
             Content::Blocks(blocks) => for block in blocks {
                 match block {
-                    ContentBlock::Text{ name: Some(name), value } =>
+                    ContentBlock::Text{ name: Some(name), value, .. } =>
                         writeln!(b, "   <{}>\n   {}", name, TextDisplay(value))?,
                     ContentBlock::Text{ value, .. } =>
                         writeln!(b, "   {}", TextDisplay(value))?,
@@ -440,10 +469,25 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
     macro_rules! raise { ($($arg:tt)*) => {{ errors.push(format!($($arg)*)); }} }
 
     if let Some(system_message) = &session.system_message {
-        if let Content::Blocks(blocks) = &system_message.content {
-            for (block_index, block) in blocks.iter().enumerate() {
+        match &system_message.content {
+            Content::String(value) => {
+                if value.trim().len() != value.len() {
+                    raise!("system message: content: value: should not have leading or trailing whitespace, use |- or >-");
+                }
+                if value.trim().lines().any(|r| r.trim().len() != r.len()) {
+                    raise!("system message: content: value: should not have internal trailing whitespace, use |- or >-");
+                }
+            },
+            Content::Blocks(blocks) => for (block_index, block) in blocks.iter().enumerate() {
                 match block {
-                    ContentBlock::Text{..} => {}, // ok
+                    ContentBlock::Text{ value, .. } => {
+                        if value.trim().len() != value.len() {
+                            raise!("system message: content#{}: value: should not have leading or trailing whitespace, use |- or >-", block_index);
+                        }
+                        if value.trim().lines().any(|r| r.trim().len() != r.len()) {
+                            raise!("system message: content#{}: value: should not have internal trailing whitespace, use |- or >-", block_index);
+                        }
+                    },
                     ContentBlock::Think{..} =>
                         raise!("system message: content#{}: kind: unknown variant think, expect text", block_index),
                     ContentBlock::ToolUse{..} =>
@@ -451,7 +495,7 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
                     ContentBlock::ToolResult{..} =>
                         raise!("system message: content#{}: kind: unknown variant tool-result, expect text", block_index),
                 }
-            }
+            },
         }
     }
 
@@ -479,7 +523,7 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
                 match block {
                     ContentBlock::Text{ name, .. } if message.role.is_assistant() && name.is_some() =>
                         raise!("message-{}: content#{}: unknown field name, expect kind, value for assistant message", message.id, block_index),
-                    ContentBlock::Think{..} if message.role.is_user() => 
+                    ContentBlock::Think{..} if message.role.is_user() =>
                         raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index),
                     ContentBlock::ToolUse{..} if message.role.is_user() => {
                         raise!("message-{}: content#{}: kind: unknown variant think, expect text, tool-result for user message", message.id, block_index);
@@ -522,7 +566,7 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
             }
         }
     }
-    
+
     if let Some(request_config) = &session.request_config {
         if request_config.message_id > 0 {
             if let Some(parent_message) = session.messages.iter().find(|m| m.id == request_config.message_id) {
@@ -560,6 +604,55 @@ fn validate_session(session: &Session) -> Result<Vec<String>> {
     Ok(errors)
 }
 
+// split trailing whitespaces into a side map, for last line, also include trailing empty lines
+pub fn side_load_trailing_whitespaces(original_value: &str) -> (String, HashMap<usize, String>) {
+
+    let mut b = String::new();
+    let mut records = HashMap::new();
+    // this assignment of 0 will not be used, .split result has at least 1 element
+    let mut last_line_index = 0;
+    let without_last_trailing_whitespace = original_value.trim_ascii_end();
+
+    // ATTENTION not .lines() because that automatically 
+    // handles \r\n and if you regard all as \n that is binary change
+    for (line_index, line) in without_last_trailing_whitespace.split('\n').enumerate() {
+        let trimmed = line.trim_ascii_end();
+        if trimmed.len() != line.len() {
+            records.insert(line_index, line[trimmed.len()..].to_string());
+        }
+        b.push_str(trimmed);
+        b.push('\n');
+        last_line_index = line_index;
+    }
+    // pop last \n, it must pop something because .split result has at least 1 element
+    b.pop();
+    if without_last_trailing_whitespace.len() != original_value.len() {
+        records.insert(last_line_index, original_value[without_last_trailing_whitespace.len()..].to_string());
+    }
+    (b, records)
+}
+
+// reverse of side load
+pub fn side_unload_trailing_whitespaces(trimmed_value: &str, records: HashMap<usize, String>) -> Result<String> {
+    let mut b = String::new();
+    let mut records = records;
+    // NOTE this can \n because the content is guaranteed to \n
+    for (line_index, line) in trimmed_value.lines().enumerate() {
+        b.push_str(line);
+        // use remove for later easy to check records should be empty
+        if let Some(record) = records.remove(&line_index) {
+            b.push_str(&record);
+        }
+        b.push('\n');
+    }
+    // pop last redundent newline
+    b.pop();
+    if records.is_empty().not() {
+        bail!("side map line number out of range {:?}", records.keys().collect::<Vec<_>>());
+    }
+    Ok(b)
+}
+
 // difference with main content block is tag property name and variant name
 // because currently serde don't support multiple serialize/deserialize settings on same type,
 // persistant storage want to use kind, tool-use, etc., api have to use type, tool_use, etc.
@@ -578,7 +671,7 @@ enum RequestContentBlock {
         signature: String,
     },
     #[serde(rename = "tool_use")]
-    ToolUse{ 
+    ToolUse{
         id: String,
         name: String,
         // this is empty object at content start event,
@@ -686,9 +779,9 @@ fn prepare_request(session: &Session) -> Result<Request> {
     let system = session.system_message.as_ref().map(|m| match &m.content {
         Content::String(value) => vec![RequestContentBlock::Text{ text: value.clone() }],
         Content::Blocks(blocks) => blocks.iter().map(|b| match b {
-            ContentBlock::Text{ name: None, value } => 
+            ContentBlock::Text{ name: None, value } =>
                 RequestContentBlock::Text{ text: value.clone() },
-            ContentBlock::Text{ name: Some(name), value } => 
+            ContentBlock::Text{ name: Some(name), value } =>
                 RequestContentBlock::Text{ text: format!("<{}>{}</{}>", name, value, name) },
             _ => unreachable!("system message content block type"),
         }).collect(),
@@ -699,9 +792,9 @@ fn prepare_request(session: &Session) -> Result<Request> {
             Content::String(value) => vec![RequestContentBlock::Text{ text: value.clone() }],
             Content::Blocks(blocks) => blocks.iter().map(|b| match b {
                 // NOTE these .trim() should be consistent or else cache will invalidate
-                ContentBlock::Text{ name: None, value } => 
+                ContentBlock::Text{ name: None, value } =>
                     RequestContentBlock::Text{ text: value.trim_ascii().to_string() },
-                ContentBlock::Text{ name: Some(name), value } => 
+                ContentBlock::Text{ name: Some(name), value } =>
                     RequestContentBlock::Text{ text: format!("<{}>{}</{}>", name, value.trim_ascii().to_string(), name) },
                 ContentBlock::Think{ value, signature } =>
                     RequestContentBlock::Think{ thinking: value.trim_ascii().to_string(), signature: signature.clone() },
@@ -1263,101 +1356,105 @@ enum SubCommand {
 fn migrate() -> Result<()> {
     println!("migrate");
     
-    let original_content1 = fs::read_to_string("/data/20261108-140900.yml")?;
-    let document1: Session = serde_yaml_ng::from_str(&original_content1)?;
-    let Content::Blocks(blocks1) = &document1.messages[3].content else { unreachable!() };
-    let ContentBlock::Text{ value: value1, .. } = &blocks1[0] else { unreachable!() };
-    println!("{:?}", &value1[0..100]);
+    for entry in fs::read_dir("/data")? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let file_name = entry_path.file_stem().unwrap().to_str().unwrap();
+        // this is enough for directory content currently
+        if file_name.len() == 15 && file_name.as_bytes()[8] == b'-' {
+            let original_content = fs::read_to_string(&entry_path)?;
+            // it's ok to fix whitespace errors in sessions that are out of cache
+            // oh, find a trailing whitespace in this source code file
+            if let Some(position) = original_content.find(" \n") {
+                bail!("{}: has trailing whitespace in original content, {}", file_name, position);
+            }
+            let session: Session = serde_yaml_ng::from_str(&original_content).with_context(|| anyhow::anyhow!("{}", file_name))?;
+            // println!("{}, {}", file_name, session.name);
+            let errors = validate_session(&session)?;
+            if errors.is_empty().not() {
+                errors.iter().for_each(|e| eprintln!("{}: {}", file_name, e));
+                continue;
+            }
+            if let Some(message) = &session.system_message {
+                match &message.content {
+                    Content::String(value) => {
+                        let (trimmed, records) = side_load_trailing_whitespaces(value);
+                        if records.is_empty().not() {
+                            println!("{}: system message: content: trailing whitespace {:?}", file_name, records);
+                        }
+                        if side_unload_trailing_whitespaces(&trimmed, records)? != *value {
+                            bail!("{}: system message: content: unit test failed", file_name);
+                        }
+                    },
+                    Content::Blocks(blocks) => {
+                        for (block_index, block) in blocks.iter().enumerate() {
+                            let text = match block {
+                                ContentBlock::Text{ value, .. } => value,
+                                ContentBlock::Think{ value, .. } => value,
+                                ContentBlock::ToolUse{..} => continue,
+                                ContentBlock::ToolResult{ value, .. } => value,
+                            };
+                            let (trimmed, records) = side_load_trailing_whitespaces(text);
+                            if records.is_empty().not() {
+                                println!("{}: system message: content#{}: trailing whitespace {:?}", file_name, block_index, records);
+                            }
+                            if side_unload_trailing_whitespaces(&trimmed, records)? != *text {
+                                bail!("{}: system message: content#{}: unit test failed", file_name, block_index);
+                            }
+                        }
+                    },
+                }
+            }
+            for message in &session.messages {
+                match &message.content {
+                    Content::String(value) => {
+                        let (trimmed, records) = side_load_trailing_whitespaces(value);
+                        if records.is_empty().not() {
+                            println!("{}: message {}: content: trailing whitespace {:?}", file_name, message.id, records);
+                        }
+                        if side_unload_trailing_whitespaces(&trimmed, records)? != *value {
+                            bail!("{}: message {}: content: unit test failed", file_name, message.id);
+                        }
+                    },
+                    Content::Blocks(blocks) => {
+                        for (block_index, block) in blocks.iter().enumerate() {
+                            let text = match block {
+                                ContentBlock::Text{ value, .. } => value,
+                                ContentBlock::Think{ value, .. } => value,
+                                ContentBlock::ToolUse{..} => continue,
+                                ContentBlock::ToolResult{ value, .. } => value,
+                            };
+                            let (trimmed, records) = side_load_trailing_whitespaces(text);
+                            if records.is_empty().not() {
+                                println!("{}: message {}: content#{}: trailing whitespace {:?}", file_name, message.id, block_index, records);
+                            }
+                            if side_unload_trailing_whitespaces(&trimmed, records)? != *text {
+                                bail!("{}: message {}: content#{}: unit test failed", file_name, message.id, block_index);
+                            }
+                        }
+                    },
+                }
+            }
 
-    // let mut b = String::new();
-    // b.push_str("name: name\nassistant[4<-3]:\n  content:\n  - kind: think\n    value: |-\n");
-    // for line in value1.lines() {
-    //     if line.is_empty().not() {
-    //         b.push_str("      ");
-    //         b.push_str(line);
-    //         b.push('\n');
-    //     }
-    // }
-    // b.push_str("    signature: signature value\n");
-    // b.push_str("request:\n  message-id: 1\n");
-    // fs::write("/data/temp2.yml", &b)?;
-
-    let result_message = Message{
-        id: 1,
-        parent_id: None,
-        role: Role::Assistant,
-        content: Content::Blocks(vec![
-            // total length 50550
-            // 50000.. ok
-            // 25000..50000 not ok
-            // ..25000 not ok
-            // 40000.. not ok
-            // 45000.. not ok
-            // 48000.. ok, result in "|2-"!
-            // 47998.. ok
-            // 46000.. not ok
-            // ..3000 ok
-            // ..5000 not ok
-            // ..4000 not ok
-            // ..3500 ok
-            // ..3750 not ok
-            // ..3675 not ok
-            // ..3580 ok
-            // ..3630 ok
-            // ..3655 not ok
-            // ..3654 ok, 3655 ends with trailing whitespace, but why rangefrom series not ok
-            // ..3668 ok, ends with multiple new lines
-            // ..3667 ok, ends with new line
-            // ..3658 not ok, ends with whitespace
-            // ..3657 ok
-            // 3..3657 ok with |2-, this is because start with whitespace
-            // 3..13657 not ok, this start with whitespace, not end with whitespace
-            // ..13657 not ok
-            // 3657..8657 not ok, this start with whitespace, not end with whitespace
-            // 3658..8657 not ok
-            // 3658..5000 not ok
-            // 5000..8657 ok
-            // 4000..5000 ok
-            // 3650..3800 not ok
-            // 3670..3720 not ok: "t me just go with: \n- Split into lines\n- Accumulat"
-            // 3686..3700 not ok: "h: \n- Split in"
-            // ContentBlock::Think{ value: value1[3686..3700].to_string(), signature: "signature value".to_string() },
-            // ContentBlock::Think{ value: "h: \n- Split in".to_string(), signature: "signature value".to_string() },
-            // that's because of trailing whitespace
-            ContentBlock::Think{ value: "h:\n- Split in".to_string(), signature: "signature value".to_string() },
-        ]),
-        request_config: None,
-        response_metadata: None,
-    };
-    let serialized = serde_yaml_ng::to_string(&result_message)?;
-    fs::write("/data/temp2.yml", serialized)?;
-
-    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str("assistant[1]:\n  content:\n  - kind: think\n    value1: \"h: \\n- Split in\"\n    value2: |-\n      h: \n      - Split in\n    signature: signature value")?;
-    let object = &document.as_mapping().unwrap().get("assistant[1]").unwrap().as_mapping().unwrap().get("content").unwrap().as_sequence().unwrap()[0];
-    println!("{:?}, {:?}", object.get("value1"), object.get("value2"));
-    // ok, that's serde_yaml_ng bug to regard leading hyphen in content as has to escape
-    // also confirmed by nodejs yaml package to produce correct result
-    assert_eq!(object.get("value1"), object.get("value2"));
-
-    assert_eq!(serde_yaml_ng::from_str::<serde_yaml_ng::Value>("key: |-\n  line1 \n  line2\n").unwrap().as_mapping().unwrap().get("key").unwrap().as_str().unwrap(), "line1 \nline2");
-
-    // let original_content2 = fs::read_to_string("/data/temp2.yml")?;
-    // let document2: Session = serde_yaml_ng::from_str(&original_content2)?;
-    // let Content::Blocks(blocks2) = &document2.messages[0].content else { unreachable!("this?") };
-    // let ContentBlock::Think{ value: value2, .. } = &blocks2[0] else { unreachable!() };
-
-    // assert_eq!(value1, value2);
-
-    assert_eq!(serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping({
-        let mut map = serde_yaml_ng::Mapping::new();
-        map.insert(serde_yaml_ng::Value::String("key".to_string()), serde_yaml_ng::Value::String("line1\nline2".to_string()));
-        map
-    })).expect("failed to serialize"), "key: |-\n  line1\n  line2\n");
-    assert_eq!(serde_yaml_ng::to_string(&serde_yaml_ng::Value::Mapping({
-        let mut map = serde_yaml_ng::Mapping::new();
-        map.insert(serde_yaml_ng::Value::String("key".to_string()), serde_yaml_ng::Value::String("line1 \nline2".to_string()));
-        map
-    })).expect("failed to serialize"), "key: \"line1 \\nline2\"\n");
+            // for a special case that trailing whitespace was manually converted from
+            // flow style to block style, read and serialize it back to make it a case
+            // if file_name == "20261109-134200" {
+            //     let Content::Blocks(block) = &session.messages[3].content else { unreachable!("1") };
+            //     let ContentBlock::Text{ value, .. } = &block[0] else { unreachable!("2") };
+            //     println!("{}", serde_yaml_ng::to_string(&Message {
+            //         id: 4,
+            //         parent_id: Some(3),
+            //         role: Role::Assistant,
+            //         request_config: None,
+            //         response_metadata: None,
+            //         content: Content::Blocks(vec![ContentBlock::Text {
+            //             name: None,
+            //             value: value.clone(),
+            //         }]),
+            //     })?);
+            // }
+        }
+    }
 
     Ok(())
 }
@@ -1732,7 +1829,7 @@ fn test_write() {
         "    header-x-ds-trace-id: x-ds-trace-id-1",
         "    complete-time: 2026-10-31T12:35:00Z",
         "    model: deepseek-flasher",
-        "    their-message-id: their-message-id",
+        "    provider-message-id: their-message-id",
         "    stop-reason: tool_use",
         r#"    usage: '{"input_tokens":400,"cache_read_input_tokens":0,"output_tokens":40}'"#, "",
     ].join("\n"));
@@ -2186,4 +2283,38 @@ fn test_assembler() {
     });
 
     // TODO signature delta is one delta event
+}
+
+#[test]
+fn test_basic_compression() {
+    let input = "hello  \nworld\t\nno_trailing";
+    let (compressed, map) = side_load_trailing_whitespaces(input);
+
+    assert_eq!(compressed, "hello\nworld\nno_trailing");
+    assert_eq!(map.get(&0), Some(&"  ".to_string()));
+    assert_eq!(map.get(&1), Some(&"\t".to_string()));
+    assert_eq!(map.get(&2), None);
+
+    let restored = side_unload_trailing_whitespaces(&compressed, map).unwrap();
+    assert_eq!(restored, input);
+}
+
+#[test]
+fn test_trailing_newlines() {
+    let input = "line1\n\n\n";
+    let (compressed, map) = side_load_trailing_whitespaces(input);
+
+    println!("compressed: {:?}", compressed);
+    println!("map: {:?}", map);
+
+    let restored = side_unload_trailing_whitespaces(&compressed, map).unwrap();
+    assert_eq!(restored, input);
+}
+
+#[test]
+fn test_empty_string() {
+    let input = "";
+    let (compressed, map) = side_load_trailing_whitespaces(input);
+    let restored = side_unload_trailing_whitespaces(&compressed, map).unwrap();
+    assert_eq!(restored, input);
 }
