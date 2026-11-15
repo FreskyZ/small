@@ -12,9 +12,11 @@ use serde::{Serialize, Deserialize};
 mod session;
 mod text_repr;
 mod sse;
+mod handler;
 
 use session::*;
 use sse::{ServerSentEvent, EventStreamParser};
+use handler::{ToolDefinition, ALL_TOOLS};
 
 // difference with main content block is tag property name and variant name
 // because currently serde don't support multiple serialize/deserialize settings on same type,
@@ -74,21 +76,6 @@ struct RequestTitle {
     enabled: bool,
 }
 
-// json schema specification https://json-schema.org/specification
-// specification repository https://github.com/json-schema-org/json-schema-spec
-// is a draft at the time of writing, is unexpectedly not ietf rfc while latest draft came out at 2020
-// a 800 star json schema library https://docs.rs/jsonschema include spec definition and validation, has its own derive macro
-// a 1.4k star json schema library https://docs.rs/schemars can extract json schema from serde derive definitions
-
-#[derive(Debug, Serialize)]
-struct ToolDefinition {
-    name: &'static str,
-    // this is optional, but I guess you should not do that or else the model will imagine a description
-    description: &'static str,
-    // but for now this is plain json value
-    input_schema: serde_json::Value,
-}
-
 #[derive(Debug, Serialize)]
 struct Request {
     // don't serialize this into request body
@@ -106,7 +93,7 @@ struct Request {
     #[serde(skip_serializing_if = "Option::is_none")]
     output_config: Option<RequestOutputConfig>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<ToolDefinition>,
+    tools: Vec<&'static ToolDefinition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<RequestTitle>,
 }
@@ -174,111 +161,13 @@ fn prepare_request(session: &Session, request_config: &RequestConfig, request_me
         }).collect(),
     }).collect();
 
-    // currently deepseek api validate tool name duplicate, don't rely on that
-    let all_tools = vec![
-        ToolDefinition{
-            name: "read-file",
-            description: "Read the contents of a file. Can specify a line range to read using start-line and end-line parameter, default to read 400 lines of content start from first line.",
-            // now this part have to use json!
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path of the file to read.",
-                    },
-                    "start-line": {
-                        "type": "integer",
-                        "description": "Beginning line to read, start from 1, inclusive, default to 1",
-                    },
-                    "end-line": {
-                        "type": "integer",
-                        "description": "Ending line to read, start from 1, exclusive, default to 400 lines of content after start-line."
-                    },
-                },
-                "required": ["path"],
-            }),
-        },
-        ToolDefinition{
-            name: "edit-file",
-            description: "Edit contents of a file. Specify a line range to overwrite, range is left inclusive right exclusive, use same value to insert before the line.",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path of the file to write.",
-                    },
-                    "start-line": {
-                        "type": "integer",
-                        "description": "Beginning line to overwrite, start from 1, inclusive",
-                    },
-                    "end-line": {
-                        "type": "integer",
-                        "description": "Ending line to overwrite, start from 1, exclusive"
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "new content to overwrite"
-                    }
-                },
-                "required": ["path", "start-line", "end-line", "content"],
-            }),
-        },
-        ToolDefinition{
-            name: "list-directory",
-            description: "List file system entries in directory.",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "The path of the directory to read, if omitted, use workspace directory.",
-                    },
-                },
-            }),
-        },
-        ToolDefinition{
-            name: "run-shell-command",
-            description: concat!("Run command in shell synchronously. The command may be audited by user or other mechanism. ",
-                "Output may be error, timeout or truncated if it is too long. Avoid dangerous commands and instruct user to determine and execute manually."),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The shell command.",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "Provide a description to use when the agent prompt user for approval or later to diagnostic unexpected errors.",
-                    },
-                },
-                "required": ["command", "description"],
-            }),
-        },
-        ToolDefinition{
-            name: "get-current-time",
-            description: "Get current date and time.",
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "format": {
-                        "type": "string",
-                        "description": "strftime format specifier, e.g. %Y-%m-%dT%H%M%S%z, default to iso8601",
-                    },
-                },
-            }),
-        },
-    ];
-
-    let unknown_tool_names =  request_config.tool_names.iter()
+    let unknown_tool_names = request_config.tool_names.iter()
         .map(|n| n.as_str())
-        .filter(|n| !all_tools.iter().any(|e| &e.name == n)).collect::<Vec<_>>();
+        .filter(|n| !ALL_TOOLS.iter().any(|e| &e.name == n)).collect::<Vec<_>>();
     if unknown_tool_names.is_empty().not() {
         bail!("unknown tool names {}", unknown_tool_names.join(","));
     }
-    let tools = all_tools.into_iter().filter(|t| request_config.tool_names.iter().any(|n| n == t.name)).collect();
+    let tools = ALL_TOOLS.iter().filter(|t| request_config.tool_names.iter().any(|n| n == t.name)).map(|t| *t).collect();
 
     Ok(Request { url, model, system, messages, thinking, output_config, max_tokens, stream: true, tools, title })
 }
