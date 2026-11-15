@@ -36,19 +36,16 @@ pub enum ContentBlock {
     ToolUse{ 
         id: String,
         name: String,
-        // - the value types in serde_json and serde_yaml_anything are just flexible objects,
-        //   it's ok to serialize and deserialize between serde_json value type and yaml text
-        // - use custom serialize and deserialize functions to inline this in a string
+        // the value types in serde_json and serde_yaml_anything are just flexible objects,
+        // it's ok to serialize and deserialize between serde_json value type and yaml text,
+        // but actually currently it is serializing and deserializing between json text as 
+        // yaml string to avoid occupying too many lines with minor values
         input: serde_json::Value,
     },
     ToolResult{
         id: String,
         value: String,
-        // - tool execution metadata, logs, etc.
-        // - the value types in serde_json and serde_yaml_anything are just flexible objects,
-        //   it's ok to serialize and deserialize between serde_json value type and yaml text
-        // - custom deserialize function is the correct way to skip deserializing while allow
-        //   the name with deny_unknown_fields
+        // tool execution metadata, logs, etc.
         metadata: Vec<(String, serde_json::Value)>,
     },
 }
@@ -59,6 +56,12 @@ pub enum Thinking {
     // can use static str for known limited values
     Effort(&'static str),
 }
+// currently you cannot #[default] on the variant and expect default into variant fields
+impl Default for Thinking {
+    fn default() -> Self {
+        Self::Switch(false)
+    }
+}
 impl Thinking {
     fn display(&self) -> &'static str {
         match self {
@@ -68,12 +71,6 @@ impl Thinking {
         }
     }
 }
-// currently you cannot #[default] on the variant and expect default into variant fields
-impl Default for Thinking {
-    fn default() -> Self {
-        Self::Switch(false)
-    }
-}
 
 #[derive(Debug)]
 pub struct RequestConfig {
@@ -81,7 +78,7 @@ pub struct RequestConfig {
     pub model: Option<String>,
     pub thinking: Thinking,
     pub tool_names: Vec<String>,
-    // let api suggest a title
+    // let llm api suggest a title by the way
     pub title: bool,
     pub max_tokens: Option<usize>,
     // - traditional parameters, temperature, top_p, top_k, presence_penalty and frequency_penalty
@@ -105,8 +102,7 @@ pub struct ResponseMetadata {
     // save json text here, currently no need to parse them precisely, actually
     // you can use postgresql's rich json functionality to query values if need
     pub usage: String,
-    // additional information if useful
-    // serde_json::Value can be serialized into yaml text if you ask
+    // additional information if need
     pub additional: Vec<(String, serde_json::Value)>,
 }
 
@@ -136,7 +132,7 @@ pub struct Session {
     pub messages: Vec<Message>,
 }
 
-struct LongText<'a>(&'a str);
+pub struct LongText<'a>(pub &'a str);
 // display major text chunks by limit length, add ellipsis and replace \n with \n
 impl<'a> fmt::Display for LongText<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

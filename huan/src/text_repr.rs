@@ -14,7 +14,7 @@ use crate::session::{Thinking, Role, ContentBlock};
 // while this is not used in text repr, this is used in response data deserialization
 impl Serialize for Role {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        serializer.serialize_str(if self.is_user() {"user" } else { "assitant" })
+        serializer.serialize_str(if self.is_user() {"user" } else { "assistant" })
     }
 }
 
@@ -93,7 +93,10 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockVisitor {
                     };
                 },
                 other if kind.is_none() => return Err(DeserializeError::unknown_field(other, &["kind before other fields"])),
-                "name" if matches!(kind, Some("text" | "tool-use")) => name = Some(map.next_value()?),
+                "name" if matches!((kind, self.0),
+                    | (Some("tool-use"), _)
+                    | (Some("text"), None | Some(Role::User)) // not allow name in assistant content block kind=text
+                ) => name = Some(map.next_value()?),
                 // this next_value::<&str> is unacceptable?
                 "value" if matches!(kind, Some("text" | "think" | "tool-result")) => value = Some(map.next_value::<String>()?),
                 // whitespace records is inline json
@@ -417,11 +420,12 @@ impl<'de> DeserializeVisitor<'de> for MessageVisitor {
                 "content" => content = Some(map.next_value_seed(
                     ContentSeed(if self.0.id > 0 { Some(self.0.role) } else { None }))?),
                 // no need to deserialize request and response information of completed assistant message
-                "request" => { map.next_value::<IgnoredAny>()?; },
-                "response" => { map.next_value::<IgnoredAny>()?; },
-                other => return Err(DeserializeError::unknown_field(other, &["content", "request", "response"])),
+                "request" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
+                "response" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
+                other => return Err(DeserializeError::unknown_field(other,
+                    if self.0.role.is_assistant() { &["content", "request", "response"] } else { &["content"] })),
             }
-        } 
+        }
         let Some(content) = content else { return Err(DeserializeError::missing_field("content")); };
         let MessageDeserializeSeed{ role, id, parent_id } = self.0;
         // cannot spread with different type: ..self.0
@@ -515,6 +519,7 @@ impl Serialize for Message {
         map.end()
     }
 }
+// create a document with proper key to message body, mainly for new assistant message
 pub fn to_string(message: &Message) -> Result<String> {
     Ok(serde_yaml_ng::to_string(message)?)
 }
@@ -602,6 +607,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
 
         let mut tool_use_ids = parent_message.content.iter().fold(HashSet::new(),
             |mut acc, block| { if let ContentBlock::ToolUse{ id, .. } = block { acc.insert(id); } acc });
+        // println!("{}: message[{}]: expecting tool use ids {:?}", file_name, message.id, tool_use_ids);
         for (block_index, block) in message.content.iter().enumerate() {
             if let ContentBlock::ToolResult{ id, .. } = block {
                 if !tool_use_ids.remove(id) {
@@ -610,7 +616,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
                 }
             }
         }
-        if tool_use_ids.is_empty() {
+        if !tool_use_ids.is_empty() {
             raise!("message[{}]: parent message tool use id not fully responded, remaining {:?}", message.id, tool_use_ids);
         }
         let parent_message_thinking = parent_message.content.iter().any(|c| matches!(c, ContentBlock::Thinking{..}));
@@ -632,8 +638,15 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
         }
     }
 
+    if !errors.is_empty() {
+        anyhow::bail!("validation errors:\n  {}", errors.join("\n  "));
+    }
     Ok((session, request_config.map(|r| (r.config, r.message_id))))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
 #[test]
 fn test_read() {
@@ -646,11 +659,11 @@ fn test_read() {
         "system:",
         "  content: You are a coding agent",
         "",
-        "user[1]:",
+        "user 1:",
         "  content:",
         "    summary source code file src/main.rs",
         "",
-        "assistant[3<-1]:",
+        "assistant 3>1:",
         "  content:",
         "  - kind: think",
         "    value: reasoning content",
@@ -678,7 +691,7 @@ fn test_read() {
         "    complete-time: 2026-10-23T06:29:10Z",
         "    token-usage: 42/325/799",
         "",
-        "user[4<-3]:",
+        "user 4>3:",
         "  content:",
         "  - kind: text",
         "    name: additional-manual-description",
@@ -936,4 +949,5 @@ fn test_empty_string() {
     let (compressed, map) = side_load_trailing_whitespaces(input);
     let restored = merge_trailing_whitespace_records(&compressed, map).unwrap();
     assert_eq!(restored, input);
+}
 }
