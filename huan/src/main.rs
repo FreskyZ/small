@@ -13,6 +13,7 @@ mod session;
 mod text_repr;
 mod sse;
 mod handler;
+mod llm;
 
 use session::*;
 use sse::{ServerSentEvent, EventStreamParser};
@@ -500,129 +501,136 @@ async fn main() -> Result<()> {
 
     let session_original_content = fs::read_to_string(&filename)?;
     let (session, request_config) = text_repr::from_str(&filename, &session_original_content)?;
-    print!("{}", session);
-    let Some((request_config, request_message_id)) = request_config else { bail!("missing request config, exit"); };
-    print!("{}", request_config);
-
-    let request = prepare_request(&session, &request_config, request_message_id)?;
-    println!("{}", get_request_display(&request)?);
-    if !not_dry { println!("this is dry run, use --not-dry to actually run"); return Ok(()); }
-    // return Ok(());
+    println!("{}", session);
+    let Some(request_config) = request_config else { bail!("missing request config, exit"); };
+    println!("{}", request_config);
 
     let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
         bail!("env var HUAN_API_KEY missing");
     };
-    let client = reqwest::Client::builder().build()?;
-    let request = client
-        .post(request.url.clone())
-        .header("content-type", "application/json")
-        .bearer_auth(api_key)
-        .json(&request).build()?;
-    // unwrap: provided nanosecond is valid
-    let start_time = Utc::now().with_nanosecond(0).unwrap();
-    let response = client.execute(request).await?;
+    let result_message = llm::run(llm::RequestParameters{
+        dry: !not_dry,
+        api_key,
+        session: &session,
+        config: request_config,
+    }).await?;
 
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().await?;
-        bail!("response error {}: {}", status, body);
-    }
-    let headers = response.headers();
-    // NOTE that content-type may be "text/event-stream; charset=utf8"
-    // https://www.rfc-editor.org/info/rfc9110/#name-content-type
-    // https://www.rfc-editor.org/info/rfc2046/
-    // ignore no such header, will that happen?
-    if let Some(content_type) = headers.get("content-type") {
-        // ignore to str error, how does that happen?
-        if let Ok(content_type) = content_type.to_str() {
-            // unwrap: split result must have at least 1 element
-            let content_type_wo_parameters = content_type.split(';').next().unwrap().trim_ascii();
-            if content_type_wo_parameters != "text/event-stream" {
-                println!("content-type is not text/event-stream?, {:?}", content_type);
-            }
-        }
-    }
+    // let request = prepare_request(&session, &request_config, request_message_id)?;
+    // println!("{}", get_request_display(&request)?);
+    // if !not_dry { println!("this is dry run, use --not-dry to actually run"); return Ok(()); }
+    // return Ok(());
 
-    let mut noticeable_headers = Vec::new();
-    for (name, value) in response.headers() {
-        // to include unexpected headers, filter by exclude known boring headers
-        if matches!(name.as_str(),
-            | "server"
-            | "vary"
-            | "access-control-allow-credentials"
-            | "strict-transport-security"
-            | "x-content-type-options"
-            | "cache-control"
-        ) {
-            continue;
-        }
-        match value.to_str() {
-            Ok(value) => noticeable_headers.push((name.to_string(), value.to_string())),
-            Err(error) => noticeable_headers.push((name.to_string(), format!("{:?}: {}", value.as_bytes(), error))),
-        }
-    }
+    // let client = reqwest::Client::builder().build()?;
+    // let request = client
+    //     .post(request.url.clone())
+    //     .header("content-type", "application/json")
+    //     .bearer_auth(api_key)
+    //     .json(&request).build()?;
+    // // unwrap: provided nanosecond is valid
+    // let start_time = Utc::now().with_nanosecond(0).unwrap();
+    // let response = client.execute(request).await?;
 
-    let mut stream = response.bytes_stream();
-    let mut parser = EventStreamParser::new();
-    let mut assembler = <DeltaAssembler>::new();
-    let mut additional = Vec::new();
+    // let status = response.status();
+    // if !status.is_success() {
+    //     let body = response.text().await?;
+    //     bail!("response error {}: {}", status, body);
+    // }
+    // let headers = response.headers();
+    // // NOTE that content-type may be "text/event-stream; charset=utf8"
+    // // https://www.rfc-editor.org/info/rfc9110/#name-content-type
+    // // https://www.rfc-editor.org/info/rfc2046/
+    // // ignore no such header, will that happen?
+    // if let Some(content_type) = headers.get("content-type") {
+    //     // ignore to str error, how does that happen?
+    //     if let Ok(content_type) = content_type.to_str() {
+    //         // unwrap: split result must have at least 1 element
+    //         let content_type_wo_parameters = content_type.split(';').next().unwrap().trim_ascii();
+    //         if content_type_wo_parameters != "text/event-stream" {
+    //             println!("content-type is not text/event-stream?, {:?}", content_type);
+    //         }
+    //     }
+    // }
 
-    let mut chunks = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
-        chunks.push(String::from_utf8_lossy(chunk.as_ref()).into_owned());
-        parser.push(chunk);
-        while let Some(event) = parser.pull()? {
-            assembler.push(event);
-        }
-    }
-    assembler.end();
+    // let mut noticeable_headers = Vec::new();
+    // for (name, value) in response.headers() {
+    //     // to include unexpected headers, filter by exclude known boring headers
+    //     if matches!(name.as_str(),
+    //         | "server"
+    //         | "vary"
+    //         | "access-control-allow-credentials"
+    //         | "strict-transport-security"
+    //         | "x-content-type-options"
+    //         | "cache-control"
+    //     ) {
+    //         continue;
+    //     }
+    //     match value.to_str() {
+    //         Ok(value) => noticeable_headers.push((name.to_string(), value.to_string())),
+    //         Err(error) => noticeable_headers.push((name.to_string(), format!("{:?}: {}", value.as_bytes(), error))),
+    //     }
+    // }
 
-    // unwrap: provided nanosecond is valid
-    let complete_time = Utc::now().with_nanosecond(0).unwrap();
-    let sse_log = chunks.join("\n");
-    if let Err(error) = fs::write("sse.log", &sse_log) {
-        eprintln!("failed to write sse.log: {}", error);
-        eprintln!("{}", sse_log);
-    }
-    if assembler.errors.is_empty().not() {
-        assembler.errors.iter().for_each(|e| eprintln!("{}", e));
-        bail!("assembler has errors, abort");
-    }
+    // let mut stream = response.bytes_stream();
+    // let mut parser = EventStreamParser::new();
+    // let mut assembler = <DeltaAssembler>::new();
+    // let mut additional = Vec::new();
 
-    // println!("{:?}", assembler.message);
-    let response_message = assembler.message;
-    // unwrap: session.messages is not empty
-    let result_message_id = session.messages.iter().map(|m| m.id).max().unwrap() + 1;
+    // let mut chunks = Vec::new();
+    // while let Some(chunk) = stream.next().await {
+    //     let Ok(chunk) = chunk else { println!("failed to ? a chunk?"); continue };
+    //     chunks.push(String::from_utf8_lossy(chunk.as_ref()).into_owned());
+    //     parser.push(chunk);
+    //     while let Some(event) = parser.pull()? {
+    //         assembler.push(event);
+    //     }
+    // }
+    // assembler.end();
 
-    if let Some(title) = response_message.title {
-        additional.push(("title".to_string(), serde_json::Value::String(title)));
-    }
+    // // unwrap: provided nanosecond is valid
+    // let complete_time = Utc::now().with_nanosecond(0).unwrap();
+    // let sse_log = chunks.join("\n");
+    // if let Err(error) = fs::write("sse.log", &sse_log) {
+    //     eprintln!("failed to write sse.log: {}", error);
+    //     eprintln!("{}", sse_log);
+    // }
+    // if assembler.errors.is_empty().not() {
+    //     assembler.errors.iter().for_each(|e| eprintln!("{}", e));
+    //     bail!("assembler has errors, abort");
+    // }
 
-    let result_message = Message {
-        id: result_message_id,
-        parent_id: Some(request_message_id),
-        role: Role::Assistant,
-        request_config: Some(request_config),
-        response_metadata: Some(ResponseMetadata {
-            start_time,
-            status_code: status.as_u16() as usize,
-            headers: noticeable_headers,
-            complete_time,
-            model: response_message.model,
-            provider_message_id: response_message.id,
-            // unwrap: stop reason is required in message_delta event
-            stop_reason: response_message.stop_reason.unwrap(),
-            usage: response_message.usage.to_string(),
-            additional,
-        }),
-        content: response_message.content.into_iter().map(|block| match block {
-            RequestContentBlock::Text { text } => ContentBlock::Text{ name: None, value: text },
-            RequestContentBlock::Think { thinking, signature } => ContentBlock::Thinking{ value: thinking, signature },
-            RequestContentBlock::ToolUse { id, name, input, .. } => ContentBlock::ToolUse{ id, name, input },
-            RequestContentBlock::ToolResult {..} => unreachable!("tool-result?"),
-        }).collect(),
-    };
+    // // println!("{:?}", assembler.message);
+    // let response_message = assembler.message;
+    // // unwrap: session.messages is not empty
+    // let result_message_id = session.messages.iter().map(|m| m.id).max().unwrap() + 1;
+
+    // if let Some(title) = response_message.title {
+    //     additional.push(("title".to_string(), serde_json::Value::String(title)));
+    // }
+
+    // let result_message = Message {
+    //     id: result_message_id,
+    //     parent_id: Some(request_message_id),
+    //     role: Role::Assistant,
+    //     request_config: Some(request_config),
+    //     response_metadata: Some(ResponseMetadata {
+    //         start_time,
+    //         status_code: status.as_u16() as usize,
+    //         headers: noticeable_headers,
+    //         complete_time,
+    //         model: response_message.model,
+    //         provider_message_id: response_message.id,
+    //         // unwrap: stop reason is required in message_delta event
+    //         stop_reason: response_message.stop_reason.unwrap(),
+    //         usage: response_message.usage.to_string(),
+    //         additional,
+    //     }),
+    //     content: response_message.content.into_iter().map(|block| match block {
+    //         RequestContentBlock::Text { text } => ContentBlock::Text{ name: None, value: text },
+    //         RequestContentBlock::Think { thinking, signature } => ContentBlock::Thinking{ value: thinking, signature },
+    //         RequestContentBlock::ToolUse { id, name, input, .. } => ContentBlock::ToolUse{ id, name, input },
+    //         RequestContentBlock::ToolResult {..} => unreachable!("tool-result?"),
+    //     }).collect(),
+    // };
 
     let result_message = text_repr::to_string(&result_message)?;
     let output_content = format!("{}\n{}", session_original_content, result_message);
@@ -630,58 +638,4 @@ async fn main() -> Result<()> {
     fs::write(&filename, output_content)?;
 
     Ok(())
-}
-
-#[test]
-fn test_assembler() {
-    use bytes::Bytes;
-
-    let mut parser = EventStreamParser::new();
-    let mut assembler = DeltaAssembler::new();
-
-    for chunk in [
-        b"event: message_start\n" as &[u8],
-        br#"data: {"type":"message_start","message":{"id":"e6ef6a63-a078-4f53-a73b-38c8d1d46310","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}}"#,
-        b"\n\n",
-        b"event: content_block_start\n",
-        br#"data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
-        b"\n\n",
-        b"event: ping\n",
-        br#"data: {"type":"ping"}"#,
-        b"\n\n",
-        b"event: content_block_delta\n",
-        br#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello!"}}"#,
-        b"\n\n",
-        b"event: content_block_stop\n",
-        br#"data: {"type":"content_block_stop","index":0}"#,
-        b"\n\n",
-        b"event: message_delta\n",
-        br#"data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}}"#,
-        b"\n\n",
-        b"event: message_stop\n",
-        br#"data: {"type":"message_stop"}"#,
-        b"\n\n",
-    ].map(|c| Bytes::from_static(c)) {
-        parser.push(chunk);
-        while let Some(event) = parser.pull().expect("parser pull failed") {
-            assembler.push(event);
-        }
-    }
-    assert!(assembler.started);
-    assert!(assembler.stopped);
-    assert_eq!(assembler.errors, Vec::<String>::new());
-    assert_eq!(assembler.message, ResponseMessage {
-        id: "e6ef6a63-a078-4f53-a73b-38c8d1d46310".to_string(),
-        r#type: "message".to_string(),
-        role: "assistant".to_string(),
-        model: "deepseek-flash".to_string(),
-        content: vec![
-            RequestContentBlock::Text{ text: "Hello!".to_string() },
-        ],
-        stop_reason: Some("end_turn".to_string()),
-        usage: serde_json::json!({"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}),
-        title: None,
-    });
-
-    // TODO signature delta is one delta event
 }

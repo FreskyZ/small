@@ -50,7 +50,7 @@ pub enum ContentBlock {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Thinking {
     Switch(bool),
     // can use static str for known limited values
@@ -74,6 +74,9 @@ impl Thinking {
 
 #[derive(Debug)]
 pub struct RequestConfig {
+    // message id is part of active request config,
+    // is not in request config log in completed message 
+    pub message_id: usize,
     pub base_url: Option<String>,
     pub model: Option<String>,
     pub thinking: Thinking,
@@ -149,6 +152,7 @@ impl<'a> fmt::Display for LongText<'a> {
         }
     }
 }
+
 impl fmt::Display for ContentBlock {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -165,30 +169,29 @@ impl fmt::Display for ContentBlock {
         }
     }
 }
-
 impl fmt::Display for RequestConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "request:")?;
-        if let Some(base_url) = &self.base_url { writeln!(f, "   base url: {}", base_url)?; }
-        if let Some(model) = &self.model { writeln!(f, "   model: {}", model)?; }
-        if self.title { writeln!(f, "   title: true")?; }
-        writeln!(f, "   thinking: {}", self.thinking.display())?;
-        if !self.tool_names.is_empty() { writeln!(f, "   tool names: [{}]", self.tool_names.join(","))?; }
-        if let Some(max_tokens) = self.max_tokens { writeln!(f, "   max tokens: {}", max_tokens)?; }
+        write!(f, "request:")?;
+        write!(f, "\n   message id: {}", self.message_id)?;
+        if let Some(base_url) = &self.base_url { write!(f, "\n   base url: {}", base_url)?; }
+        if let Some(model) = &self.model { write!(f, "\n   model: {}", model)?; }
+        if self.title { write!(f, "\n   title: true")?; }
+        write!(f, "\n   thinking: {}", self.thinking.display())?;
+        if !self.tool_names.is_empty() { write!(f, "\n   tool names: [{}]", self.tool_names.join(","))?; }
+        if let Some(max_tokens) = self.max_tokens { write!(f, "\n   max tokens: {}", max_tokens)?; }
         Ok(())
     }
 }
-
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "name: {}", self.name)?;
+        write!(f, "name: {}", self.name)?;
         if let Some(message) = &self.system_message {
-            writeln!(f, "system:")?;
-            for block in &message.content { writeln!(f, "{}", block)?; }
+            write!(f, "\nsystem:")?;
+            for block in &message.content { write!(f, "\n{}", block)?; }
         }
         for message in &self.messages {
-            writeln!(f, "{} {}>{}:", message.role.display(), message.id, message.parent_id.unwrap_or(0))?;
-            for block in &message.content { writeln!(f, "{}", block)?; }
+            write!(f, "\n{} {}>{}:", message.role.display(), message.id, message.parent_id.unwrap_or(0))?;
+            for block in &message.content { write!(f, "\n{}", block)?; }
         }
         Ok(())
     }

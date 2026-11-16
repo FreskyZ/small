@@ -19,8 +19,8 @@ impl Serialize for Role {
 }
 
 // now that this is a dedicated serde module, you can move visitors out to reduce indention
-struct RoleVisitor;
-impl<'de> DeserializeVisitor<'de> for RoleVisitor {
+struct RoleDeserializeVisitor;
+impl<'de> DeserializeVisitor<'de> for RoleDeserializeVisitor {
     type Value = Role;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("role")
@@ -35,7 +35,7 @@ impl<'de> DeserializeVisitor<'de> for RoleVisitor {
 }
 impl<'de> Deserialize<'de> for Role {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_str(RoleVisitor)
+        deserializer.deserialize_str(RoleDeserializeVisitor)
     }
 }
 
@@ -63,8 +63,9 @@ fn merge_trailing_whitespace_records(trimmed_value: &str, records: Vec<(usize, S
 // to collect value from value+whitespace multiple keys, you must custom deserialize
 // include some validations here by the way to improve source location reporting compare to later validation function
 // self.0 is none for system message
-struct ContentBlockVisitor(Option<Role>);
-impl<'de> DeserializeVisitor<'de> for ContentBlockVisitor {
+struct ContentBlockDeserializeVisitor(Option<Role>);
+
+impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
     type Value = ContentBlock;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("content block")
@@ -160,17 +161,18 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockVisitor {
     }
 }
 // self.0 is none for system message
-struct ContentBlockSeed(Option<Role>);
-impl<'de> DeserializeSeed<'de> for ContentBlockSeed {
+struct ContentBlockDeserializeSeed(Option<Role>);
+impl<'de> DeserializeSeed<'de> for ContentBlockDeserializeSeed {
     type Value = ContentBlock;
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_map(ContentBlockVisitor(self.0))
+        deserializer.deserialize_map(ContentBlockDeserializeVisitor(self.0))
     }
 }
 
 // self.0 is none for system message
-struct ContentVisitor(Option<Role>);
-impl<'de> DeserializeVisitor<'de> for ContentVisitor {
+struct ContentDeserializeVisitor(Option<Role>);
+
+impl<'de> DeserializeVisitor<'de> for ContentDeserializeVisitor {
     type Value = Vec<ContentBlock>;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("message content")
@@ -180,18 +182,18 @@ impl<'de> DeserializeVisitor<'de> for ContentVisitor {
     }
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
         let mut results = Vec::new();
-        while let Some(element) = seq.next_element_seed(ContentBlockSeed(self.0))? {
+        while let Some(element) = seq.next_element_seed(ContentBlockDeserializeSeed(self.0))? {
             results.push(element);
         }
         Ok(results)
     }
 }
 // self.0 is none for system message
-struct ContentSeed(Option<Role>);
-impl<'de> DeserializeSeed<'de> for ContentSeed {
+struct ContentDeserializeSeed(Option<Role>);
+impl<'de> DeserializeSeed<'de> for ContentDeserializeSeed {
     type Value = Vec<ContentBlock>;
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_any(ContentVisitor(self.0))
+        deserializer.deserialize_any(ContentDeserializeVisitor(self.0))
     }
 }
 
@@ -224,8 +226,9 @@ fn side_load_trailing_whitespaces(original_value: &str) -> (String, Vec<(usize, 
 }
 
 // to map value into value+whitespace 2 map keys, you must use a custom serialize
-struct ContentBlockAsTextRepr<'a>(&'a ContentBlock);
-impl<'a> Serialize for ContentBlockAsTextRepr<'a> {
+struct ContentBlockSerializeHelper<'a>(&'a ContentBlock);
+
+impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map = serializer.serialize_map(None)?;
         match self.0 {
@@ -273,20 +276,20 @@ impl<'a> Serialize for ContentBlockAsTextRepr<'a> {
         map.end()
     }
 }
+struct ContentSerializeHelper<'a>(&'a [ContentBlock]);
 
-struct ContentAsTextRepr<'a>(&'a [ContentBlock]);
-impl<'a> Serialize for ContentAsTextRepr<'a> {
+impl<'a> Serialize for ContentSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
         for element in self.0 {
-            seq.serialize_element(&ContentBlockAsTextRepr(element))?;
+            seq.serialize_element(&ContentBlockSerializeHelper(element))?;
         }
         seq.end()
     }
 }
 
-struct ThinkingVisitor;
-impl<'de> DeserializeVisitor<'de> for ThinkingVisitor {
+struct ThinkingDeserializeVisitor;
+impl<'de> DeserializeVisitor<'de> for ThinkingDeserializeVisitor {
     type Value = Thinking;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("thinking mode")
@@ -305,18 +308,13 @@ impl<'de> DeserializeVisitor<'de> for ThinkingVisitor {
 }
 impl<'de> Deserialize<'de> for Thinking {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_any(ThinkingVisitor)
+        deserializer.deserialize_any(ThinkingDeserializeVisitor)
     }
 }
 
-// now that request config don't have a message id, you need to put them together for a result type
-struct RequestConfigAndId {
-    config: RequestConfig,
-    message_id: usize,
-}
-struct RequestConfigVisitor;
-impl<'de> DeserializeVisitor<'de> for RequestConfigVisitor {
-    type Value = RequestConfigAndId;
+struct RequestConfigDeserializeVisitor;
+impl<'de> DeserializeVisitor<'de> for RequestConfigDeserializeVisitor {
+    type Value = RequestConfig;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("request config")
     }
@@ -352,24 +350,26 @@ impl<'de> DeserializeVisitor<'de> for RequestConfigVisitor {
         if let Some(max_tokens) = max_tokens && max_tokens <= 0 {
             return Err(DeserializeError::invalid_value(Unexpected::Unsigned(max_tokens), &"positive value"));
         }
-        Ok(RequestConfigAndId{ message_id, config: RequestConfig {
+        Ok(RequestConfig {
+            message_id,
             base_url: base_url.map(|u| u.to_string()),
             model: model.map(|m| m.to_string()),
             title: title.unwrap_or(false),
             thinking: thinking.unwrap_or(Thinking::default()),
             tool_names: tool_names.unwrap_or_default(),
             max_tokens: max_tokens.map(|v| v as usize),
-        } })
+        })
     }
 }
-impl<'de> Deserialize<'de> for RequestConfigAndId {
+impl<'de> Deserialize<'de> for RequestConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_map(RequestConfigVisitor)
+        deserializer.deserialize_map(RequestConfigDeserializeVisitor)
     }
 }
 impl Serialize for RequestConfig {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map = serializer.serialize_map(None)?;
+        // if you find message-id missing, it is not recorded in completed message's request config log
         if let Some(base_url) = &self.base_url { map.serialize_entry("base-url", base_url)?; }
         if let Some(model) = &self.model { map.serialize_entry("model", model)?; }
         if self.title { map.serialize_entry("title", &true)?; }
@@ -406,8 +406,8 @@ impl Serialize for ResponseMetadata {
     }
 }
 
-struct MessageVisitor(MessageDeserializeSeed);
-impl<'de> DeserializeVisitor<'de> for MessageVisitor {
+struct MessageDeserializeVisitor(MessageDeserializeSeed);
+impl<'de> DeserializeVisitor<'de> for MessageDeserializeVisitor {
     // for system message, return its content in message.content
     type Value = Message;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -418,7 +418,7 @@ impl<'de> DeserializeVisitor<'de> for MessageVisitor {
         while let Some(key) = map.next_key::<&str>()? {
             match key {
                 "content" => content = Some(map.next_value_seed(
-                    ContentSeed(if self.0.id > 0 { Some(self.0.role) } else { None }))?),
+                    ContentDeserializeSeed(if self.0.id > 0 { Some(self.0.role) } else { None }))?),
                 // no need to deserialize request and response information of completed assistant message
                 "request" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
                 "response" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
@@ -485,19 +485,20 @@ impl MessageDeserializeSeed {
 impl<'de> DeserializeSeed<'de> for MessageDeserializeSeed {
     type Value = Message;
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_map(MessageVisitor(self))
+        deserializer.deserialize_map(MessageDeserializeVisitor(self))
     }
 }
 
 // custom serialize does not directly support nested map, that mean you need this
-struct MessageBody<'a>(&'a Message);
-impl<'a> Serialize for MessageBody<'a> {
+struct MessageSerializeHelper<'a>(&'a Message);
+
+impl<'a> Serialize for MessageSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let size = 1
             + if self.0.request_config.is_some() { 1 } else { 0 }
             + if self.0.response_metadata.is_some() { 1 } else { 0 };
         let mut map = serializer.serialize_map(Some(size))?;
-        map.serialize_entry("content", &ContentAsTextRepr(&self.0.content))?;
+        map.serialize_entry("content", &ContentSerializeHelper(&self.0.content))?;
         if let Some(request_config) = &self.0.request_config {
             map.serialize_entry("request", request_config)?;
         }
@@ -515,7 +516,7 @@ impl Serialize for Message {
         let key = format!("{} {}{}", self.role.display(), self.id,
             if let Some(v) = self.parent_id { format!(">{}", v) } else { String::new() });
         let mut map = serializer.serialize_map(Some(1))?;
-        map.serialize_entry(&key, &MessageBody(self))?;
+        map.serialize_entry(&key, &MessageSerializeHelper(self))?;
         map.end()
     }
 }
@@ -525,13 +526,13 @@ pub fn to_string(message: &Message) -> Result<String> {
 }
 
 // now that session don't have a request config, you need to put them together for a result type
-struct SessionAndRequestConfigAndId {
+struct SessionAndRequestConfig {
     session: Session,
-    request_config: Option<RequestConfigAndId>,
+    request_config: Option<RequestConfig>,
 }
-struct SessionVisitor;
-impl<'de> DeserializeVisitor<'de> for SessionVisitor {
-    type Value = SessionAndRequestConfigAndId;
+struct SessionDeserializeVisitor;
+impl<'de> DeserializeVisitor<'de> for SessionDeserializeVisitor {
+    type Value = SessionAndRequestConfig;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("session")
     }
@@ -555,17 +556,17 @@ impl<'de> DeserializeVisitor<'de> for SessionVisitor {
         let name = name.ok_or_else(|| DeserializeError::missing_field("name"))?;
         let system_message = system_message.map(|m| SystemMessage{ content: m.content });
         if messages.is_empty() { return Err(DeserializeError::missing_field("user or assistant")); }
-        Ok(SessionAndRequestConfigAndId { session: Session { name, system_message, messages }, request_config })
+        Ok(SessionAndRequestConfig { session: Session { name, system_message, messages }, request_config })
     }
 }
-impl<'de> Deserialize<'de> for SessionAndRequestConfigAndId {
+impl<'de> Deserialize<'de> for SessionAndRequestConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_map(SessionVisitor)
+        deserializer.deserialize_map(SessionDeserializeVisitor)
     }
 }
 
 // don't provide intermediate types
-pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Option<(RequestConfig, usize)>)> {
+pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Option<RequestConfig>)> {
 
     let mut errors = Vec::new();
     macro_rules! raise { ($($arg:tt)*) => {{ errors.push(format!($($arg)*)); }} }
@@ -576,7 +577,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
         raise!("{}: unexpected intermediate trailing whitespace, byte index {}", file_name, position);
     }
 
-    let SessionAndRequestConfigAndId { session, request_config } = serde_yaml_ng::from_str(original_value)?;
+    let SessionAndRequestConfig { session, request_config } = serde_yaml_ng::from_str(original_value)?;
 
     // 1. duplicate message id
     let mut message_ids = HashSet::new();
@@ -620,15 +621,15 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
             raise!("message[{}]: parent message tool use id not fully responded, remaining {:?}", message.id, tool_use_ids);
         }
         let parent_message_thinking = parent_message.content.iter().any(|c| matches!(c, ContentBlock::Thinking{..}));
-        if let Some(RequestConfigAndId{ config, message_id }) = &request_config && message_id == &message.id {
-            if parent_message_thinking != !matches!(config.thinking, Thinking::Switch(false)) {
+        if let Some(RequestConfig{ message_id, thinking, .. }) = &request_config && message_id == &message.id {
+            if parent_message_thinking != !matches!(thinking, Thinking::Switch(false)) {
                 raise!("message[{}]: thinking switch is different from parent message, {}", message.id, parent_message_thinking);
             }
         }
     }
     
     // 5. request config message id
-    if let Some(RequestConfigAndId{ message_id, .. }) = &request_config {
+    if let Some(RequestConfig{ message_id, .. }) = &request_config {
         if let Some(message) = session.messages.iter().find(|m| m.id == *message_id) {
             if !message.role.is_user() {
                 raise!("request.message-id: message {} should be user message", message_id);
@@ -641,7 +642,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
     if !errors.is_empty() {
         anyhow::bail!("validation errors:\n  {}", errors.join("\n  "));
     }
-    Ok((session, request_config.map(|r| (r.config, r.message_id))))
+    Ok((session, request_config))
 }
 
 #[cfg(test)]
@@ -787,10 +788,10 @@ fn test_read() {
     assert_eq!(value, "use std::collections::{HashMap, BinaryHeap};...\n...");
     assert_eq!(metadata.len(), 0);
 
-    let Some((request_config, message_id)) = &request_config else {
+    let Some(request_config) = &request_config else {
         panic!("session.request_config not some");
     };
-    assert_eq!(message_id, &4);
+    assert_eq!(request_config.message_id, 4);
     assert_eq!(request_config.model.as_deref(), Some("deepseek-v4-pro"));
     assert_matches!(request_config.thinking, Thinking::Switch(true));
     assert_eq!(request_config.tool_names, vec!["read-file".to_string()]);
@@ -826,6 +827,7 @@ fn test_write() {
             },
         ],
         request_config: Some(RequestConfig {
+            message_id: 0,
             base_url: None,
             model: None,
             title: true,
