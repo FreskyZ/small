@@ -93,7 +93,7 @@ impl EventStreamParser {
                 self.buffer = self.buffer.split_off(eol_index.1 + 1);
                 self.position = 0;
                 // // from_utf8_lossy_owned is super new rust 1.99 function
-                let result_event = self.current_event.take().map(|v| String::from_utf8_lossy_owned(v));
+                let result_event = self.current_event.take().map(String::from_utf8_lossy_owned);
                 let result_data = String::from_utf8_lossy_owned(self.current_data.split_off(0).to_vec());
                 // according to spec, do not dispatch no data event
                 return if result_data.is_empty() { Ok(None) } else { Ok(Some(ServerSentEvent{ name: result_event, data: result_data })) };

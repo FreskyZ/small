@@ -142,7 +142,7 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
         // then merge whitespace records
         let value = if let Some(whitespace) = whitespace {
             merge_trailing_whitespace_records(&value, whitespace)
-                .map_err(|e| DeserializeError::custom(&format!("failed to side unload: {}", e)))?
+                .map_err(|e| DeserializeError::custom(format!("failed to side unload: {}", e)))?
         } else { value.to_string() };
 
         match kind {
@@ -235,22 +235,22 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
             ContentBlock::Text{ name, value } => {
                 map.serialize_entry("kind", "text")?;
                 if let Some(name) = name { map.serialize_entry("name", name)?; }
-                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(&value);
+                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(value);
                 if whitespace.is_empty() {
                     map.serialize_entry("value", &value)?;
                 } else {
                     map.serialize_entry("value", &trimmed_value)?;
-                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(|e| SerializeError::custom(e))?)?;
+                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(SerializeError::custom)?)?;
                 }
             },
             ContentBlock::Thinking{ value, signature } => {
                 map.serialize_entry("kind", "think")?;
-                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(&value);
+                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(value);
                 if whitespace.is_empty() {
                     map.serialize_entry("value", &value)?;
                 } else {
                     map.serialize_entry("value", &trimmed_value)?;
-                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(|e| SerializeError::custom(e))?)?;
+                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(SerializeError::custom)?)?;
                 }
                 map.serialize_entry("signature", signature)?;
             },
@@ -258,19 +258,19 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
                 map.serialize_entry("kind", "tool-use")?;
                 map.serialize_entry("id", id)?;
                 map.serialize_entry("name", name)?;
-                map.serialize_entry("input", &serde_json::to_string(input).map_err(|e| SerializeError::custom(e))?)?;
+                map.serialize_entry("input", &serde_json::to_string(input).map_err(SerializeError::custom)?)?;
             },
             ContentBlock::ToolResult{ id, value, metadata } => {
                 map.serialize_entry("kind", "tool-result")?;
                 map.serialize_entry("id", id)?;
-                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(&value);
+                let (trimmed_value, whitespace) = side_load_trailing_whitespaces(value);
                 if whitespace.is_empty() {
                     map.serialize_entry("value", &value)?;
                 } else {
                     map.serialize_entry("value", &trimmed_value)?;
-                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(|e| SerializeError::custom(e))?)?;
+                    map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(SerializeError::custom)?)?;
                 }
-                map.serialize_entry("metadata", &serde_json::to_string(&metadata).map_err(|e| SerializeError::custom(e))?)?;
+                map.serialize_entry("metadata", &serde_json::to_string(&metadata).map_err(SerializeError::custom)?)?;
             },
         }
         map.end()
@@ -579,16 +579,14 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
 
     let SessionAndRequestConfig { session, request_config } = serde_yaml_ng::from_str(original_value)?;
 
-    // 1. duplicate message id
     let mut message_ids = HashSet::new();
     for message in &session.messages {
+        // 1. duplicate message id
         if !message_ids.insert(message.id) {
             raise!("message[{}]: duplicate message id", message.id);
         }
-    }
 
-    // 2. parent id and parent role relationship
-    for message in &session.messages {
+        // 2. parent id and parent role relationship
         if let Some(parent_id) = message.parent_id {
             if let Some(parent_message) = session.messages.iter().find(|m| m.id == parent_id) {
                 if !matches!((&message.role, &parent_message.role), (Role::User,  Role::Assistant) | (Role::Assistant, Role::User)) {
@@ -597,6 +595,20 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
             } else {
                 raise!("message[{}]: parent-id {} not exist", message.id, parent_id);
             }
+        }
+
+        // 3. parent id loops
+        let mut path = HashSet::new();
+        path.insert(message.id);
+        let mut next_parent_id = message.parent_id;
+        while let Some(parent_id) = next_parent_id {
+            if let Some(parent_message) = session.messages.iter().find(|m| m.id == parent_id) {
+                if !path.insert(parent_message.id) {
+                    raise!("loop in parent relationship, path: {:?}", path);
+                    break;
+                }
+                next_parent_id = parent_message.parent_id;
+            } // else raised in previous step
         }
     }
 
@@ -611,6 +623,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
         // println!("{}: message[{}]: expecting tool use ids {:?}", file_name, message.id, tool_use_ids);
         for (block_index, block) in message.content.iter().enumerate() {
             if let ContentBlock::ToolResult{ id, .. } = block {
+                // clippy want to use &&, but remove is a major operation and should not hide inside condition
                 if !tool_use_ids.remove(id) {
                     raise!("message[{}].content[{}]: tool use id not found in parent message tool use ids, {}, {:?}",
                         message.id, block_index, id, tool_use_ids);
@@ -621,13 +634,13 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
             raise!("message[{}]: parent message tool use id not fully responded, remaining {:?}", message.id, tool_use_ids);
         }
         let parent_message_thinking = parent_message.content.iter().any(|c| matches!(c, ContentBlock::Thinking{..}));
-        if let Some(RequestConfig{ message_id, thinking, .. }) = &request_config && message_id == &message.id {
-            if parent_message_thinking != !matches!(thinking, Thinking::Switch(false)) {
-                raise!("message[{}]: thinking switch is different from parent message, {}", message.id, parent_message_thinking);
-            }
+        if let Some(RequestConfig{ message_id, thinking, .. }) = &request_config && message_id == &message.id
+            && parent_message_thinking != !matches!(thinking, Thinking::Switch(false))
+        {
+            raise!("message[{}]: thinking switch is different from parent message, {}", message.id, parent_message_thinking);
         }
     }
-    
+
     // 5. request config message id
     if let Some(RequestConfig{ message_id, .. }) = &request_config {
         if let Some(message) = session.messages.iter().find(|m| m.id == *message_id) {
@@ -795,6 +808,13 @@ fn test_read() {
     assert_eq!(request_config.model.as_deref(), Some("deepseek-v4-pro"));
     assert_matches!(request_config.thinking, Thinking::Switch(true));
     assert_eq!(request_config.tool_names, vec!["read-file".to_string()]);
+}
+
+#[test]
+fn test_read_errors() {
+
+    let Err(error) = from_str("filename", "name: name\nuser 1>2:\n  content:\n    something1\nassistant 2>1:\n  content:\n    something2") else { panic!("unexpectedly pass") };
+    assert!(error.to_string().contains("loop in parent relationship"), "{}", error);
 }
 
 #[test]
