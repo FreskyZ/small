@@ -24,7 +24,7 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
             ContentBlock::Text{ name, value } => {
                 map.serialize_entry("type", "text")?;
                 if let Some(name) = name {
-                    map.serialize_entry("text", &format!("<{}>{}</{}>", name, value, name))?;
+                    map.serialize_entry("text", &format!("<{}>\n{}\n</{}>", name, value, name))?;
                 } else {
                     map.serialize_entry("text", value)?;
                 }
@@ -824,9 +824,9 @@ pub async fn run(parameters: RequestParameters<'_>) -> Result<Message> {
     // unwrap: session.messages is not empty
     let result_message_id = parameters.session.messages.iter().map(|m| m.id).max().unwrap() + 1;
 
-    let mut additional = Vec::new();
-    let initial_usage = serde_json::to_string(&response_data.usage.0)?;
     let complete_usage = serde_json::to_string(&response_data.usage.1)?;
+    let mut additional = Vec::new();
+    additional.push(("start-usage".to_string(), serde_json::Value::String(serde_json::to_string(&response_data.usage.0)?)));
     if let Some(title) = response_data.title {
         additional.push(("title".to_string(), serde_json::Value::String(title)));
     }
@@ -845,7 +845,7 @@ pub async fn run(parameters: RequestParameters<'_>) -> Result<Message> {
             model: response_data.model,
             provider_message_id: response_data.message_id,
             stop_reason: response_data.stop_reason,
-            usage: format!("{}, {}", initial_usage, complete_usage),
+            usage: complete_usage,
             additional,
         }),
     })
@@ -1135,6 +1135,78 @@ data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text
 event: content_block_stop
 data: {"type":"content_block_stop","index":1}
 
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"call_00","name":"list-directory","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"max"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"-items"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":": "}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"200"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":", \""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"path"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":": \""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"docs"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
+
+event: content_block_start
+data: {"type":"content_block_start","index":3,"content_block":{"type":"tool_use","id":"call_01","name":"list-directory","input":{}}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"{\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"path"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":": \""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"scripts"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":3,"delta":{"type":"input_json_delta","partial_json":"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":3}
+
 event: message_delta
 data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":13516,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4617,"service_tier":"standard","output_tokens_details":{"thinking_tokens":3467}}}
 
@@ -1155,7 +1227,7 @@ data: {"type":"message_stop"}
         assert_eq!(builder.data.model, "deepseek-flash");
         assert_eq!(builder.data.usage.0,
             serde_json::json!({"input_tokens":13516,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}));
-        assert_eq!(builder.data.content.len(), 2);
+        assert_eq!(builder.data.content.len(), 4);
         let ContentBlock::Thinking{ value, signature } = &builder.data.content[0] else {
             panic!("content[0] is not text");
         };
@@ -1167,9 +1239,22 @@ data: {"type":"message_stop"}
         };
         assert!(name.is_none());
         assert_eq!(value, "## Answerpace(nextra**).");
+        let ContentBlock::ToolUse{ id, name, input } = &builder.data.content[2] else {
+            panic!("content[2] is not tool-use");
+        };
+        assert_eq!(id, "call_00");
+        assert_eq!(name, "list-directory");
+        assert_eq!(input, &serde_json::json!({"max-items":200,"path":"docs"}));
+        let ContentBlock::ToolUse{ id, name, input } = &builder.data.content[3] else {
+            panic!("content[3] is not tool-use");
+        };
+        assert_eq!(id, "call_01");
+        assert_eq!(name, "list-directory");
+        assert_eq!(input, &serde_json::json!({"path":"scripts"}));
         assert_eq!(builder.data.stop_reason, "end_turn");
         assert_eq!(builder.data.usage.1,
             serde_json::json!({"input_tokens":13516,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":4617,"service_tier":"standard","output_tokens_details":{"thinking_tokens":3467}}));
         assert!(builder.data.title.is_none());
+
     }
 }

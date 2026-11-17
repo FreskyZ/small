@@ -1,13 +1,15 @@
 {
     "name": "huan",
     "image": "my/rust",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
+    "workspaceFolder": "/work",
     // add reasonable host name, add reasonable container name
     "runArgs": ["-h=HUAN-DEVC", "--name=huan1"],
     "mounts": [
         // source cannot use ~
         // source does not respsect temporary `export VAR=value` in the shell to run `code .`, need to add to .zshrc
         { "source": "${localEnv:CARGO_DOWNLOAD_CACHE}", "target": "/usr/local/cargo/registry", "type": "bind" },
-        { "source": "${localEnv:HUAN_DATA_DIR}", "target": "/data", "type": "bind" }
+        { "source": "${localEnv:HUAN_WORKSPACES_DIR}", "target": "/workspaces", "type": "bind" }
     ],
     // "containerEnv": { "AKARIN_CONFIG": "/etc/akari.json" },
     "customizations": {

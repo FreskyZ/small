@@ -270,7 +270,9 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
                     map.serialize_entry("value", &trimmed_value)?;
                     map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(SerializeError::custom)?)?;
                 }
-                map.serialize_entry("metadata", &serde_json::to_string(&metadata).map_err(SerializeError::custom)?)?;
+                if !metadata.is_empty() {
+                    map.serialize_entry("metadata", &serde_json::to_string(&metadata).map_err(SerializeError::custom)?)?;
+                }
             },
         }
         map.end()
@@ -620,6 +622,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
 
         let mut tool_use_ids = parent_message.content.iter().fold(HashSet::new(),
             |mut acc, block| { if let ContentBlock::ToolUse{ id, .. } = block { acc.insert(id); } acc });
+        let is_tool_use = !tool_use_ids.is_empty();
         // println!("{}: message[{}]: expecting tool use ids {:?}", file_name, message.id, tool_use_ids);
         for (block_index, block) in message.content.iter().enumerate() {
             if let ContentBlock::ToolResult{ id, .. } = block {
@@ -634,7 +637,8 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
             raise!("message[{}]: parent message tool use id not fully responded, remaining {:?}", message.id, tool_use_ids);
         }
         let parent_message_thinking = parent_message.content.iter().any(|c| matches!(c, ContentBlock::Thinking{..}));
-        if let Some(RequestConfig{ message_id, thinking, .. }) = &request_config && message_id == &message.id
+        if is_tool_use
+            && let Some(RequestConfig{ message_id, thinking, .. }) = &request_config && message_id == &message.id
             && parent_message_thinking != !matches!(thinking, Thinking::Switch(false))
         {
             raise!("message[{}]: thinking switch is different from parent message, {}", message.id, parent_message_thinking);
