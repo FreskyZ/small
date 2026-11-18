@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer, Deserialize, Deserializer};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Unexpected};
 use serde::de::{Error as DeserializeError, Visitor as DeserializeVisitor};
 use serde::ser::{Error as SerializeError, SerializeMap as _, SerializeSeq as _};
-use crate::session::{Session, Message, SystemMessage, ResponseMetadata, RequestConfig};
+use crate::session::{Session, Message, ResponseMetadata, RequestConfig};
 use crate::session::{Thinking, Role, ContentBlock};
 
 // text representation, serializing and deserializing
@@ -14,28 +14,7 @@ use crate::session::{Thinking, Role, ContentBlock};
 // while this is not used in text repr, this is used in response data deserialization
 impl Serialize for Role {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        serializer.serialize_str(if self.is_user() {"user" } else { "assistant" })
-    }
-}
-
-// now that this is a dedicated serde module, you can move visitors out to reduce indention
-struct RoleDeserializeVisitor;
-impl<'de> DeserializeVisitor<'de> for RoleDeserializeVisitor {
-    type Value = Role;
-    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str("role")
-    }
-    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError, {
-        match v {
-            "user" => Ok(Role::User),
-            "assistant" => Ok(Role::Assistant),
-            other => Err(DeserializeError::invalid_value(Unexpected::Str(other), &"role")),
-        }
-    }
-}
-impl<'de> Deserialize<'de> for Role {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
-        deserializer.deserialize_str(RoleDeserializeVisitor)
+        serializer.serialize_str(self.display())
     }
 }
 
@@ -62,8 +41,7 @@ fn merge_trailing_whitespace_records(trimmed_value: &str, records: Vec<(usize, S
 
 // to collect value from value+whitespace multiple keys, you must custom deserialize
 // include some validations here by the way to improve source location reporting compare to later validation function
-// self.0 is none for system message
-struct ContentBlockDeserializeVisitor(Option<Role>);
+struct ContentBlockDeserializeVisitor(Role);
 
 impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
     type Value = ContentBlock;
@@ -74,6 +52,7 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
         let mut kind: Option<&'static str> = None;
         let mut name = None;
         let mut value = None;
+        let mut active = None;
         let mut whitespace = None;
         let mut signature = None;
         let mut tool_use_id = None;
@@ -83,23 +62,24 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
                 "kind" => {
                     kind = match (map.next_value::<&str>()?, self.0) {
                         ("text", _) => Some("text"),
-                        ("think", Some(Role::Assistant)) => Some("think"),
-                        ("tool-use", Some(Role::Assistant)) => Some("tool-use"),
-                        ("tool-result", Some(Role::User)) => Some("tool-result"),
+                        ("think", Role::Assistant) => Some("think"),
+                        ("tool-use", Role::Assistant) => Some("tool-use"),
+                        ("tool-result", Role::User) => Some("tool-result"),
                         (other, _) => return Err(DeserializeError::unknown_variant(other, match self.0 {
-                            None => &["text"], // system
-                            Some(Role::User) => &["text", "tool-result"],
-                            Some(Role::Assistant) => &["text", "think", "tool-use"],
+                            Role::System => &["text"], // system
+                            Role::User => &["text", "tool-result"],
+                            Role::Assistant => &["text", "think", "tool-use"],
                         })),
                     };
                 },
                 other if kind.is_none() => return Err(DeserializeError::unknown_field(other, &["kind before other fields"])),
                 "name" if matches!((kind, self.0),
                     | (Some("tool-use"), _)
-                    | (Some("text"), None | Some(Role::User)) // not allow name in assistant content block kind=text
+                    | (Some("text"), Role::System | Role::User) // not allow name in assistant content block kind=text
                 ) => name = Some(map.next_value()?),
                 // this next_value::<&str> is unacceptable?
                 "value" if matches!(kind, Some("text" | "think" | "tool-result")) => value = Some(map.next_value::<String>()?),
+                "active" if matches!(kind, Some("text")) => active = Some(map.next_value()?),
                 // whitespace records is inline json
                 "whitespace" if matches!(kind, Some("text" | "think" | "tool-result")) =>
                     whitespace = Some(serde_json::from_str::<Vec<(usize, String)>>(map.next_value::<&str>()?)
@@ -146,7 +126,7 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
         } else { value.to_string() };
 
         match kind {
-            "text" => Ok(ContentBlock::Text{ name, value }),
+            "text" => Ok(ContentBlock::Text{ name, value, active: active.unwrap_or(true) }),
             "think" => Ok(ContentBlock::Thinking{
                 value,
                 signature: signature.ok_or_else(|| DeserializeError::missing_field("signature"))?,
@@ -160,8 +140,7 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
         }
     }
 }
-// self.0 is none for system message
-struct ContentBlockDeserializeSeed(Option<Role>);
+struct ContentBlockDeserializeSeed(Role);
 impl<'de> DeserializeSeed<'de> for ContentBlockDeserializeSeed {
     type Value = ContentBlock;
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
@@ -169,8 +148,7 @@ impl<'de> DeserializeSeed<'de> for ContentBlockDeserializeSeed {
     }
 }
 
-// self.0 is none for system message
-struct ContentDeserializeVisitor(Option<Role>);
+struct ContentDeserializeVisitor(Role);
 
 impl<'de> DeserializeVisitor<'de> for ContentDeserializeVisitor {
     type Value = Vec<ContentBlock>;
@@ -178,7 +156,7 @@ impl<'de> DeserializeVisitor<'de> for ContentDeserializeVisitor {
         f.write_str("message content")
     }
     fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError {
-        Ok(vec![ContentBlock::Text{ name: None, value: v.to_string() }])
+        Ok(vec![ContentBlock::new_text(v.to_string())])
     }
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error> where A: SeqAccess<'de> {
         let mut results = Vec::new();
@@ -188,8 +166,7 @@ impl<'de> DeserializeVisitor<'de> for ContentDeserializeVisitor {
         Ok(results)
     }
 }
-// self.0 is none for system message
-struct ContentDeserializeSeed(Option<Role>);
+struct ContentDeserializeSeed(Role);
 impl<'de> DeserializeSeed<'de> for ContentDeserializeSeed {
     type Value = Vec<ContentBlock>;
     fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
@@ -232,7 +209,7 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map = serializer.serialize_map(None)?;
         match self.0 {
-            ContentBlock::Text{ name, value } => {
+            ContentBlock::Text{ name, value, active } => {
                 map.serialize_entry("kind", "text")?;
                 if let Some(name) = name { map.serialize_entry("name", name)?; }
                 let (trimmed_value, whitespace) = side_load_trailing_whitespaces(value);
@@ -241,6 +218,9 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
                 } else {
                     map.serialize_entry("value", &trimmed_value)?;
                     map.serialize_entry("whitespace", &serde_json::to_string(&whitespace).map_err(SerializeError::custom)?)?;
+                }
+                if !*active {
+                    map.serialize_entry("active", &false)?;
                 }
             },
             ContentBlock::Thinking{ value, signature } => {
@@ -315,6 +295,7 @@ impl<'de> Deserialize<'de> for Thinking {
 }
 
 struct RequestConfigDeserializeVisitor;
+
 impl<'de> DeserializeVisitor<'de> for RequestConfigDeserializeVisitor {
     type Value = RequestConfig;
     fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -419,13 +400,19 @@ impl<'de> DeserializeVisitor<'de> for MessageDeserializeVisitor {
         let mut content = None;
         while let Some(key) = map.next_key::<&str>()? {
             match key {
-                "content" => content = Some(map.next_value_seed(
-                    ContentDeserializeSeed(if self.0.id > 0 { Some(self.0.role) } else { None }))?),
-                // no need to deserialize request and response information of completed assistant message
+                "content" => content = Some(map.next_value_seed(ContentDeserializeSeed(self.0.role))?),
+                "metadata" if self.0.role.is_assistant() =>
+                    return Err(DeserializeError::custom(concat!(
+                        "use response metadata for assistant message generic metadata,", 
+                        "there is no schema requirement in completed assistent message"))),
+                // no need to deserialize request, response and generic information of completed messages
+                "metadata" => { map.next_value::<IgnoredAny>()?; }
                 "request" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
                 "response" if self.0.role.is_assistant() => { map.next_value::<IgnoredAny>()?; },
-                other => return Err(DeserializeError::unknown_field(other,
-                    if self.0.role.is_assistant() { &["content", "request", "response"] } else { &["content"] })),
+                other => return Err(DeserializeError::unknown_field(other, match self.0.role {
+                    Role::System | Role::User => &["content", "metadata"],
+                    Role::Assistant => &["content", "metadata", "request", "response"],
+                })),
             }
         }
         let Some(content) = content else { return Err(DeserializeError::missing_field("content")); };
@@ -435,50 +422,31 @@ impl<'de> DeserializeVisitor<'de> for MessageDeserializeVisitor {
     }
 }
 struct MessageDeserializeSeed {
-    role: Role, 
+    role: Role,
     id: usize,
     parent_id: Option<usize>,
 }
 impl MessageDeserializeSeed {
-    // don't have role::system, use id = 0 to check is system
-    fn from_system() -> Self { Self { role: Role::User, id: 0, parent_id: None } }
-
     // the serde::de::Error is a trait, in deserialize and visitor implementation,
     // it will call concrete deserializer's error type, that mean this outside function also need D and 'de
     // no, Visitor impl don't know Deserialize type, just let it pass a Error type is enough
-    fn from_key<E>(key: &str) -> Result<Self, E> where E: DeserializeError {
-        let role = if key.starts_with("user") { Role::User } else { Role::Assistant };
+    fn from_key<E>(role: Role, key: &str) -> Result<Self, E> where E: DeserializeError {
 
-        // TODO temp compatible to test other things
-        let (id, parent_id) = if key.ends_with(']') {
-            let mut split = key[role.display().len() + 1..key.len() - 1].trim().split("<-");
-            // unwrap: split have at least 1 element
-            let id = split.next().unwrap().parse().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message id"))?;
-            if id <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
+        let mut split = key[role.display().len() + 1..].trim().split('>');
+        // unwrap: split have at least 1 element
+        let id = split.next().unwrap().parse().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message id"))?;
+        if id <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
 
-            let parent_id = split.next().map(|pid| {
-                let pid = pid.parse::<usize>().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message parent id"))?;
-                if pid <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
-                else if id == pid { return Err(E::invalid_value(Unexpected::Str(key), &"parent id not same as message id")) }
-                Ok(pid)
-            }).transpose()?;
-            (id, parent_id)
-        } else {
-            let mut split = key[role.display().len() + 1..].trim().split('>');
-            // unwrap: split have at least 1 element
-            let id = split.next().unwrap().parse().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message id"))?;
-            if id <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
+        let parent_id = split.next().map(|pid| {
+            let pid = pid.parse::<usize>().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message parent id"))?;
+            if pid <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
+            else if id == pid { return Err(E::invalid_value(Unexpected::Str(key), &"parent id not same as message id")) }
+            Ok(pid)
+        }).transpose()?;
 
-            let parent_id = split.next().map(|pid| {
-                let pid = pid.parse::<usize>().map_err(|_| E::invalid_value(Unexpected::Str(key), &"message parent id"))?;
-                if pid <= 0 { return Err(E::invalid_value(Unexpected::Str(key), &"positive value")) }
-                else if id == pid { return Err(E::invalid_value(Unexpected::Str(key), &"parent id not same as message id")) }
-                Ok(pid)
-            }).transpose()?;
-            (id, parent_id)
-        };
-
-        if role.is_assistant() && parent_id.is_none() {
+        if role.is_system() && parent_id.is_some() {
+            return Err(E::invalid_value(Unexpected::Str(key), &"system message not have parent id"));
+        } else if role.is_assistant() && parent_id.is_none() {
             return Err(E::invalid_value(Unexpected::Str(key), &"assistant message to have parent id"));
         }
         Ok(MessageDeserializeSeed{ role, id, parent_id })
@@ -501,6 +469,8 @@ impl<'a> Serialize for MessageSerializeHelper<'a> {
             + if self.0.response_metadata.is_some() { 1 } else { 0 };
         let mut map = serializer.serialize_map(Some(size))?;
         map.serialize_entry("content", &ContentSerializeHelper(&self.0.content))?;
+        // currently this serialization is only for result assistant message,
+        // they store generic metadata in response metadata, not in generic metadata
         if let Some(request_config) = &self.0.request_config {
             map.serialize_entry("request", request_config)?;
         }
@@ -540,7 +510,6 @@ impl<'de> DeserializeVisitor<'de> for SessionDeserializeVisitor {
     }
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error> where A: MapAccess<'de> {
         let mut name = None;
-        let mut system_message = None;
         let mut messages = Vec::new();
         let mut request_config = None;
         while let Some(key) = map.next_key::<&str>()? {
@@ -548,17 +517,21 @@ impl<'de> DeserializeVisitor<'de> for SessionDeserializeVisitor {
                 "name" => name = Some(map.next_value()?),
                 // metadata key may vary, no need to precisely read them
                 "metadata" => { map.next_value::<IgnoredAny>()?; },
-                "system" => system_message = Some(map.next_value_seed(MessageDeserializeSeed::from_system())?),
-                key if key.starts_with("user") || key.starts_with("assistant") =>
-                    messages.push(map.next_value_seed(MessageDeserializeSeed::from_key(key)?)?),
                 "request" => request_config = Some(map.next_value()?),
-                other => return Err(DeserializeError::unknown_field(other, &["name", "user", "assistant", "request"])),
+                key => messages.push(map.next_value_seed(MessageDeserializeSeed::from_key(if key.starts_with("system ") {
+                    Role::System
+                } else if key.starts_with("user ") {
+                    Role::User
+                } else if key.starts_with("assistant ") {
+                    Role::Assistant
+                } else {
+                    return Err(DeserializeError::unknown_field(key, &["name", "system", "user", "assistant", "request"]));
+                }, key)?)?),
             }
         }
         let name = name.ok_or_else(|| DeserializeError::missing_field("name"))?;
-        let system_message = system_message.map(|m| SystemMessage{ content: m.content });
-        if messages.is_empty() { return Err(DeserializeError::missing_field("user or assistant")); }
-        Ok(SessionAndRequestConfig { session: Session { name, system_message, messages }, request_config })
+        if messages.is_empty() { return Err(DeserializeError::missing_field("system, user or assistant")); }
+        Ok(SessionAndRequestConfig { session: Session { name, messages }, request_config })
     }
 }
 impl<'de> Deserialize<'de> for SessionAndRequestConfig {
@@ -591,8 +564,11 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
         // 2. parent id and parent role relationship
         if let Some(parent_id) = message.parent_id {
             if let Some(parent_message) = session.messages.iter().find(|m| m.id == parent_id) {
-                if !matches!((&message.role, &parent_message.role), (Role::User,  Role::Assistant) | (Role::Assistant, Role::User)) {
-                    raise!("message[{}]: unexpected parent message role relationship", message.id);
+                if !matches!((message.role, parent_message.role),
+                    | (Role::User, Role::System) | (Role::User,  Role::Assistant) | (Role::Assistant, Role::User))
+                {
+                    raise!("message[{}]: unexpected parent message role relationship, {}, {}",
+                        message.id, message.role.display(), parent_message.role.display());
                 }
             } else {
                 raise!("message[{}]: parent-id {} not exist", message.id, parent_id);
@@ -610,7 +586,7 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
                     break;
                 }
                 next_parent_id = parent_message.parent_id;
-            } // else raised in previous step
+            } else { break; } // else raised error in previous step
         }
     }
 
@@ -619,6 +595,8 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
         let Some(parent_id) = message.parent_id else { continue; };
         // already raised error
         let Some(parent_message) = session.messages.iter().find(|m| m.id == parent_id) else { continue; };
+        // skip parent message is system
+        if parent_message.role.is_system() { continue; }
 
         let mut tool_use_ids = parent_message.content.iter().fold(HashSet::new(),
             |mut acc, block| { if let ContentBlock::ToolUse{ id, .. } = block { acc.insert(id); } acc });
@@ -648,8 +626,8 @@ pub fn from_str(file_name: &str, original_value: &str) -> Result<(Session, Optio
     // 5. request config message id
     if let Some(RequestConfig{ message_id, .. }) = &request_config {
         if let Some(message) = session.messages.iter().find(|m| m.id == *message_id) {
-            if !message.role.is_user() {
-                raise!("request.message-id: message {} should be user message", message_id);
+            if message.role.is_system() {
+                raise!("request.message-id: message {} should not be system message", message_id);
             }
         } else {
             raise!("request.message-id: message id {} not exist", message_id);
@@ -674,14 +652,14 @@ fn test_read() {
         "name: session name",
         "metadata: 2026-10-22T07:59:01Z",
         "",
-        "system:",
+        "system 1:",
         "  content: You are a coding agent",
         "",
-        "user 1:",
+        "user 2>1:",
         "  content:",
         "    summary source code file src/main.rs",
         "",
-        "assistant 3>1:",
+        "assistant 3>2:",
         "  content:",
         "  - kind: think",
         "    value: reasoning content",
@@ -743,63 +721,67 @@ fn test_read() {
     ].join("\n")).expect("deserialization failed");
 
     assert_eq!(session.name, "session name");
-    let Some(system_message) = &session.system_message else {
-        panic!("session.system_message is none")
-    };
-    assert_eq!(system_message.content.len(), 1);
-    let ContentBlock::Text{ name, value } = &system_message.content[0] else {
-        panic!("session.system_message.content is not text");
-    };
-    assert!(name.is_none());
-    assert_eq!(value, "You are a coding agent");
-    assert_eq!(session.messages.len(), 3);
+    assert_eq!(session.messages.len(), 4);
     assert_eq!(session.messages[0].id, 1);
     assert_eq!(session.messages[0].parent_id, None);
-    assert_matches!(session.messages[0].role, Role::User);
+    assert_matches!(session.messages[0].role, Role::System);
     assert!(session.messages[0].request_config.is_none());
     assert!(session.messages[0].response_metadata.is_none());
     assert_eq!(session.messages[0].content.len(), 1);
-    let ContentBlock::Text{ name, value } = &session.messages[0].content[0] else {
-        panic!("session.messages[0].content is not plain text");
+    let ContentBlock::Text{ name, value, active } = &session.messages[0].content[0] else {
+        panic!("session.message[0].content[0] is not text");
+    };
+    assert!(name.is_none());
+    assert_eq!(value, "You are a coding agent");
+    assert!(active);
+    assert_eq!(session.messages[1].id, 2);
+    assert_eq!(session.messages[1].parent_id, Some(1));
+    assert_matches!(session.messages[1].role, Role::User);
+    assert!(session.messages[1].request_config.is_none());
+    assert!(session.messages[1].response_metadata.is_none());
+    assert_eq!(session.messages[1].content.len(), 1);
+    let ContentBlock::Text{ name, value, active } = &session.messages[1].content[0] else {
+        panic!("session.messages[1].content is not plain text");
     };
     assert!(name.is_none());
     assert_eq!(value, "summary source code file src/main.rs");
-    assert_eq!(session.messages[1].id, 3);
-    assert_eq!(session.messages[1].parent_id, Some(1));
-    assert_matches!(session.messages[1].role, Role::Assistant);
-    assert_eq!(session.messages[1].content.len(), 4);
-    assert_matches!(&session.messages[1].content[0], ContentBlock::Thinking{ value, .. } if value == "reasoning content");
-    assert_matches!(&session.messages[1].content[1], ContentBlock::Text{ value, .. } if value == "normal content");
-    let ContentBlock::ToolUse{ id, name, input } = &session.messages[1].content[2] else {
-        panic!("session.messages[1].content[2] not toolcall");
+    assert!(active);
+    assert_eq!(session.messages[2].id, 3);
+    assert_eq!(session.messages[2].parent_id, Some(2));
+    assert_matches!(session.messages[2].role, Role::Assistant);
+    assert_eq!(session.messages[2].content.len(), 4);
+    assert_matches!(&session.messages[2].content[0], ContentBlock::Thinking{ value, .. } if value == "reasoning content");
+    assert_matches!(&session.messages[2].content[1], ContentBlock::Text{ value, .. } if value == "normal content");
+    let ContentBlock::ToolUse{ id, name, input } = &session.messages[2].content[2] else {
+        panic!("session.messages[2].content[2] not toolcall");
     };
     assert_eq!(id, "tool-call-id-1");
     assert_eq!(name, "read-file");
     assert_eq!(input, &serde_json::json!({ "pathname": "src/main.rs" }));
-    let ContentBlock::ToolUse{ id, name, input } = &session.messages[1].content[3] else {
-        panic!("session.messages[1].content[3] not toolcall");
+    let ContentBlock::ToolUse{ id, name, input } = &session.messages[2].content[3] else {
+        panic!("session.messages[2].content[3] not toolcall");
     };
     assert_eq!(id, "tool-call-id-2");
     assert_eq!(name, "read-file");
     assert_eq!(input, &serde_json::json!({ "pathname": "src/session.rs" }));
     // read don't read response metadata
-    assert!(session.messages[1].request_config.is_none());
-    assert!(session.messages[1].response_metadata.is_none());
+    assert!(session.messages[2].request_config.is_none());
+    assert!(session.messages[2].response_metadata.is_none());
     
-    assert_eq!(session.messages[2].id, 4);
-    assert_eq!(session.messages[2].parent_id, Some(3));
-    assert_matches!(session.messages[2].role, Role::User);
-    assert_eq!(session.messages[2].content.len(), 3);
-    assert_matches!(&session.messages[2].content[0], ContentBlock::Text{ value, name }
-        if name.as_deref() == Some("additional-manual-description") && value == "additional manual description");
-    let ContentBlock::ToolResult{ id, value, metadata } = &session.messages[2].content[1] else {
-        panic!("session.messages[2].content[1] not toolcall");
+    assert_eq!(session.messages[3].id, 4);
+    assert_eq!(session.messages[3].parent_id, Some(3));
+    assert_matches!(session.messages[3].role, Role::User);
+    assert_eq!(session.messages[3].content.len(), 3);
+    assert_matches!(&session.messages[3].content[0], ContentBlock::Text{ value, name, active }
+        if name.as_deref() == Some("additional-manual-description") && value == "additional manual description" && *active);
+    let ContentBlock::ToolResult{ id, value, metadata } = &session.messages[3].content[1] else {
+        panic!("session.messages[3].content[1] not toolcall");
     };
     assert_eq!(id, "tool-call-id-1");
     assert_eq!(value, "use std::fs...\n...\nstruct Message...\n\nfn read_session...\nfn test_read...");
     assert_eq!(metadata.len(), 0);
-    let ContentBlock::ToolResult{ id, value, metadata } = &session.messages[2].content[2] else {
-        panic!("session.messages[2].content[2] not toolcall");
+    let ContentBlock::ToolResult{ id, value, metadata } = &session.messages[3].content[2] else {
+        panic!("session.messages[3].content[2] not toolcall");
     };
     assert_eq!(id, "tool-call-id-2");
     assert_eq!(value, "use std::collections::{HashMap, BinaryHeap};...\n...");
@@ -838,6 +820,7 @@ fn test_write() {
             ContentBlock::Text{
                 value: "let me read the files...".to_string(),
                 name: None,
+                active: true,
             },
             ContentBlock::ToolUse{
                 id: "id1".to_string(),
@@ -908,7 +891,7 @@ fn test_write() {
         id: 5,
         parent_id: Some(42),
         role: Role::Assistant,
-        content: vec![ContentBlock::Text{ name: None, value: "this file contains...\nand this file...".to_string() }],
+        content: vec![ContentBlock::new_text("this file contains...\nand this file...".to_string())],
         request_config: None,
         response_metadata: None,
     }).expect("failed to serialize"), vec![

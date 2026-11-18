@@ -7,7 +7,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
 use serde::ser::SerializeMap as _;
-use crate::session::{ContentBlock, Message, Role, Session};
+use crate::session::{ContentBlock, Message, RequestConfig, Role, Session};
 
 // tool definitions and handlers
 
@@ -271,9 +271,8 @@ fn handle_list_directory(workspace: &str, input: ListDirectoryInput) -> Result<S
                     Err(_) => "-".to_string(),
                 };
 
-                // ATTENTION TODO display relative path
-                let display_path: PathBuf = entry_path.components().skip(3).collect();
-                state.lines.push(format!("{kind}{permission} {:>10} {} {}", meta.len(), time, display_path.display()));
+                // TODO should not be absolute path
+                state.lines.push(format!("{kind}{permission} {:>10} {} {}", meta.len(), time, entry_path.display()));
                 state.count += 1;
             }
             // DFS: descend immediately after emitting the entry, still respecting the limit.
@@ -309,9 +308,10 @@ pub struct GetCurrentTimeInput {
 }
 pub fn handle_get_current_time(_input: GetCurrentTimeInput) {}
 
+// TODO try whitelist shell commands instead of dedicated ls/git/rg/python etc. commands
 static DEF_RUN_COMMAND: ToolDefinition = ToolDefinition {
     name: "run-command",
-    description: concat!("Run command line synchronously. The command may be audited by user or other mechanism. ",
+    description: concat!("Run command synchronously. The command may be audited by user or other mechanism. ",
         "Output may be error, timeout or truncated if it is too long. Avoid dangerous commands and instruct user to determine and execute manually."),
     input_schema: JsonSchema::object(&[
         ("command", JsonSchema::string("The command to run.")),
@@ -368,7 +368,10 @@ pub static ALL_TOOLS: &[&ToolDefinition] = &[
     &DEF_WEB_SEARCH,
     &DEF_WEB_FETCH,
 ];
-pub fn run(session: &Session, message: &Message, workspace: String) -> Result<Message> {
+pub fn run(workspace: Option<&str>, session: &Session, request_config: RequestConfig) -> Result<Message> {
+    let workspace = workspace.unwrap_or(".");
+    // unwrap: validated request config message id exist
+    let message = session.messages.iter().find(|m| m.id == request_config.message_id).unwrap();
 
     let mut results = Vec::new();
     for block in &message.content {

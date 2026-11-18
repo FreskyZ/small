@@ -3,15 +3,21 @@ use chrono::{DateTime, Utc};
 
 // in memory session structure
 
+// you need system in role because you need system message in main message array
+// because you need multiple system messages
 #[derive(Debug, Clone, Copy)]
 pub enum Role {
+    System,
     User,
     Assistant,
 }
 impl Role {
+    pub fn is_system(&self) -> bool { matches!(self, Role::System) }
     pub fn is_user(&self) -> bool { matches!(self, Role::User) }
     pub fn is_assistant(&self) -> bool { matches!(self, Role::Assistant) }
-    pub fn display(&self) -> &'static str { match self { Self::User => "user", Self::Assistant => "assistant" } }
+    pub fn display(&self) -> &'static str {
+        match self { Self::System => "system", Self::User => "user", Self::Assistant => "assistant" }
+    }
 }
 
 #[derive(Debug)]
@@ -20,6 +26,8 @@ pub enum ContentBlock {
         // use this to wrap text chunks in xml tag: <name>value</name>
         name: Option<String>,
         value: String,
+        // currently designed for different versions of system message, default to true
+        active: bool,
     },
     // - if you have learned that thinking content don't need to be sent in message history in
     //   following conversation rounds, it is different in tool call scenario, it is required
@@ -48,6 +56,10 @@ pub enum ContentBlock {
         // tool execution metadata, logs, etc.
         metadata: Vec<(String, serde_json::Value)>,
     },
+}
+impl ContentBlock {
+    pub fn new_text(value: String) -> Self { Self::Text{ name: None, value, active: true } }
+    pub fn is_tool_use(&self) -> bool { matches!(self, Self::ToolUse{..}) }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -109,12 +121,6 @@ pub struct ResponseMetadata {
     pub additional: Vec<(String, serde_json::Value)>,
 }
 
-// system message don't have all other properties as user and assitant messages
-#[derive(Debug)]
-pub struct SystemMessage {
-    pub content: Vec<ContentBlock>,
-}
-
 #[derive(Debug)]
 pub struct Message {
     pub id: usize,
@@ -130,7 +136,6 @@ pub struct Message {
 #[derive(Debug)]
 pub struct Session {
     pub name: String,
-    pub system_message: Option<SystemMessage>,
     // this is a flattened array of message tree structure, items reference parent node by id and parent id
     pub messages: Vec<Message>,
 }
@@ -185,12 +190,10 @@ impl fmt::Display for RequestConfig {
 impl fmt::Display for Session {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "name: {}", self.name)?;
-        if let Some(message) = &self.system_message {
-            write!(f, "\nsystem:")?;
-            for block in &message.content { write!(f, "\n{}", block)?; }
-        }
         for message in &self.messages {
-            write!(f, "\n{} {}>{}:", message.role.display(), message.id, message.parent_id.unwrap_or(0))?;
+            write!(f, "\n{} {}", message.role.display(), message.id)?;
+            if let Some(parent_id) = message.parent_id { write!(f, ">{}", parent_id)?; }
+            write!(f, ":")?;
             for block in &message.content { write!(f, "\n{}", block)?; }
         }
         Ok(())

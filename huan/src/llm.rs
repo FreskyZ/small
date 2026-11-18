@@ -10,8 +10,8 @@ use serde::de::{Error as DeserializeError, Visitor as DeserializeVisitor};
 use serde::ser::{SerializeMap as _, SerializeSeq as _};
 use crate::sse::{EventStreamParser, ServerSentEvent};
 use crate::handler::ALL_TOOLS;
-use crate::session::{Role, SystemMessage, Thinking};
-use crate::session::{ContentBlock, Message, RequestConfig, Session, ResponseMetadata};
+use crate::session::{Role, Thinking, RequestConfig};
+use crate::session::{ContentBlock, Message, Session, ResponseMetadata};
 
 // specific api provider's request type, response type and sse handling, not include sse itself
 
@@ -21,7 +21,7 @@ impl<'a> Serialize for ContentBlockSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map = serializer.serialize_map(None)?;
         match self.0 {
-            ContentBlock::Text{ name, value } => {
+            ContentBlock::Text{ name, value, .. } => {
                 map.serialize_entry("type", "text")?;
                 if let Some(name) = name {
                     map.serialize_entry("text", &format!("<{}>\n{}\n</{}>", name, value, name))?;
@@ -55,7 +55,9 @@ impl<'a> Serialize for ContentSerializeHelper<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut seq = serializer.serialize_seq(Some(self.0.len()))?;
         for element in self.0 {
-            seq.serialize_element(&ContentBlockSerializeHelper(element))?;
+            if !matches!(element, ContentBlock::Text{ active: false, .. }) {
+                seq.serialize_element(&ContentBlockSerializeHelper(element))?;
+            }
         }
         seq.end()
     }
@@ -85,18 +87,18 @@ impl<'k, 'v, K, V> Serialize for MinorSerializeHelper<'k, 'v, K, V>
 
 struct RequestBody<'a> {
     config: &'a RequestConfig,
-    system: Option<&'a SystemMessage>,
     thread: Vec<&'a Message>,
 }
 impl<'a> Serialize for RequestBody<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("model", self.config.model.as_deref().unwrap_or("deepseek-flash"))?;
-        // clippy say this *m can auto deref, but after
-        // seeing .map(|m| Helper(m)) you cannot change to .map(Helper), which is very confusing, so reject
+        // clippy say this *m can auto deref, but seeing
+        // .map(|m| Helper(m)) you cannot change to .map(Helper), which is very confusing, so reject
         #[allow(clippy::explicit_auto_deref)]
-        map.serialize_entry("messages", &self.thread.iter().map(|m| MessageSerializeHelper(*m)).collect::<Vec<_>>())?;
-        if let Some(system_message) = &self.system {
+        map.serialize_entry("messages", &self.thread.iter()
+            .filter(|m| !m.role.is_system()).map(|m| MessageSerializeHelper(*m)).collect::<Vec<_>>())?;
+        if let Some(system_message) = &self.thread.iter().find(|m| m.role.is_system()) {
             map.serialize_entry("system", &ContentSerializeHelper(&system_message.content))?;
         }
         if let Some(max_tokens) = self.config.max_tokens {
@@ -256,7 +258,7 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
         match kind {
             "text" => {
                 let Some(value) = text else { return Err(DeserializeError::missing_field("text")) };
-                Ok((ContentBlock::Text{ name: None, value }, warnings))
+                Ok((ContentBlock::new_text(value), warnings))
             },
             "thinking" => {
                 let Some(value) = thinking else { return Err(DeserializeError::missing_field("thinking")) };
@@ -730,11 +732,7 @@ pub async fn run(parameters: RequestParameters<'_>) -> Result<Message> {
         bail!("unknown tool names {}", unknown_tool_names.join(","));
     }
 
-    let request_body = RequestBody {
-        config: &parameters.config,
-        system: parameters.session.system_message.as_ref(),
-        thread,
-    };
+    let request_body = RequestBody { config: &parameters.config, thread };
     fs::write("request.json", &serde_json::to_string_pretty(&request_body)?)?;
     
     let base_url = parameters.config.base_url.as_deref().unwrap_or("https://api.deepseek.com/anthropic");
@@ -899,11 +897,12 @@ mod tests {
         // json parse and serialize make properties reorder TODO change to compare json
         assert_eq!(builder.data.usage.0, serde_json::json!({"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}));
         assert_eq!(builder.data.content.len(), 1);
-        let ContentBlock::Text{ value, name } = &builder.data.content[0] else {
+        let ContentBlock::Text{ value, name, active } = &builder.data.content[0] else {
             panic!("content[0] is not text");
         };
         assert!(name.is_none());
         assert_eq!(value, "Hello!");
+        assert!(active);
         assert_eq!(builder.data.stop_reason, "end_turn");
         assert_eq!(builder.data.usage.1, serde_json::json!({"input_tokens":12,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"service_tier":"standard"}));
         assert!(builder.data.title.is_none());
@@ -1234,11 +1233,12 @@ data: {"type":"message_stop"}
         assert_eq!(value, "Now I have ( scalars, all], including `l-empty(n nb- c-byte-order-mark` ( `c-print `s).\n` =ES spaces (`s).\n\nSo — on\"?actly;om-l\\nt than n).) => detectedliteral\" has-white515203.");
         // oh good, signature is same as message id
         assert_eq!(signature, "bdc3");
-        let ContentBlock::Text{ value, name } = &builder.data.content[1] else {
+        let ContentBlock::Text{ value, name, active } = &builder.data.content[1] else {
             panic!("content[1] is not text");
         };
         assert!(name.is_none());
         assert_eq!(value, "## Answerpace(nextra**).");
+        assert!(active);
         let ContentBlock::ToolUse{ id, name, input } = &builder.data.content[2] else {
             panic!("content[2] is not tool-use");
         };

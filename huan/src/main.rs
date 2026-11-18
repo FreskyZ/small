@@ -17,68 +17,66 @@ struct Command {
 
 #[derive(clap::Subcommand)]
 enum SubCommand {
-    #[command(about = "run one step / one chat completion / one request response round trip")]
+    #[command(about = "run one step: one chat completion or request response roundtrip, or run tools in one message")]
     Step {
+        #[arg(long, help = "workspace directory for fs tools")]
+        workspace: Option<String>,
+        file_name: String,
         #[arg(long)]
         not_dry: bool,
-        filename: String,
-    },
-    #[command(about = "run tool automatically?")]
-    Run {
-        #[arg(long, help = "workspace directory for fs tools")]
-        workspace: String,
-        // without attribute making this automatically positional argument 1
-        filename: String,
-        // and this positional argument 2
-        message_id: usize,
     },
     #[command(about = "migrate something")]
     Migrate,
 }
 
-async fn step(filename: &str, dry: bool) -> Result<()> {
-    println!("step {}", filename);
+async fn step(workspace: Option<&str>, file_name: &str, dry: bool) -> Result<()> {
+    println!("step {}", file_name);
 
-    let session_original_content = fs::read_to_string(filename)?;
-    let (session, request_config) = text_repr::from_str(filename, &session_original_content)?;
+    let session_original_content = fs::read_to_string(file_name)?;
+    let (session, request_config) = text_repr::from_str(file_name, &session_original_content)?;
     println!("{}", session);
     let Some(request_config) = request_config else { bail!("missing request config, exit"); };
     println!("{}", request_config);
 
-    let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
-        bail!("env var HUAN_API_KEY missing");
+    // unwrap: validated request config message id exist
+    let request_message = session.messages.iter().find(|m| m.id == request_config.message_id).unwrap();
+
+    let result_message = if request_message.role.is_user() {
+        let Ok(api_key) = std::env::var("HUAN_API_KEY") else {
+            bail!("env var HUAN_API_KEY missing");
+        };
+        llm::run(llm::RequestParameters{ dry, api_key, session: &session, config: request_config }).await?
+    } else if request_message.role.is_user() && request_message.content.iter().any(|b| b.is_tool_use()) {
+        handler::run(workspace, &session, request_config)?
+    } else {
+        bail!("request config message id is an assistant message but don't have tool use blocks?")
     };
-    let result_message = llm::run(llm::RequestParameters{ dry, api_key, session: &session, config: request_config }).await?;
 
     let result_message = text_repr::to_string(&result_message)?;
     let output_content = format!("{}\n{}", session_original_content, result_message);
-    println!("write {}", filename);
-    fs::write(filename, output_content)?;
-    Ok(())
-}
-
-// for now fs tools don't use async so this don't need to be async
-fn run_tool(filename: &str, message_id: usize, workspace: String) -> Result<()> {
-    println!("run {} {}", filename, message_id);
-
-    let session_original_content = fs::read_to_string(filename)?;
-    let (session, _) = text_repr::from_str(filename, &session_original_content)?;
-    println!("{}", session);
-    let Some(message) = session.messages.iter().find(|m| m.id == message_id) else { bail!("invalid message id"); };
-    if !message.role.is_assistant() { bail!("message id is not assistant message"); }
-
-    let result_message = handler::run(&session, message, workspace)?;
-
-    let result_message = text_repr::to_string(&result_message)?;
-    let output_content = format!("{}\n{}", session_original_content, result_message);
-    println!("write {}", filename);
-    fs::write(filename, output_content)?;
-
+    println!("write {}", file_name);
+    fs::write(file_name, output_content)?;
     Ok(())
 }
 
 fn migrate() -> Result<()> {
     println!("migrate");
+
+    for entry in fs::read_dir("/workspaces/huan-data")? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let file_name = entry_path.file_stem().unwrap().to_str().unwrap();
+        // this is enough for directory content currently
+        if file_name.len() == 15 && file_name.as_bytes()[8] == b'-' {
+            let original_content = fs::read_to_string(&entry_path)?;
+            println!("{}", file_name);
+            let (session, request_config) = text_repr::from_str(file_name, &original_content)?;
+            println!("{}", session);
+            if let Some(request_config) = request_config {
+                println!("{}", request_config);
+            }
+        }
+    }
 
     Ok(())
 }
@@ -87,8 +85,7 @@ fn migrate() -> Result<()> {
 async fn main() -> Result<()> {
     let command = Command::parse();
     match command.subcommand {
-        SubCommand::Step{ filename, not_dry } => step(&filename, !not_dry).await?,
-        SubCommand::Run{ filename, message_id, workspace } => run_tool(&filename, message_id, workspace)?,
+        SubCommand::Step{ workspace, file_name, not_dry } => step(workspace.as_deref(), &file_name, !not_dry).await?,
         SubCommand::Migrate => migrate()?,
     }
     Ok(())
