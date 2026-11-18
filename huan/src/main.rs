@@ -62,7 +62,10 @@ async fn step(workspace: Option<&str>, file_name: &str, dry: bool) -> Result<()>
 fn migrate() -> Result<()> {
     println!("migrate");
 
-    for entry in fs::read_dir("/workspaces/huan-data")? {
+    let mut session_count = 0;
+    let mut message_count = 0;
+    let mut character_count = 0;
+    for entry in fs::read_dir("/workspaces/huan-data-stage")? {
         let entry = entry?;
         let entry_path = entry.path();
         let file_name = entry_path.file_stem().unwrap().to_str().unwrap();
@@ -70,13 +73,23 @@ fn migrate() -> Result<()> {
         if file_name.len() == 15 && file_name.as_bytes()[8] == b'-' {
             let original_content = fs::read_to_string(&entry_path)?;
             println!("{}", file_name);
-            let (session, request_config) = text_repr::from_str(file_name, &original_content)?;
-            println!("{}", session);
-            if let Some(request_config) = request_config {
-                println!("{}", request_config);
+            let (session, _request_config) = text_repr::from_str(file_name, &original_content)?;
+            // println!("{}", session);
+            // if let Some(request_config) = request_config {
+            //     println!("{}", request_config);
+            // }
+            session_count += 1;
+            message_count += session.messages.len();
+            for message in &session.messages {
+                for block in &message.content {
+                    if let crate::session::ContentBlock::Text{ value, .. } = block {
+                        character_count += value.chars().count();
+                    }
+                }
             }
         }
     }
+    println!("{} {} {}", session_count, message_count, character_count);
 
     Ok(())
 }
