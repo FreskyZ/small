@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
+import yaml from 'yaml';
 
 // source#1 was assigned to huan initial test data, but huan yaml schema really change many times so this batch is meaningless
 // source#2, huan prototype, taiga test data, collect from raw chat completion streaming data, 1 session
@@ -838,10 +839,438 @@ async function source4() {
         sessionIndex += 1;
     }
 }
-// source4();
+// await source4();
 
-// source#5, deepseek chat app data migration, from formal export function, 543 sessions
-function source5() {
-
+// you need a name to differ from other types, so use True for true source
+type TrueContentBlock =
+    // active flag is not related to this script
+    | { kind: 'text', value: string, name?: string }
+    | { kind: 'think', value: string, signature: string }
+    // tool use is not related to this script, just declare a kind
+    | { kind: 'tool-use' }
+    | { kind: 'tool-result' }
+interface TrueMessage {
+    role: 'system' | 'user' | 'assistant',
+    id: number,
+    parentId: number, // 0 for no parent id
+    content: TrueContentBlock[],
+    metadata?: Record<string, any>,
+    response?: Record<string, any>,
+    // request config is not related to this script
 }
-source5();
+interface TrueSession {
+    filename: string, // manually include a filename for easy id and navigation
+    name: string,
+    messages: TrueMessage[],
+    metadata: Record<string, any>,
+}
+
+const truesessions: TrueSession[] = await Promise.all((await fs.readdir('/workspaces/huan-data')).map(async filename => {
+    const session = yaml.parse(await fs.readFile(`/workspaces/huan-data/${filename}`, 'utf-8'));
+    const messages: TrueMessage[] = [];
+    for (const key of Object.keys(session)) {
+        if (key.startsWith('user ')) {
+            messages.push({
+                role: 'user',
+                id: +key.substring(5).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(5).split('>')[1] : 0,
+                ...session[key],
+            });
+        } else if (key.startsWith('assistant ')) {
+            messages.push({
+                role: 'assistant',
+                id: +key.substring(10).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(10).split('>')[1] : 0,
+                ...session[key],
+            });
+        } else if (key.startsWith('system ')) {
+            messages.push({
+                role: 'system',
+                id: +key.substring(7).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(7).split('>')[1] : 0,
+                ...session[key],
+            });
+        }
+    }
+    return { filename: filename.split('.')[0], name: session.name, messages, metadata: session.metadata };
+}));
+// for (const session of truesessions) {
+//     console.log(session.filename, session.name, session.messages.length, JSON.stringify(session.metadata));
+// }
+
+interface S5Session {
+    id: string,
+    title: string,
+    inserted_at: string, // this use iso8601
+    updated_at: string, // this use iso8601
+    mapping: Record<string, S5MessageAndId>,
+}
+interface S5MessageAndId {
+    id: string,
+    parent: string,
+    children: string[],
+    message: S5Message,
+}
+interface S5Message {
+    model: string,
+    inserted_at: string,
+    fragments: S5Fragment[],
+}
+type S5Fragment =
+    | { type: 'REQUEST', content: string }
+    | { type: 'RESPONSE', content: string }
+    | { type: 'THINK', content: string }
+    | { type: 'FILE', files: { file_id: string, file_name: string, file_size: string }[] }
+    | { type: 'SEARCH', results: { url: string, title: string }[] }
+
+// source#5, deepseek chat app data migration, from formal export function, 1990 sessions (include 543 existing sessions)
+async function source5() {
+    const sessions = JSON.parse(await fs.readFile('/workspaces/huan-data-stage/deepseek-export-20261105.json', 'utf-8')) as S5Session[];
+
+    let sessionCount = 0;
+    let existingSessionCount = 0;
+    let messageCount = 0;
+    let blockCount = 0;
+    for (const [session, sessionIndex] of sessions.map((s, i) => [s, i] as const)) {
+        if (typeof session.id != 'string') {
+            console.log(`session ${session.id}: but id is not string?`);
+        }
+        if (sessions.filter(s => s.id == session.id).length > 1) {
+            console.log(`session ${session.id}: duplicate id`);
+        }
+        sessionCount += 1;
+        const truesession = truesessions.find(s => s.metadata?.source == 'deepseek-extract-2025' && s.metadata['source-id'] == session.id);
+        if (truesession) {
+            existingSessionCount += 1;
+        }
+
+        if (typeof session.title != 'string') {
+            console.log(`session ${session.id}: title is not string`);
+        }
+        if (!session.title.length) {
+            // RESULT: the same session that is content filtered
+            console.log(`session ${session.id}: title is empty`);
+        } else if (truesession && session.title.trim() != truesession.name.trim()) {
+            console.log(`session ${truesession.filename}: name not same, ${session.title}, ${truesession.name}`);
+        }
+        
+        if (!session.inserted_at) {
+            console.log(`session ${session.id}: create time is empty`);
+        }
+        const createTime = dayjs(session.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+        if (truesession && truesession.metadata['source-create-time'] != createTime) {
+            console.log(`session ${truesession.filename}: create time not same, ${createTime}, ${truesession.metadata['source-create-time']}`);
+        }
+
+        if (!session.updated_at) {
+            console.log(`session ${session.id}: update time is empty`);
+        }
+        const updateTime = dayjs(session.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+        // ATTENTION one mismatch at 20250708 which is exactly
+        // 1. chatapp2025 starts developing, 2. deepseek webapp data is extracted, 3. new message append to this session exactly talking about developing of chatapp2025
+        if (truesession && (truesession.metadata['source-update-time'] || truesession.metadata['source-create-time']) != updateTime) {
+            console.log(`session ${truesession.filename}: update time not same, ${updateTime}, ${truesession.metadata['source-update-time'] || truesession.metadata['source-create-time']}`);
+        }
+
+        const actualPropertyNames = Object.keys(session).sort((a, b) => a.localeCompare(b));
+        const expectedPropertyNames = ['id', 'title', 'inserted_at', 'updated_at', 'mapping'].sort((a, b) => a.localeCompare(b));
+        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+            console.log(`session ${session.id} property name mismatch ${actualPropertyNames}`);
+        }
+
+        if (!session.mapping) {
+            console.log(`session ${session.id}: missing mapping`);
+        }
+        let hasRoot = false;
+        for (const [messageId, messageAndId] of Object.entries(session.mapping)) {
+            if (typeof messageId != 'string') {
+                console.log(`session ${session.id} message ${messageId}: but message id is not string?`);
+            }
+            if (messageAndId.id != messageId) {
+                console.log(`session ${session.id} message ${messageId}: key and body id not same?`);
+            }
+            if (!Array.isArray(messageAndId.children)) {
+                console.log(`session ${session.id} message ${messageId}: children not array`);
+            }
+            if (messageAndId.parent && !Object.keys(session.mapping).includes(messageAndId.parent)) {
+                console.log(`session ${session.id} message ${messageId}: parent id not found`);
+            }
+            const expectChildren = Object.entries(session.mapping).filter(m => m[1].parent == messageId).map(m => m[0]).sort((a, b) => a.localeCompare(b));
+            const actualChildren = [...messageAndId.children].sort((a, b) => a.localeCompare(b));
+            if (expectChildren.length != actualChildren.length || actualChildren.some((n, i) => expectChildren[i] != n)) {
+                console.log(`session ${session.id} message ${messageId} children mismatch ${expectChildren}`);
+            }
+
+            const actualPropertyNames = Object.keys(messageAndId).sort((a, b) => a.localeCompare(b));
+            const expectedPropertyNames = ['id', 'parent', 'children', 'message'].sort((a, b) => a.localeCompare(b));
+            if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                console.log(`session ${session.id} message ${messageId} property name mismatch ${actualPropertyNames}`);
+            }
+
+            if (messageId == 'root') {
+                hasRoot = true;
+                if (messageAndId.message) {
+                    console.log(`session ${session.id} root has message body`);
+                }
+                continue;
+            }
+            messageCount += 1;
+            const message = messageAndId.message;
+            if (!message) {
+                console.log(`session ${session.id} message ${messageId} no body`);
+            }
+            // this is still using -chat and -reasoner? but not -flash and -pro?
+            if (!['deepseek-chat', 'deepseek-reasoner'].includes(message.model)) {
+                console.log(`session ${session.id} message ${messageId} model ${message.model}`);
+            }
+            const createTime = dayjs(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+            // console.log(`session ${session.id} message ${messageId} create time ${createTime}`);
+            if (!Array.isArray(message.fragments)) {
+                console.log(`session ${session.id} message ${messageId} fragments is not array`);
+            }
+            for (const [fragment, fragmentIndex] of message.fragments.map((f, i) => [f, i] as const)) {
+                blockCount += 1;
+                if (!['REQUEST', 'RESPONSE', 'THINK', 'SEARCH', 'FILE'].includes(fragment.type)) {
+                    console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} unknown type ${fragment.type}`);
+                }
+
+                const actualPropertyNames = Object.keys(fragment).filter(p => p != 'type').sort((a, b) => a.localeCompare(b));
+                if (fragment.type == 'REQUEST' || fragment.type == 'RESPONSE' || fragment.type == 'THINK') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'content') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (typeof fragment.content != 'string') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} content not string`);
+                    }
+                } else if (fragment.type == 'FILE') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'files') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (!Array.isArray(fragment.files)) {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} files not array`);
+                    }
+                    for (const [file, fileIndex] of fragment.files.map((f, i) => [f, i] as const)) {
+                        // console.log(file);
+                        const actualPropertyNames = Object.keys(file).sort((a, b) => a.localeCompare(b));
+                        const expectedPropertyNames = ['file_id', 'file_name', 'file_size'].sort((a, b) => a.localeCompare(b));
+                        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} property name mismatch ${actualPropertyNames}`);
+                        }
+                        if (typeof file.file_id != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_id not string`);
+                        }
+                        if (typeof file.file_name != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_name not string`);
+                        }
+                        if (typeof file.file_size != 'number') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_size not number`);
+                        }
+                    }
+                } else if (fragment.type == 'SEARCH') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'results') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (!Array.isArray(fragment.results)) {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} results not array`);
+                    }
+                    for (const [result, resultIndex] of fragment.results.map((r, i) => [r, i] as const)) {
+                        // console.log(result);
+                        // snippet, site name, site icon etc. is not in export data while available in web app
+                        // it's not very not ok because I only record these for fun
+                        const actualPropertyNames = Object.keys(result).sort((a, b) => a.localeCompare(b));
+                        const expectedPropertyNames = ['url', 'title'].sort((a, b) => a.localeCompare(b));
+                        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} property name mismatch ${actualPropertyNames}`);
+                        }
+                        if (typeof result.url != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} url not string`);
+                        }
+                        if (typeof result.title != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} title not string`);
+                        }
+                    }
+                }
+            }
+        }
+        if (!hasRoot) {
+            console.log(`session ${session.id} no root`);
+        }
+
+        // TODO compare all details with existing data
+
+        // then build new data
+        const filename = dayjs(session.inserted_at).format('YYYYMMDD-HHmmss');
+        let b = '';
+        // oh, title can have colon
+        if (!session.title) {
+            b += `name: (no title)\n`;
+        } else {
+            b += `name: ${info.title.includes(': ') ? "'" : ''}${info.title.trim()}${info.title.includes(': ') ? "'" : ''}\n`;
+        }
+        b += `metadata:\n`;
+        b += `  source: deepseek-extract-2025\n`;
+        b += `  source-id: ${info.id}\n`;
+        b += `  source-seq-id: ${info.seq_id}\n`;
+        b += `  source-title-type: ${info.title_type}\n`;
+        b += `  source-version: ${info.version}\n`;
+        b += `  source-current-message-id: ${info.current_message_id}\n`;
+        b += `  source-create-time: ${dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        if (info.inserted_at != info.updated_at) {
+            b += `  source-update-time: ${dayjs.unix(info.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        }
+        for (const message of session.chat_messages) {
+            b += '\n';
+            b += `${message.role.toLowerCase()} ${message.message_id}${message.parent_id ? `>${message.parent_id}` : ''}:\n`;
+            if (message.role == 'ASSISTANT') {
+                b += `  content:\n`;
+                if (message.thinking_content) {
+                    b += `  - kind: think\n`;
+                    b += `    value: |-\n`;
+                    for (const line of message.thinking_content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `      ${line.trimEnd()}\n`;
+                        }
+                    }
+                    // this is required
+                    b += `    signature: ''\n`;
+                }
+                b += `  - kind: text\n`;
+                b += `    value: |-\n`;
+                for (const line of message.content.trim().split('\n')) {
+                    if (line.trim().length == 0) {
+                        b += '\n'
+                    } else {
+                        b += `      ${line.trimEnd()}\n`;
+                    }
+                }
+                b += '  response:\n';
+            } else {
+                if (message.content.trim().includes('\n')
+                    || message.content.trim().includes(': ')
+                    || message.content.trim().startsWith('"')
+                ) {
+                    b += `  content: |-\n`;
+                    for (const line of message.content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `    ${line.trimEnd()}\n`;
+                        }
+                    }
+                // } else if (message.content.trim().startsWith('"')
+                //     || message.content.trim().startsWith('[')
+                //     || /^\d+(\.\d+)?$/.test(message.content.trim()))
+                // {
+                //     b += `  content: '${message.content.trim()}'\n`;
+                // } else if (message.content.trim().length == 0) {
+                //     b += `  content: ''\n`;
+                } else {
+                    b += `  content: ${message.content.trim()}\n`;
+                }
+                b += '  metadata:\n';
+            }
+            b += `    status: ${message.status}\n`;
+            b += `    create-time: ${dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+            if (message.thinking_enabled) {
+                b += `    thinking-enabled: true\n`;
+            }
+            if (message.thinking_elapsed_secs) {
+                b += `    thinking-elapsed-seconds: ${message.thinking_elapsed_secs}\n`;
+            }
+            if (!message.thinking_content && (message.ban_edit && message.ban_regenerate)) {
+                b += `    ban-edit-regenerate: [${message.ban_edit}, ${message.ban_regenerate}]\n`;
+            }
+            if (message.accumulated_token_usage) {
+                b += `    accumulated-token-usage: ${message.accumulated_token_usage}\n`;
+            }
+            if (message.tip_content_risk) {
+                b += `    tip-content-risk-category: ${message.tip_content_risk.tip_params.category}\n`;
+            }
+            if (message.files.length) {
+                b += `    files:\n`;
+            }
+            for (const file of message.files) {
+                // console.log(file);
+                b += `    - id: ${file.id}\n`;
+                b += `      status: ${file.status}\n`;
+                b += `      file-name: ${file.file_name}\n`;
+                b += `      file-size: ${file.file_size}\n`;
+                b += `      token-usage: ${file.token_usage}\n`;
+                b += `      create-time: ${dayjs.unix(file.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                if (file.inserted_at != file.updated_at) {
+                    b += `      update-time: ${dayjs.unix(file.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                }
+            }
+            if (message.search_enabled) {
+                b += `    search-enabled: true\n`;
+            }
+            if (message.search_status) {
+                b += `    search-status: ${message.search_status}\n`;
+            }
+            if (message.search_results) {
+                b += `    search-results:\n`;
+                for (const search_result of message.search_results) {
+                    // console.log(search_result);
+                    b += `    - url: ${search_result.url}\n`;
+                    if (search_result.title.trim().startsWith('[')
+                        || search_result.title.trim().includes(': ')
+                        || search_result.title.trim().startsWith('"')
+                    ) {
+                        if (search_result.title.trim().includes("'")) {
+                            b += `      title: "${search_result.title.trim()}"\n`;
+                        } else {
+                            b += `      title: '${search_result.title.trim()}'\n`;
+                        }
+                    } else {
+                        b += `      title: ${search_result.title.trim()}\n`;
+                    }              
+                    if (search_result.snippet.trim().includes('\n')
+                        || search_result.snippet.trim().startsWith('#')
+                        || search_result.snippet.trim().startsWith('@')
+                        || search_result.snippet.trim().startsWith('[')
+                        || search_result.snippet.trim().startsWith('|')
+                        || search_result.snippet.trim().startsWith('- ')
+                        || search_result.snippet.trim().includes(': ')
+                        || search_result.snippet.trim().endsWith(':')
+                    ) {
+                        if (search_result.snippet.includes('"') && search_result.snippet.includes("'")) {
+                            b += `      snippet: |-\n`;
+                            for (const line of search_result.snippet.trim().split('\n')) {
+                                if (line.trim().length == 0) {
+                                    b += '\n'
+                                } else {
+                                    b += `        ${line.trimEnd()}\n`;
+                                }
+                            }
+                        } else if (search_result.snippet.includes("'")) {
+                            b += `      snippet: "${search_result.snippet.trim()}"\n`;
+                        } else {
+                            b += `      snippet: '${search_result.snippet.trim()}'\n`;
+                        }
+                    } else {
+                        b += `      snippet: ${search_result.snippet.trim()}\n`;
+                    }
+
+                    if (search_result.cite_index) {
+                        b += `      cite-index: ${search_result.cite_index}\n`;
+                    }
+                    if (search_result.published_at) {
+                        b += `      publish-time: ${dayjs.unix(search_result.published_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                    }
+                    // site_name ?? '(empty)' and site_name || '(empty)' differs for empty string
+                    b += `      site-name: ${search_result.site_name || '(empty)'}\n`;
+                    b += `      site-icon: ${search_result.site_icon}\n`;
+                }
+            }
+        }
+
+        // if (sessionIndex <= 600 && sessionIndex > 400) {
+            await fs.writeFile(`${filename}.yml`, b);
+        // }
+        // if (sessionIndex > 10) { break; }
+    }
+    console.log(sessionCount, existingSessionCount, messageCount, blockCount);
+}
+await source5();
