@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import dayjs from 'dayjs';
 
 // source#1 was assigned to huan initial test data, but huan yaml schema really change many times so this batch is meaningless
 // source#2, huan prototype, taiga test data, collect from raw chat completion streaming data, 1 session
@@ -103,7 +104,7 @@ function readCSV1<T>(raw: string, map: (fields: string[]) => T): T[] {
     return records;
 }
 
-function source3() {
+async function source3() {
     const sessions = readCSV1(await fs.readFile('session.csv', 'utf8'), fields => ({
         id: +fields[0],
         userId: +fields[1],
@@ -279,7 +280,7 @@ function source3() {
             + session.createTime.substring(14, 16) + session.createTime.substring(17);
         let b = `name: ${session.name}\n`;
         b += 'metadata:\n';
-        b += '  source: my chat app 2025/theai/yala\n';
+        b += '  source: chatapp2025/theai/yala\n';
         b += `  source-id: ${session.id}\n`;
         b += `  source-create-time: ${session.createTime}\n`;
         if (session.updateTime != session.createTime) {
@@ -303,7 +304,7 @@ function source3() {
         }
         // console.log(`${filename}\n${b}`);
         for (const message of messages.filter(m => m.sessionId == session.id).sort((m1, m2) => m1.messageId - m2.messageId)) {
-            b += '\n'
+            b += '\n';
             b += `${message.role} ${message.messageId}${message.parentMessageId ? `>${message.parentMessageId}` : ''}:\n`;
             // console.log(`${filename} ${message.role} ${message.messageId}${message.parentMessageId ? `>${message.parentMessageId}` : ''}:`);
             if (message.role == 'assistant') {
@@ -362,5 +363,485 @@ function source3() {
     // acceptance check:
     console.log(sessions.length, messages.length, messages.reduce((acc, m) => acc + m.content.trim().length, 0));
 }
+// TODO validate source3 against oldchatapp-backup-*.sql files
 
-// source#4, old deepseek chat app data migration, it is migrated from f12 api not nowadays formal export function
+// source#4, deepseek chat app old data migration, it is collected from f12 api not nowadays formal export function, 543 sessions
+// reference archive/theai/shapes.xml, theai/migrate.ts
+
+interface ChatMessageFile {
+    id: string, // `file-${GUID}`
+    status: 'SUCCESS', // according to current few records, only this
+    file_name: string,
+    file_size: number,
+    token_usage: number,
+    error_code: null,
+    inserted_at: number,
+    updated_at: number,
+}
+interface ChatMessageSearchResult {
+    url: string,
+    title: string,
+    snippet: string,
+    cite_index: number | null, // this is simply local cite index, use like [citation:8]
+    published_at: number | null,
+    site_name: string,
+    site_icon: string, // url
+}
+
+// confirmed by current records that all property available in all objects
+interface ChatSessionInfo {
+    id: string, // guid string
+    seq_id: number,
+    agent: 'chat', // type confirmed by current records
+    character: null, // type confirmed by current records
+    title: string | null, // note deepseek website don't forbid you from make title empty, this result in title: null
+    title_type: 'SYSTEM' | 'USER', // type confirmed by current records
+    // this looks like current_message_id or current_message_id+1, but there are still exceptions, so unkown
+    version: number,
+    current_message_id: number, // this is same as max message id
+    inserted_at: number, // timestamp number
+    updated_at: number, // timestamp number
+}
+interface ChatMessage {
+    // according to inspection, despite this id is inside session,
+    // the message_id-parent_id tree structure is same as my design
+    message_id: number,
+    parent_id: number,
+    model: '', // type confirmed by current records
+    role: 'USER' | 'ASSISTANT',
+    content: string,
+    // if thinking_enabled is true
+    //    if role is USER, thinking_content and thinking_elapsed_secs is null
+    //    if role is ASSISTANT, thinking_content and thinking_elapsed_secs maybe empty string or null
+    thinking_enabled: boolean,
+    thinking_content: string | null,
+    thinking_elapsed_secs: number | null,
+    // according to current records,
+    // !ban_edit && ban_regenerate is content is harmonized
+    // ban_edit && ban_regenerate is same as thinking_enabled, include role=USER and role=ASSISTANT
+    ban_edit: boolean,
+    ban_regenerate: boolean,
+    // incomplete seems like user stop
+    // content filter is harmonize
+    status: 'FINISHED' | 'INCOMPLETE' | 'CONTENT_FILTER', // type confirmed by current records
+    // this is available on both user and assistant message,
+    // with loss on prompt+completion information, but with gain on user/assistant difference
+    // according to current records, this is always available (not null)
+    accumulated_token_usage: number,
+    // according to current records, will not be null
+    // https://chat.deepseek.com/api/v0/file/preview?file_id=${id}
+    // get a responseData.data.biz_data.url to download file, this result url has access key and should be short lived
+    files: ChatMessageFile[],
+    // according to current records, will not be null
+    // no record in current records, type still unknown
+    // but you can see tips on website and website http request have tips in response, which have this type
+    // but this is not important so ok
+    tips: { content: string, position: string, type: string }[],
+    // type confirmed by current records
+    tip_content_risk?: { tip_type: 'CONTENT_RISK', tip_params: { category: 'general' | 'legal' } },
+    inserted_at: number, // timestamp number
+    search_enabled: boolean,
+    // type confirmed by current records
+    // can still be null when saerch_enabled
+    search_status: 'FINISHED' | 'ANSWER' | 'INIT' | null,
+    search_results: ChatMessageSearchResult[] | null,
+}
+interface ChatSession {
+    chat_session: ChatSessionInfo,
+    chat_messages: ChatMessage[],
+    cache_valid: false, // type confirmed by current records
+    route_id: null, // type confirmed by current records
+}
+
+async function source4() {
+    const sessions = JSON.parse(await fs.readFile('deepseek-extract-20250709.json', 'utf-8')) as ChatSession[];
+
+    console.log(sessions.length,
+        sessions.reduce((acc, s) => acc + s.chat_messages.length, 0),
+        sessions.reduce((acc, s) => acc + s.chat_messages.reduce((acc, m) => acc
+            + Buffer.from(m.content).length + (m.thinking_content ? Buffer.from(m.thinking_content).length : 0), 0), 0));
+
+    // validate
+    const validateResult: string[] = [];
+    if (new Set(sessions.map(s => s.chat_session.id)).size != sessions.length) {
+        validateResult.push(`duplicate session id`);
+    }
+    if (new Set(sessions.map(s => s.chat_session.seq_id)).size != sessions.length) {
+        validateResult.push(`duplicate session seq_id`);
+    }
+    for (const session of sessions) {
+        if (!session.chat_session || typeof session.chat_session != 'object') {
+            validateResult.push('session missing chat_session?'); continue;
+        }
+        const info = session.chat_session;
+
+        const infoPropertyNames = Object.keys(info).sort((a, b) => a.localeCompare(b));
+        const expectedPropertyNames = ['id', 'seq_id', 'agent', 'character',
+            'title', 'title_type', 'version', 'current_message_id', 'inserted_at', 'updated_at'].sort((a, b) => a.localeCompare(b));
+        if (infoPropertyNames.length != expectedPropertyNames.length || infoPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+            validateResult.push(`session ${info.seq_id} property name mismatch ${infoPropertyNames}`);
+        }
+
+        if (typeof info.id != 'string') {
+            validateResult.push(`session ${info.seq_id} id is not string`);
+        }
+        if (!/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(info.id)) {
+            validateResult.push(`session ${info.seq_id} id not in guid format`);
+        }
+        if (typeof info.seq_id != 'number') {
+            validateResult.push(`session ${info.seq_id} seq_id is not number`);
+        }
+        if (typeof info.title != 'string') {
+            validateResult.push(`session ${info.seq_id} missing title, you'd better add one on the website`);
+        }
+        if (typeof info.inserted_at != 'number' || typeof info.updated_at != 'number') {
+            validateResult.push(`session ${info.seq_id} inserted_at or updated_at is not number`);
+        }
+        // // this take very long time, nearly 1 second for 500x500 times of dayjs.unix invocation, comment after validation completed
+        // const duplicateTimes = sessions.filter(s => s.chat_session.id != info.id
+        //     && dayjs.unix(s.chat_session.inserted_at).format('YYYYMMDD-HHmmss') == dayjs.unix(info.inserted_at).format('YYYYMMDD-HHmmss'));
+        // if (duplicateTimes.length) {
+        //     validateResult.push(`session ${info.seq_id} time duplicate at second level`);
+        // }
+
+        if (session.chat_messages.length && !session.chat_messages.some(m => info.current_message_id == m.message_id)) {
+            validateResult.push(`session ${info.seq_id} current_message_id not found`);
+        }
+        if (info.agent != 'chat') {
+            validateResult.push(`session ${info.seq_id} agent not chat`);
+        }
+        if (info.character) {
+            validateResult.push(`session ${info.seq_id} character not null`);
+        }
+        if (info.title_type != 'USER' && info.title_type != 'SYSTEM') {
+            validateResult.push(`session ${info.seq_id} title_type not user or system`);
+        }
+
+        if (!Array.isArray(session.chat_messages)) {
+            validateResult.push(`session ${info.seq_id} chat_messages is not array`);
+        } else {
+            for (const message of session.chat_messages) {
+                if (!message.message_id || typeof message.message_id != 'number') {
+                    validateResult.push(`session ${info.seq_id} message missing message_id`);
+                    // but continue to following validations
+                }
+                // tip_content_risk is optional and not important, so directly exclude here
+                const messagePropertyNames = Object.keys(message).filter(p => p != 'tip_content_risk').sort((a, b) => a.localeCompare(b));
+                const expectedPropertyNames = [
+                    'message_id', 'parent_id', 'model', 'role', 'content', 'thinking_enabled', 'thinking_content', 'thinking_elapsed_secs',
+                    'ban_edit', 'ban_regenerate', 'status', 'accumulated_token_usage', 'files', 'tips', 'inserted_at', 'search_enabled', 'search_status', 'search_results',
+                ].sort((a, b) => a.localeCompare(b));
+                if (messagePropertyNames.length != expectedPropertyNames.length || messagePropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} property name mismatch`);
+                }
+
+                if (message.model.length != 0) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} model is not empty string`);
+                }
+                if (message.parent_id && typeof message.parent_id != 'number') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} invalid parent_id`);
+                }
+                if (message.parent_id && !session.chat_messages.some(m => m.message_id == message.parent_id)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} parent_id not found`);
+                } else if (message.parent_id) {
+                    const parentMessage = session.chat_messages.find(m => m.message_id == message.parent_id);
+                    // no system message in these data
+                    if (!['USER-ASSISTANT', 'ASSISTANT-USER'].includes(`${message.role}-${parentMessage!.role}`)) {
+                        validateResult.push(`session ${info.seq_id} message ${message.message_id} unexpected role relationship`);
+                    }
+                }
+                if (message.role != 'USER' && message.role != 'ASSISTANT') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} invalid role`);
+                }
+                // RESULT: very many
+                if (message.content.includes(' \n')) {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} contains trailing whitespaces by the way`);
+                }
+                if (message.role == 'USER' && message.thinking_content) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} user should not have thinking_content`);
+                }
+                // RESULT: a few, regard them as not thinking
+                if (message.role == 'ASSISTANT' && message.thinking_enabled && typeof message.thinking_content != 'string') {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} thinking_content is not string`);
+                }
+                if (message.role == 'ASSISTANT' && message.thinking_content && !message.thinking_enabled) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} thinking switch mismatch`);
+                }
+                // RESULT: some, more than thinking_enabled and thinking_content mismatch, it's ok because this is only additional information
+                if (message.role == 'ASSISTANT' && message.thinking_enabled && typeof message.thinking_elapsed_secs != 'number') {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} thinking_elapsed_secs is not number`);
+                }
+            
+                // RESULT: many
+                if (message.ban_edit || message.ban_regenerate) {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} ban_edit or ban_regenerate`);
+                }
+                if ((message.ban_edit && message.ban_regenerate) != message.thinking_enabled) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} what's this relationship?`);
+                }
+                // RESULT: 1 message, same as missing title, also this message session id is not in later sql backup data
+                //         so the answer is this session is banned at first message and discarded and not collected into my database
+                if (!message.thinking_enabled && (message.ban_edit || message.ban_regenerate)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} ban_edit or ban_regenerate, ${message.ban_edit}, ${message.ban_regenerate}`);
+                }
+            
+                if (message.status != 'FINISHED' && message.status != 'INCOMPLETE' && message.status != 'CONTENT_FILTER') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} invalid status`);
+                }
+                if (typeof message.accumulated_token_usage != 'number') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} accumulated_token_usage is not number`);
+                }
+                if (typeof message.inserted_at != 'number') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} inserted_at is not number`);
+                }
+
+                if (!Array.isArray(message.tips)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} tips is not array`);
+                }
+                if (message.tips.length) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} tips not empty`);
+                }
+                if (message.tip_content_risk && typeof message.tip_content_risk != 'object') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} tip_content_risk is not object`);
+                }
+                if (message.tip_content_risk && message.tip_content_risk.tip_type != 'CONTENT_RISK') {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} tip_content_risk.tip_type is not CONTENT_RISK`);
+                }
+                if (message.tip_content_risk && (message.tip_content_risk.tip_params.category != 'general' && message.tip_content_risk.tip_params.category != 'legal')) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} tip_content_risk.tip_params.category is not general or legal`);
+                }
+
+                if (!Array.isArray(message.files)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} files is not array`);
+                }
+                // total 3 files, nowadays deepseek have official file api, I'm afraid this old file record is not available
+                // const response = await fetch(`https://chat.deepseek.com/api/v0/file/preview?file_id=file-*`, {
+                //     headers: { 'authorization': '*' },
+                // });
+                // const data = await response.json();
+                // console.log(data);
+                // UPDATE yes file not found
+                // if (message.files.length) { console.log(info.id, message.files); }
+                // also, can open these sessions in current web app, as currently web app disables file upload, these files cannot be downloaded
+                // but all of these files are not important, so will not try to access them, but record for fun
+
+                // RESULT: very many mismatch, no relationship between enabled and data
+                // 3 messages
+                if (!message.search_enabled && message.search_status) {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch, ${message.search_enabled}, ${message.search_status}`);
+                }
+                // 2 messages
+                if (!message.search_enabled && message.search_results) {
+                    // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (2), ${message.search_enabled}, ${JSON.stringify(message.search_results).substring(0, 100)}`);
+                }
+                if (message.search_enabled) {
+                    // very many
+                    if (!message.search_status) {
+                        // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (3), ${message.search_enabled}, ${message.search_status}`);
+                    }
+                    // very many
+                    if (!Array.isArray(message.search_results)) {
+                        // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (4), ${message.search_enabled}, ${JSON.stringify(message.search_results).substring(0, 100)}`);
+                    }
+                }
+                
+                if (message.search_status && !['FINISHED', 'ANSWER', 'INIT'].includes(message.search_status)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} unknown search status`);
+                }
+                if (message.search_results && !Array.isArray(message.search_results)) {
+                    validateResult.push(`session ${info.seq_id} message ${message.message_id} search results is not array`);
+                }
+                if (message.search_results) {
+                    for (const search_result of message.search_results) {
+                        // the struct is similar to nowadays deepseek formal web search api result
+                        // console.log(JSON.stringify(search_result));
+                    }
+                }
+            }
+        }
+    }
+    validateResult.forEach(v => console.log(v));
+
+    let sessionIndex = 0;
+    for (const session of sessions) {
+        const info = session.chat_session;
+        const filename = dayjs.unix(info.inserted_at).format('YYYYMMDD-HHmmss');
+        let b = '';
+        // oh, title can have colon
+        if (!info.title) {
+            b += `name: (no title)\n`;
+        } else {
+            b += `name: ${info.title.includes(': ') ? "'" : ''}${info.title.trim()}${info.title.includes(': ') ? "'" : ''}\n`;
+        }
+        b += `metadata:\n`;
+        b += `  source: deepseek-extract-2025\n`;
+        b += `  source-id: ${info.id}\n`;
+        b += `  source-seq-id: ${info.seq_id}\n`;
+        b += `  source-title-type: ${info.title_type}\n`;
+        b += `  source-version: ${info.version}\n`;
+        b += `  source-current-message-id: ${info.current_message_id}\n`;
+        b += `  source-create-time: ${dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        if (info.inserted_at != info.updated_at) {
+            b += `  source-update-time: ${dayjs.unix(info.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        }
+        for (const message of session.chat_messages) {
+            b += '\n';
+            b += `${message.role.toLowerCase()} ${message.message_id}${message.parent_id ? `>${message.parent_id}` : ''}:\n`;
+            if (message.role == 'ASSISTANT') {
+                b += `  content:\n`;
+                if (message.thinking_content) {
+                    b += `  - kind: think\n`;
+                    b += `    value: |-\n`;
+                    for (const line of message.thinking_content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `      ${line.trimEnd()}\n`;
+                        }
+                    }
+                    // this is required
+                    b += `    signature: ''\n`;
+                }
+                b += `  - kind: text\n`;
+                b += `    value: |-\n`;
+                for (const line of message.content.trim().split('\n')) {
+                    if (line.trim().length == 0) {
+                        b += '\n'
+                    } else {
+                        b += `      ${line.trimEnd()}\n`;
+                    }
+                }
+                b += '  response:\n';
+            } else {
+                if (message.content.trim().includes('\n')
+                    || message.content.trim().includes(': ')
+                    || message.content.trim().startsWith('"')
+                ) {
+                    b += `  content: |-\n`;
+                    for (const line of message.content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `    ${line.trimEnd()}\n`;
+                        }
+                    }
+                // } else if (message.content.trim().startsWith('"')
+                //     || message.content.trim().startsWith('[')
+                //     || /^\d+(\.\d+)?$/.test(message.content.trim()))
+                // {
+                //     b += `  content: '${message.content.trim()}'\n`;
+                // } else if (message.content.trim().length == 0) {
+                //     b += `  content: ''\n`;
+                } else {
+                    b += `  content: ${message.content.trim()}\n`;
+                }
+                b += '  metadata:\n';
+            }
+            b += `    status: ${message.status}\n`;
+            b += `    create-time: ${dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+            if (message.thinking_enabled) {
+                b += `    thinking-enabled: true\n`;
+            }
+            if (message.thinking_elapsed_secs) {
+                b += `    thinking-elapsed-seconds: ${message.thinking_elapsed_secs}\n`;
+            }
+            if (!message.thinking_content && (message.ban_edit && message.ban_regenerate)) {
+                b += `    ban-edit-regenerate: [${message.ban_edit}, ${message.ban_regenerate}]\n`;
+            }
+            if (message.accumulated_token_usage) {
+                b += `    accumulated-token-usage: ${message.accumulated_token_usage}\n`;
+            }
+            if (message.tip_content_risk) {
+                b += `    tip-content-risk-category: ${message.tip_content_risk.tip_params.category}\n`;
+            }
+            if (message.files.length) {
+                b += `    files:\n`;
+            }
+            for (const file of message.files) {
+                // console.log(file);
+                b += `    - id: ${file.id}\n`;
+                b += `      status: ${file.status}\n`;
+                b += `      file-name: ${file.file_name}\n`;
+                b += `      file-size: ${file.file_size}\n`;
+                b += `      token-usage: ${file.token_usage}\n`;
+                b += `      create-time: ${dayjs.unix(file.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                if (file.inserted_at != file.updated_at) {
+                    b += `      update-time: ${dayjs.unix(file.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                }
+            }
+            if (message.search_enabled) {
+                b += `    search-enabled: true\n`;
+            }
+            if (message.search_status) {
+                b += `    search-status: ${message.search_status}\n`;
+            }
+            if (message.search_results) {
+                b += `    search-results:\n`;
+                for (const search_result of message.search_results) {
+                    // console.log(search_result);
+                    b += `    - url: ${search_result.url}\n`;
+                    if (search_result.title.trim().startsWith('[')
+                        || search_result.title.trim().includes(': ')
+                        || search_result.title.trim().startsWith('"')
+                    ) {
+                        if (search_result.title.trim().includes("'")) {
+                            b += `      title: "${search_result.title.trim()}"\n`;
+                        } else {
+                            b += `      title: '${search_result.title.trim()}'\n`;
+                        }
+                    } else {
+                        b += `      title: ${search_result.title.trim()}\n`;
+                    }              
+                    if (search_result.snippet.trim().includes('\n')
+                        || search_result.snippet.trim().startsWith('#')
+                        || search_result.snippet.trim().startsWith('@')
+                        || search_result.snippet.trim().startsWith('[')
+                        || search_result.snippet.trim().startsWith('|')
+                        || search_result.snippet.trim().startsWith('- ')
+                        || search_result.snippet.trim().includes(': ')
+                        || search_result.snippet.trim().endsWith(':')
+                    ) {
+                        if (search_result.snippet.includes('"') && search_result.snippet.includes("'")) {
+                            b += `      snippet: |-\n`;
+                            for (const line of search_result.snippet.trim().split('\n')) {
+                                if (line.trim().length == 0) {
+                                    b += '\n'
+                                } else {
+                                    b += `        ${line.trimEnd()}\n`;
+                                }
+                            }
+                        } else if (search_result.snippet.includes("'")) {
+                            b += `      snippet: "${search_result.snippet.trim()}"\n`;
+                        } else {
+                            b += `      snippet: '${search_result.snippet.trim()}'\n`;
+                        }
+                    } else {
+                        b += `      snippet: ${search_result.snippet.trim()}\n`;
+                    }
+
+                    if (search_result.cite_index) {
+                        b += `      cite-index: ${search_result.cite_index}\n`;
+                    }
+                    if (search_result.published_at) {
+                        b += `      publish-time: ${dayjs.unix(search_result.published_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+                    }
+                    // site_name ?? '(empty)' and site_name || '(empty)' differs for empty string
+                    b += `      site-name: ${search_result.site_name || '(empty)'}\n`;
+                    b += `      site-icon: ${search_result.site_icon}\n`;
+                }
+            }
+        }
+
+        // if (sessionIndex <= 600 && sessionIndex > 400) {
+            await fs.writeFile(`${filename}.yml`, b);
+        // }
+        sessionIndex += 1;
+    }
+}
+// source4();
+
+// source#5, deepseek chat app data migration, from formal export function, 543 sessions
+function source5() {
+
+}
+source5();

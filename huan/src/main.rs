@@ -83,7 +83,9 @@ fn migrate() -> Result<()> {
             for message in &session.messages {
                 for block in &message.content {
                     if let crate::session::ContentBlock::Text{ value, .. } = block {
-                        character_count += value.chars().count();
+                        character_count += value.len();
+                    } else if let crate::session::ContentBlock::Thinking{ value, .. } = block {
+                        character_count += value.len();
                     }
                 }
             }
