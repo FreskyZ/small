@@ -1,88 +1,79 @@
 import fs from 'node:fs/promises';
 import dayjs from 'dayjs';
+import yaml from 'yaml';
 
-// source#1 was assigned to huan initial test data, but huan yaml schema really change many times so this batch is meaningless
+// source#1 was assigned to huan initial test data, but the data schema really changes many times so this batch index is meaningless
 // source#2, huan prototype, taiga test data, collect from raw chat completion streaming data, 1 session
 
-// source#3, mysql-backup-20260319's my old chat app theai/yala, session.csv and message.csv, about 60 sessions
-// reference archive/theai/shapes.xml, src/database.sql, server/index.ts
-// session.csv:
-//   int id, user id (constant 1), name, comment, create time, tags, shared flag, share id, update time
-// message.csv:
-//   int message id, session id, role, content, create time, input token, output token, parent message id, update time, thinking content
-// does old chat app ever thinking? RESULT: no data in thinking column, but one session have manual thinking formating?
+function readMySQLCSV<T>(raw: string, map: (fields: string[]) => T): T[] {
+    function splitRecords(line: string): string[] {
+        const fields: string[] = [];
+        let current = '';
+        let inQuotes = false;
 
-function splitCSV1Line(line: string): string[] {
-    const fields: string[] = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-        const ch = line[i];
-        if (inQuotes) {
-            current += ch;
-            if (ch == '\\' && line[i + 1] == '"') {
-                current += line[i + 1];
-                i++;
-            } else if (ch == '"') {
-                inQuotes = false;
-            }
-        } else {
-            if (ch == '"') {
-                inQuotes = true;
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
                 current += ch;
-            } else if (ch == ',') {
-                fields.push(current);
-                current = '';
-            } else {
-                current += ch;
-            }
-        }
-    }
-    // don't forget last field
-    fields.push(current);
-    // if (line.startsWith('"36"')) {
-    //     console.log(line, fields);
-    // }
-    return fields;
-}
-
-// Convert a raw field ("..." or \N) to its string value, or null for NULL.
-function unescapeCSV1(raw: string): string | null {
-    if (raw == '\\N') {
-        return null;
-    } else if (raw.length >= 2 && raw[0] == '"' && raw[raw.length - 1] == '"') {
-        const inner = raw.slice(1, -1);
-        let out = '';
-        for (let i = 0; i < inner.length; i++) {
-            const ch = inner[i];
-            if (ch == '"' && inner[i + 1] == '"') {
-                out += '"';
-                i++;
-            } else if (ch === '\\' && i + 1 < inner.length) {
-                const next = inner[i + 1];
-                switch (next) {
-                    case 'n': out += '\n'; break;
-                    case 'r': out += '\r'; break;
-                    case 't': out += '\t'; break;
-                    case '0': out += '\0'; break;
-                    case '\\': out += '\\'; break;
-                    case '"': out += '"'; break;
-                    default: out += '\\' + next;
+                if (ch == '\\' && line[i + 1] == '"') {
+                    current += line[i + 1];
+                    i++;
+                } else if (ch == '"') {
+                    inQuotes = false;
                 }
-                i++;
             } else {
-                out += ch;
+                if (ch == '"') {
+                    inQuotes = true;
+                    current += ch;
+                } else if (ch == ',') {
+                    fields.push(current);
+                    current = '';
+                } else {
+                    current += ch;
+                }
             }
         }
-        return out;
-    } else {
-        console.log(`field not \\N and not wrapped in double quote? ${raw}`);
-        throw "unescape error";
+        // don't forget last field
+        fields.push(current);
+        // if (line.startsWith('"36"')) {
+        //     console.log(line, fields);
+        // }
+        return fields;
     }
-}
-
-function readCSV1<T>(raw: string, map: (fields: string[]) => T): T[] {
+    // Convert a raw field ("..." or \N) to its string value, or null for NULL.
+    function unescape(raw: string): string | null {
+        if (raw == '\\N') {
+            return null;
+        } else if (raw.length >= 2 && raw[0] == '"' && raw[raw.length - 1] == '"') {
+            const inner = raw.slice(1, -1);
+            let out = '';
+            for (let i = 0; i < inner.length; i++) {
+                const ch = inner[i];
+                if (ch == '"' && inner[i + 1] == '"') {
+                    out += '"';
+                    i++;
+                } else if (ch === '\\' && i + 1 < inner.length) {
+                    const next = inner[i + 1];
+                    switch (next) {
+                        case 'n': out += '\n'; break;
+                        case 'r': out += '\r'; break;
+                        case 't': out += '\t'; break;
+                        case '0': out += '\0'; break;
+                        case '\\': out += '\\'; break;
+                        case '"': out += '"'; break;
+                        default: out += '\\' + next;
+                    }
+                    i++;
+                } else {
+                    out += ch;
+                }
+            }
+            return out;
+        } else {
+            console.log(`field not \\N and not wrapped in double quote? ${raw}`);
+            throw "unescape error";
+        }
+    }
 
     let recordLine = '';
     const records: T[] = [];
@@ -97,15 +88,19 @@ function readCSV1<T>(raw: string, map: (fields: string[]) => T): T[] {
         // ignore empty line
         if (!recordLine) { continue; }
 
-        records.push(map(splitCSV1Line(recordLine).map(unescapeCSV1)));
+        records.push(map(splitRecords(recordLine).map(unescape)));
         recordLine = '';
     }
 
     return records;
 }
 
+// source#3, mysql-backup-202603 from chatapp2025/theai/yala, about 60 sessions
+// reference archive/theai/shapes.xml, src/database.sql, server/index.ts
+// does old chat app ever thinking? RESULT: no data in thinking column, but one session have manual thinking formating?
+
 async function source3() {
-    const sessions = readCSV1(await fs.readFile('session.csv', 'utf8'), fields => ({
+    const sessions = readMySQLCSV(await fs.readFile('/workspaces/mysql-backup-20260319-session.csv', 'utf8'), fields => ({
         id: +fields[0],
         userId: +fields[1],
         name: fields[2],
@@ -176,7 +171,7 @@ async function source3() {
         }
     }
 
-    const messages = readCSV1(await fs.readFile('message.csv', 'utf8'), fields => ({
+    const messages = readMySQLCSV(await fs.readFile('/workspaces/mysql-backup-20260319-message.csv', 'utf8'), fields => ({
         messageId: +fields[0],
         sessionId: +fields[1],
         role: fields[2],
@@ -358,12 +353,16 @@ async function source3() {
         // console.log(`write ${filename}.yml`);
         // await fs.writeFile(`${filename}.yml`, b);
         // if (session.id > 30) { break; }
+        
+        // read conversion result
     }
-
-    // acceptance check:
-    console.log(sessions.length, messages.length, messages.reduce((acc, m) => acc + m.content.trim().length, 0));
 }
-// TODO validate source3 against oldchatapp-backup-*.sql files
+await source3();
+
+// TODO validate source3 against chatapp2025-backup-*.sql files
+function altsource34() {{
+
+}}
 
 // source#4, deepseek chat app old data migration, it is collected from f12 api not nowadays formal export function, 543 sessions
 // reference archive/theai/shapes.xml, theai/migrate.ts
@@ -725,11 +724,14 @@ async function source4() {
                             b += `    ${line.trimEnd()}\n`;
                         }
                     }
-                // } else if (message.content.trim().startsWith('"')
-                //     || message.content.trim().startsWith('[')
-                //     || /^\d+(\.\d+)?$/.test(message.content.trim()))
-                // {
-                //     b += `  content: '${message.content.trim()}'\n`;
+                } else if (
+                    // UPDATE after committed: \s# is regarded as comment, need quote
+                    message.content.trim().includes(' #')
+                    // message.content.trim().startsWith('"')
+                    // || message.content.trim().startsWith('[')
+                    // || /^\d+(\.\d+)?$/.test(message.content.trim())
+                ) {
+                    b += `  content: '${message.content.trim()}'\n`;
                 // } else if (message.content.trim().length == 0) {
                 //     b += `  content: ''\n`;
                 } else {
@@ -834,14 +836,414 @@ async function source4() {
 
         // if (sessionIndex <= 600 && sessionIndex > 400) {
             await fs.writeFile(`${filename}.yml`, b);
+            // TODO read yaml file to validate
         // }
         sessionIndex += 1;
     }
 }
-// source4();
+// await source4();
 
-// source#5, deepseek chat app data migration, from formal export function, 543 sessions
-function source5() {
-
+// you need a name to differ from other types, so use True for true source
+type TrueContentBlock =
+    // active flag is not related to this script
+    | { kind: 'text', value: string, name?: string }
+    | { kind: 'think', value: string, signature: string }
+    // tool use is not related to this script, just declare a kind
+    | { kind: 'tool-use' }
+    | { kind: 'tool-result' }
+interface TrueMessage {
+    role: 'system' | 'user' | 'assistant',
+    id: number,
+    parentId: number, // 0 for no parent id
+    content: TrueContentBlock[],
+    metadata?: Record<string, any>,
+    response?: Record<string, any>,
+    // request config is not related to this script
 }
-source5();
+interface TrueSession {
+    filename: string, // manually include a filename for easy id and navigation
+    name: string,
+    messages: TrueMessage[],
+    metadata: Record<string, any>,
+}
+
+const truesessions: TrueSession[] = await Promise.all((await fs.readdir('/workspaces/huan-data')).map(async filename => {
+    const session = yaml.parse(await fs.readFile(`/workspaces/huan-data/${filename}`, 'utf-8'));
+    const messages: TrueMessage[] = [];
+    for (const key of Object.keys(session)) {
+        if (key.startsWith('user ')) {
+            messages.push({
+                role: 'user',
+                id: +key.substring(5).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(5).split('>')[1] : 0,
+                ...session[key],
+            });
+        } else if (key.startsWith('assistant ')) {
+            messages.push({
+                role: 'assistant',
+                id: +key.substring(10).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(10).split('>')[1] : 0,
+                ...session[key],
+            });
+        } else if (key.startsWith('system ')) {
+            messages.push({
+                role: 'system',
+                id: +key.substring(7).split('>')[0],
+                parentId: key.includes('>') ? +key.substring(7).split('>')[1] : 0,
+                ...session[key],
+            });
+        }
+    }
+    return { filename: filename.split('.')[0], name: session.name, messages, metadata: session.metadata };
+}));
+for (const session of truesessions) {
+    // console.log(session.filename, session.name, session.messages.length, JSON.stringify(session.metadata));
+    for (const message of session.messages) {
+        // don't forget content in truemessage can be string
+        if (typeof message.content == 'string') {
+            message.content = [{ kind: 'text', value: message.content }];
+        }
+    }
+}
+
+interface S5Session {
+    id: string,
+    title: string,
+    inserted_at: string, // this use iso8601
+    updated_at: string, // this use iso8601
+    mapping: Record<string, S5MessageAndId>,
+}
+interface S5MessageAndId {
+    id: string,
+    parent: string,
+    children: string[],
+    message: S5Message,
+}
+interface S5Message {
+    model: string,
+    inserted_at: string,
+    fragments: S5Fragment[],
+}
+type S5Fragment =
+    | { type: 'REQUEST', content: string }
+    | { type: 'RESPONSE', content: string }
+    | { type: 'THINK', content: string }
+    | { type: 'FILE', files: { file_id: string, file_name: string, file_size: string }[] }
+    | { type: 'SEARCH', results: { url: string, title: string }[] }
+
+// source#5, deepseek chat app data migration, from formal export function, 1990 sessions (include 543 existing sessions)
+// TODO s5 will be rerun with same or larger dataset and same or slightly changed data schema
+
+async function source5() {
+    const sessions = JSON.parse(await fs.readFile('/workspaces/huan-data-stage/deepseek-export-20261105.json', 'utf-8')) as S5Session[];
+
+    let sessionCount = 0;
+    let existingSessionCount = 0;
+    let messageCount = 0;
+    let blockCount = 0;
+    let diffCount = 0;
+    for (const [session, sessionIndex] of sessions.map((s, i) => [s, i] as const)) {
+        if (typeof session.id != 'string') {
+            console.log(`session ${session.id}: but id is not string?`);
+        }
+        if (sessions.filter(s => s.id == session.id).length > 1) {
+            console.log(`session ${session.id}: duplicate id`);
+        }
+        sessionCount += 1;
+        const truesession = truesessions.find(s => s.metadata?.source == 'deepseek-extract-2025' && s.metadata['source-id'] == session.id);
+        if (truesession) {
+            existingSessionCount += 1;
+        }
+
+        if (typeof session.title != 'string') {
+            console.log(`session ${session.id}: title is not string`);
+        }
+        if (!session.title.length) {
+            // RESULT: the same session that is content filtered
+            console.log(`session ${session.id}: title is empty`);
+        } else if (truesession && session.title.trim() != truesession.name.trim()) {
+            console.log(`session ${truesession.filename}: name not same, ${session.title}, ${truesession.name}`);
+        }
+        
+        if (!session.inserted_at) {
+            console.log(`session ${session.id}: create time is empty`);
+        }
+        const createTime = dayjs(session.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+        if (truesession && truesession.metadata['source-create-time'] != createTime) {
+            console.log(`session ${truesession.filename}: create time not same, ${createTime}, ${truesession.metadata['source-create-time']}`);
+        }
+
+        if (!session.updated_at) {
+            console.log(`session ${session.id}: update time is empty`);
+        }
+        const updateTime = dayjs(session.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+        // ATTENTION one mismatch at 20250708 which is exactly
+        // 1. chatapp2025 starts developing, 2. deepseek webapp data is extracted, 3. new message append to this session exactly talking about developing of chatapp2025
+        if (truesession && (truesession.metadata['source-update-time'] || truesession.metadata['source-create-time']) != updateTime) {
+            console.log(`session ${truesession.filename}: update time not same, ${updateTime}, ${truesession.metadata['source-update-time'] || truesession.metadata['source-create-time']}`);
+        }
+
+        const actualPropertyNames = Object.keys(session).sort((a, b) => a.localeCompare(b));
+        const expectedPropertyNames = ['id', 'title', 'inserted_at', 'updated_at', 'mapping'].sort((a, b) => a.localeCompare(b));
+        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+            console.log(`session ${session.id} property name mismatch ${actualPropertyNames}`);
+        }
+
+        if (!session.mapping) {
+            console.log(`session ${session.id}: missing mapping`);
+        }
+        let hasRoot = false;
+        for (const [messageId, messageAndId] of Object.entries(session.mapping)) {
+            if (typeof messageId != 'string') {
+                console.log(`session ${session.id} message ${messageId}: but message id is not string?`);
+            }
+            if (messageAndId.id != messageId) {
+                console.log(`session ${session.id} message ${messageId}: key and body id not same?`);
+            }
+            if (!Array.isArray(messageAndId.children)) {
+                console.log(`session ${session.id} message ${messageId}: children not array`);
+            }
+            if (messageAndId.parent && !Object.keys(session.mapping).includes(messageAndId.parent)) {
+                console.log(`session ${session.id} message ${messageId}: parent id not found`);
+            }
+            const expectChildren = Object.entries(session.mapping).filter(m => m[1].parent == messageId).map(m => m[0]).sort((a, b) => a.localeCompare(b));
+            const actualChildren = [...messageAndId.children].sort((a, b) => a.localeCompare(b));
+            if (expectChildren.length != actualChildren.length || actualChildren.some((n, i) => expectChildren[i] != n)) {
+                console.log(`session ${session.id} message ${messageId} children mismatch ${expectChildren}`);
+            }
+
+            const actualPropertyNames = Object.keys(messageAndId).sort((a, b) => a.localeCompare(b));
+            const expectedPropertyNames = ['id', 'parent', 'children', 'message'].sort((a, b) => a.localeCompare(b));
+            if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                console.log(`session ${session.id} message ${messageId} property name mismatch ${actualPropertyNames}`);
+            }
+
+            if (messageId == 'root') {
+                hasRoot = true;
+                if (messageAndId.message) {
+                    console.log(`session ${session.id} root has message body`);
+                }
+                continue;
+            }
+            messageCount += 1;
+            const message = messageAndId.message;
+            if (!message) {
+                console.log(`session ${session.id} message ${messageId} no body`);
+            }
+            if ((+messageId).toString() != messageId) {
+                console.log(`session ${session.id} message ${messageId} is not integer`);
+            }
+            const truemessage = truesession ? truesession.messages.find(m => m.id == +messageId) : null;
+            if (truesession && !truemessage) {
+                console.log(`session ${truesession.filename} message ${messageId} not found in existing data`);
+            }
+            if (truemessage && messageAndId.parent != 'root' && +messageAndId.parent != truemessage.parentId) {
+                console.log(`session ${truesession.filename} message ${messageId} parent id not same`);
+            }
+
+            // this is still using -chat and -reasoner? but not -flash and -pro?
+            // source5 has model, but source4 don't have a field to distinguish -chat and -reasoner or -flash and -pro
+            if (!['deepseek-chat', 'deepseek-reasoner'].includes(message.model)) {
+                console.log(`session ${session.id} message ${messageId} model ${message.model}`);
+            }
+            // many
+            if (truemessage && message.model == 'deepseek-reasoner') {
+                // console.log(`session ${truesession.filename} message ${messageId} model ${message.model}`);
+            }
+            // const createTime = dayjs(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
+            // console.log(`session ${session.id} message ${messageId} create time ${createTime}`);
+            if (!Array.isArray(message.fragments)) {
+                console.log(`session ${session.id} message ${messageId} fragments is not array`);
+            }
+            for (const [fragment, fragmentIndex] of message.fragments.map((f, i) => [f, i] as const)) {
+                blockCount += 1;
+                if (!['REQUEST', 'RESPONSE', 'THINK', 'SEARCH', 'FILE'].includes(fragment.type)) {
+                    console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} unknown type ${fragment.type}`);
+                }
+
+                const actualPropertyNames = Object.keys(fragment).filter(p => p != 'type').sort((a, b) => a.localeCompare(b));
+                if (fragment.type == 'REQUEST' || fragment.type == 'RESPONSE' || fragment.type == 'THINK') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'content') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (typeof fragment.content != 'string') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} content not string`);
+                    }
+                } else if (fragment.type == 'FILE') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'files') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (!Array.isArray(fragment.files)) {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} files not array`);
+                    }
+                    for (const [file, fileIndex] of fragment.files.map((f, i) => [f, i] as const)) {
+                        // console.log(file);
+                        const actualPropertyNames = Object.keys(file).sort((a, b) => a.localeCompare(b));
+                        const expectedPropertyNames = ['file_id', 'file_name', 'file_size'].sort((a, b) => a.localeCompare(b));
+                        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} property name mismatch ${actualPropertyNames}`);
+                        }
+                        if (typeof file.file_id != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_id not string`);
+                        }
+                        if (typeof file.file_name != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_name not string`);
+                        }
+                        if (typeof file.file_size != 'number') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} file ${fileIndex} file_size not number`);
+                        }
+                    }
+                } else if (fragment.type == 'SEARCH') {
+                    if (actualPropertyNames.length != 1 || actualPropertyNames[0] != 'results') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} property name mismatch ${actualPropertyNames}`);
+                    }
+                    if (!Array.isArray(fragment.results)) {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} results not array`);
+                    }
+                    for (const [result, resultIndex] of fragment.results.map((r, i) => [r, i] as const)) {
+                        // console.log(result);
+                        // snippet, site name, site icon etc. is not in export data while available in web app
+                        // it's not very not ok because I only record these for fun
+                        const actualPropertyNames = Object.keys(result).sort((a, b) => a.localeCompare(b));
+                        const expectedPropertyNames = ['url', 'title'].sort((a, b) => a.localeCompare(b));
+                        if (actualPropertyNames.length != expectedPropertyNames.length || actualPropertyNames.some((n, i) => expectedPropertyNames[i] != n)) {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} property name mismatch ${actualPropertyNames}`);
+                        }
+                        if (typeof result.url != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} url not string`);
+                        }
+                        if (typeof result.title != 'string') {
+                            console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} result ${resultIndex} title not string`);
+                        }
+                    }
+                }
+
+                if (fragment.type == 'REQUEST') {
+                    if (truemessage && truemessage.role != 'user') {
+                        console.log(`session ${session.id} message ${messageId} fragement ${fragmentIndex} unknown type ${fragment.type}`);
+                    }
+                }
+            }
+            // at max 1 for each fragment types, request don't stay with other types I guess
+            const requestCount = message.fragments.filter(f => f.type == 'REQUEST').length;
+            if (requestCount > 1) {
+                console.log(`session ${session.id} message ${messageId} REQUEST fragment more than 1`);
+            }
+            const responseCount = message.fragments.filter(f => f.type == 'RESPONSE').length;
+            const thinkCount = message.fragments.filter(f => f.type == 'THINK').length;
+            const filesCount = message.fragments.filter(f => f.type == 'FILE').length;
+            const resultsCount = message.fragments.filter(f => f.type == 'SEARCH').length;
+            // RESULT: 1 session multiple search fragments, should be multiple server side search tool calls with different queries
+            //         but keyword is not exported so collect them together
+            if (responseCount > 1 || thinkCount > 1 || filesCount > 1 || resultsCount > 1) {
+                console.log(`session ${session.id} message ${messageId} assistant fragment more than 1`);
+            }
+            if ((requestCount || filesCount) && (responseCount || thinkCount || resultsCount)) {
+                console.log(`session ${session.id} message ${messageId} user fragment and assistant fragment appear in same message, ${JSON.stringify({ requestCount, responseCount, thinkCount, filesCount, resultsCount })}`);
+            }
+            // RESULT: 3 messages, is cancelled assistant message
+            if (!(requestCount || filesCount) && !(responseCount || thinkCount || resultsCount)) {
+                // console.log(`session ${session.id} message ${messageId} neither user nor assistant?, ${JSON.stringify({ requestCount, responseCount, thinkCount, filesCount, resultsCount })}`);
+            }
+
+            // same as source 4, deepseek export don't have system message
+            const role = requestCount || filesCount ? 'user' : 'assistant';
+            if (truemessage && role != truemessage.role) {
+                console.log(`session ${session.id} message ${messageId} role not same`);
+            }
+
+            // imported data don't have multiple text block or thinking block
+            const textFragment = message.fragments.find(f => f.type == 'REQUEST' || f.type == 'RESPONSE');
+            const textBlock = truemessage ? truemessage.content.find(c => c.kind == 'text') : null;
+            if (textFragment && truemessage) { // not include textblock nullablity in condition implies a text block must be in truemessage validation
+                const s5value = textFragment.content.trim().split('\n').map(v => v.trimEnd()).join('\n');
+                const s4value = textBlock.value;
+                // RESULT: fixed 1 error in source4 result building in 4 messages
+                if (s5value != s4value) {
+                    // diffCount += 1;
+                    console.log(`session ${truesession.filename} message ${messageId} text block not same`);
+                    if (diffCount == 1) {
+                        console.log(s4value, s5value);
+                    }
+                }
+            }
+
+            const thinkFragment = message.fragments.find(f => f.type == 'THINK');
+            const thinkBlock = truemessage ? truemessage.content.find(c => c.kind == 'think') : null;
+            if (thinkFragment && truemessage) { // not include thinkblock nullablity in condition implies a think block must be in truemessage validation
+                const s5value = thinkFragment.content.trim().split('\n').map(v => v.trimEnd()).join('\n');
+                const s4value = thinkBlock.value;
+                if (s5value != s4value) {
+                    diffCount += 1;
+                    console.log(`session ${truesession.filename} message ${messageId} think block not same`);
+                    if (diffCount == 1) {
+                        console.log(s4value, s5value);
+                    }
+                }
+            }
+
+            const files = message.fragments.find(f => f.type == 'FILE')?.files;
+            if (files && truemessage) {
+                if (!Array.isArray(truemessage.metadata.files)) {
+                    console.log(`session ${truesession.filename} message ${messageId} files mismatch`);
+                }
+                if (files.length != truemessage.metadata.files.length) {
+                    console.log(`session ${truesession.filename} message ${messageId} file count mismatch`);
+                }
+                const s4files = truemessage.metadata.files.sort((f1: ChatMessageFile, f2: ChatMessageFile) => f1.id.localeCompare(f2.id));
+                const s5files = [...files].sort((f1, f2) => f1.file_id.localeCompare(f2.file_id));
+                for (let fileIndex = 0; fileIndex < s4files.length; fileIndex += 1) {
+                    const s4file = s4files[fileIndex];
+                    const s5file = s5files[fileIndex];
+                    if (s4file.id != `file-${s5file.file_id}`) {
+                        console.log(`session ${truesession.filename} message ${messageId} file ${fileIndex} id not same`);
+                    }
+                    if (s4file['file-name'] != s5file.file_name) {
+                        console.log(`session ${truesession.filename} message ${messageId} file ${fileIndex} name not same`);
+                    }
+                    if (s4file['file-size'] != s5file.file_size) {
+                        console.log(`session ${truesession.filename} message ${messageId} file ${fileIndex} size not same`);
+                    }
+                }
+            }
+
+            const results = message.fragments.filter(f => f.type == 'SEARCH')
+                .reduce<{ url: string, title: string }[]>((acc, f) => { acc.push(...f.results); return acc; }, []);
+            if (results.length && truemessage) {
+                if (!Array.isArray(truemessage.response?.['search-results'])) {
+                    console.log(`session ${truesession.filename} message ${messageId} search-results mismatch`);
+                } else {
+                    if (results.length != truemessage.response['search-results'].length) {
+                        console.log(`session ${truesession.filename} message ${messageId} search result count mismatch`);
+                    }
+                    const s4results = truemessage.response['search-results'].sort((f1: ChatMessageSearchResult, f2: ChatMessageSearchResult) => f1.url.localeCompare(f2.url));
+                    const s5results = [...results].sort((f1, f2) => f1.url.localeCompare(f2.url));
+                    for (let resultIndex = 0; resultIndex < s4results.length; resultIndex += 1) {
+                        const s4file = s4results[resultIndex];
+                        const s5file = s5results[resultIndex];
+                        if (s4file.url != s5file.url) {
+                            console.log(`session ${truesession.filename} message ${messageId} result ${resultIndex} url not same`);
+                        }
+                        if (s4file.title != s5file.title.trim()) {
+                            // RESULT: ' #' again
+                            console.log(`session ${truesession.filename} message ${messageId} result ${resultIndex} title not same, ${s4file.title}, ${s5file.title.trim()}`);
+                        }
+                    }
+                    // console.log(s4results, s5results);
+                }
+            }
+        }
+        if (!hasRoot) {
+            console.log(`session ${session.id} no root`);
+        }
+
+        // this data structure is very simple, only contain some create-time, and files and search results and no more
+
+        // if (sessionIndex <= 600 && sessionIndex > 400) {
+        // await fs.writeFile(`${filename}.yml`, b);
+        // }
+        // if (sessionIndex > 10) { break; }
+    }
+    console.log(sessionCount, existingSessionCount, messageCount, blockCount);
+}
+// await source5();
