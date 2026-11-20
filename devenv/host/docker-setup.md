@@ -129,3 +129,11 @@ UPDATE migrate from docker desktop to docker ce in wsl
 - oh, dev machine is still using ubuntu 24, and install debian packages amazingly works, change to ubuntu packages and use a
   temporary copy of the script for now
 - export docker desktop images, check data in volumes (you should not save meaningful data in dev machine volumes) and uninstall docker desktop
+
+## Workflow
+
+- deploy latest docker-setup.py, for server, set buildx to False
+- run docker-setup.py to download deb files and check content
+- systemctl stop containerd && systemctl stop docker.socket docker.service, for dev env, need sudo
+- run docker-setup.py and y once to deploy files, for dev env, need sudo
+- systemctl daemon-reload && systemctl start containerd && systemctl start docker.socket && docker info

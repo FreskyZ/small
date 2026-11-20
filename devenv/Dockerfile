@@ -3,7 +3,7 @@
 # build minimal omz, why does omz repository contains so many not used files?
 # - this stage build a /build directory without unnecessary files and with necessary files
 # - does not contain the zsh program, need package manager and install
-FROM alpine:3.24.3 AS ohmyzsh-build
+FROM alpine:3.24.4 AS ohmyzsh-build
 
 # git clone git@github.com:ohmyzsh/ohmyzsh
 # tar cJf ohmyzsh.tar.xz -C ./ohmyzsh .
@@ -127,7 +127,7 @@ FROM my/shell AS node
 # source code https://github.com/nodejs/docker-node/blob/main/26/trixie-slim/Dockerfile
 # the build process simply download and decompress and remove some unnecessary large files
 
-ARG NODE_VERSION=26.12.1
+ARG NODE_VERSION=26.13.1
 RUN <<EORUN
 set -ex
 # wget seems to be about 4mb, xz-utils seems to be about 1.5mb,
@@ -160,7 +160,7 @@ FROM my/node AS node-and-python
 
 # https://docs.astral.sh/uv/guides/integration/docker/#available-images
 # for this copy usage, 0.11.26 is enough, others will come with distro and python
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /uvx /bin/
 
 RUN <<EORUN
 set -ex
@@ -212,6 +212,12 @@ rustc --version
 cargo --version
 # linker
 apt-get install -y --no-install-recommends build-essential
+EORUN
+
+RUN <<EORUN
+set -ex
+cargo install tokei
+cargo install ripgrep
 EORUN
 
 # ========================================

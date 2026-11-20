@@ -12,14 +12,15 @@ buildx_plugin = True
 
 packages = [p for p in [
     # https://github.com/containerd/containerd/releases
-    ('containerd.io', '2.4.2-3'),
+    ('containerd.io', '2.4.2-4'),
     # https://github.com/moby/moby/releases
     # https://docs.docker.com/engine/release-notes/29/
-    ('docker-ce', '29.9.2-1'),
-    ('docker-ce-cli', '29.9.2-1'),
-    ('docker-buildx-plugin', '0.38.1-1') if buildx_plugin else False,
+    ('docker-ce', '29.10.0-1'),
+    ('docker-ce-cli', '29.10.0-1'),
+    # https://github.com/docker/buildx/releases
+    ('docker-buildx-plugin', '0.39.0-1') if buildx_plugin else False,
     # https://github.com/docker/compose/releases
-    ('docker-compose-plugin', '5.6.1-1'),
+    ('docker-compose-plugin', '5.8.0-1'),
 ] if p]
 
 # download and extract
@@ -76,8 +77,10 @@ other_files = list(map(pathlib.Path, [
     'docker-setup/docker-compose-plugin/usr/share/doc/docker-compose-plugin/README.md',
     'docker-setup/docker-compose-plugin/usr/share/doc/docker-compose-plugin/changelog.Debian.gz',
     'docker-setup/docker-ce/usr/share/man/man8/dockerd.8.gz',
-    'docker-setup/docker-ce/usr/share/doc/docker-ce/README.md',
+    'docker-setup/docker-ce/usr/share/doc/docker-ce/README.md.gz',
     'docker-setup/docker-ce/usr/share/doc/docker-ce/changelog.Debian.gz',
+    'docker-setup/docker-ce-cli/usr/share/doc/docker-ce-cli/README.md',
+    'docker-setup/docker-ce-cli/usr/share/doc/docker-ce-cli/changelog.Debian.gz',
     # not important traditional service
     'docker-setup/docker-ce/etc/default/docker',
     'docker-setup/docker-ce/etc/init.d/docker',
@@ -87,7 +90,6 @@ other_files = list(map(pathlib.Path, [
     'docker-setup/docker-ce-cli/usr/share/fish/vendor_completions.d/docker.fish',
     'docker-setup/docker-ce-cli/usr/share/zsh/vendor-completions/_docker',
     'docker-setup/docker-ce-cli/usr/share/bash-completion/completions/docker',
-    'docker-setup/docker-ce-cli/usr/share/doc/docker-ce-cli/changelog.Debian.gz',
 ]))
 
 has_error = False
