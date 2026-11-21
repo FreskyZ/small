@@ -129,7 +129,8 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
             "text" => Ok(ContentBlock::Text{ name, value, active: active.unwrap_or(true) }),
             "think" => Ok(ContentBlock::Thinking{
                 value,
-                signature: signature.ok_or_else(|| DeserializeError::missing_field("signature"))?,
+                // signature is not important in compatible api, no need to be too strict
+                signature: signature.unwrap_or_default(),
             }),
             "tool-result" => Ok(ContentBlock::ToolResult{
                 id: tool_use_id.ok_or_else(|| DeserializeError::missing_field("id"))?,

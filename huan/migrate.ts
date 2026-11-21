@@ -1,5 +1,7 @@
 import fs from 'node:fs/promises';
+import npfs from 'node:fs';
 import dayjs from 'dayjs';
+import { diffLines } from 'diff';
 import yaml from 'yaml';
 
 // source#1 was assigned to huan initial test data, but the data schema really changes many times so this batch index is meaningless
@@ -98,9 +100,32 @@ function readMySQLCSV<T>(raw: string, map: (fields: string[]) => T): T[] {
 // source#3, mysql-backup-202603 from chatapp2025/theai/yala, about 60 sessions
 // reference archive/theai/shapes.xml, src/database.sql, server/index.ts
 // does old chat app ever thinking? RESULT: no data in thinking column, but one session have manual thinking formating?
+interface Session3 {
+    id: number,
+    userId: number,
+    name: string,
+    comment: string,
+    createTime: string,
+    tags: string,
+    shared: boolean,
+    shareId: string,
+    updateTime: string
+}
+interface Message3 {
+    messageId: number,
+    sessionId: number,
+    role: string,
+    content: string,
+    createTime: string,
+    inputToken: number,
+    outputToken: number,
+    parentMessageId: number,
+    updateTime: string,
+    thinkingContent: string,
+}
+async function read3(): Promise<[Session3[], Message3[]]> {
 
-async function source3() {
-    const sessions = readMySQLCSV(await fs.readFile('/workspaces/mysql-backup-20260319-session.csv', 'utf8'), fields => ({
+    const sessions = readMySQLCSV(await fs.readFile('mysql-backup-20260319-session.csv', 'utf8'), fields => ({
         id: +fields[0],
         userId: +fields[1],
         name: fields[2],
@@ -110,23 +135,20 @@ async function source3() {
         shared: fields[6].codePointAt(0) != 0,
         shareId: fields[7],
         updateTime: fields[8],
-    }));
+    } as Session3));
 
     const sessionIds: number[] = [];
     for (const session of sessions) {
         // console.log(session.name, session.createTime);
         // console.log(JSON.stringify(session));
-        // RESULT: ok
         if (sessionIds.includes(session.id)) {
             console.log(`duplicate session id ${session.id}`);
         } else {
             sessionIds.push(session.id);
         }
-        // RESULT: ok
         if (session.userId != 1) {
             console.log(`session ${session.id} user id not 1?`);
         }
-        // RESULT: ok
         if (!session.name) {
             console.log(`session ${session.id} empty name`);
         }
@@ -145,7 +167,6 @@ async function source3() {
         if (session.shareId) {
             // console.log(`session ${session.id} share id ${session.shareId}`);
         }
-        // RESULT: ok
         if (!session.createTime) {
             console.log(`session ${session.id} missing create time`);
         }
@@ -157,7 +178,6 @@ async function source3() {
             // console.log(`session ${session.id} create time not same as update time, ${session.createTime}, ${session.updateTime}`);
         }
         // don't forget normal datetime format can compare string
-        // RESULT: ok
         if (session.createTime > session.updateTime) {
             console.log(`session ${session.id} create time > update time?`);
         }
@@ -165,13 +185,12 @@ async function source3() {
         if (sessions.some(s => s.id != session.id && s.createTime == session.createTime)) {
             console.log(`session ${session.id} duplicate create time ${session.createTime}`);
         }
-        // RESULT ok
         if (session.createTime.length != 19 || session.createTime[4] != '-' || session.createTime[7] != '-' || session.createTime[10] != ' ' || session.createTime[13] != ':' || session.createTime[16] != ':') {
             console.log(`session ${session.id} create time ${session.createTime} unexpected format`);
         }
     }
 
-    const messages = readMySQLCSV(await fs.readFile('/workspaces/mysql-backup-20260319-message.csv', 'utf8'), fields => ({
+    const messages = readMySQLCSV(await fs.readFile('mysql-backup-20260319-message.csv', 'utf8'), fields => ({
         messageId: +fields[0],
         sessionId: +fields[1],
         role: fields[2],
@@ -182,23 +201,19 @@ async function source3() {
         parentMessageId: +fields[7],
         updateTime: fields[8],
         thinkingContent: fields[9],
-    }));
+    } as Message3));
     for (const message of messages) {
-        // console.log(`session ${message.sessionId} ${message.role} ${message.messageId}<-${message.parentMessageId} ${message.createTime},${message.updateTime} content ${message.content.length} chars`);
-        // RESULT: ok
         if (isNaN(message.messageId) || message.messageId <= 0) {
             console.log(`invalid message id ${message.messageId}`);
         }
-        // RESULT: ok
         if (!sessions.some(s => s.id == message.sessionId)) {
             console.log(`message ${message.messageId} session ${message.sessionId} not found`);
         }
         const messagesOfSession = messages.filter(m => m.sessionId == message.sessionId);
-        // RESULT: ok
         if (messagesOfSession.filter(m => m.messageId == message.messageId).length > 1) {
             console.log(`session ${message.sessionId} message id ${message.messageId} duplicate`);
         }
-        // RESULT: many, old app allows branch system message, that is multiple system messages
+        // RESULT: many, old app allows branch system message, which means multiple system messages
         const systemMessages = messagesOfSession.filter(m => m.role == 'system');
         if (systemMessages.length > 1) {
             // console.log(`session ${message.sessionId} system message count > 1`);
@@ -207,29 +222,25 @@ async function source3() {
         if (message.parentMessageId) {
             // console.log(`session ${message.sessionId} message ${message.messageId} parent message id ${message.parentMessageId}`);
         }
-        // RESULT: ok
         if (message.parentMessageId && !messagesOfSession.some(m => message.parentMessageId == m.messageId)) {
             console.log(`session ${message.sessionId} message ${message.messageId} parent message id ${message.parentMessageId} not found in ${messagesOfSession.map(m => m.messageId)}`);
         }
         const parentMessage = messagesOfSession.find(m => m.messageId == message.parentMessageId);
 
-        // RESULT: ok
         if (!['user', 'assistant', 'system'].includes(message.role)) {
             console.log(`session ${message.sessionId} message ${message.messageId} unexpected role ${message.role}`);
         }
-        // 1 error, manually fix
+        // RESULT: 1
+        // UPDATE: what do you mean by finding the original mysql-backup.tar.xz and extract the message.csv file and this error fixed?
         if (parentMessage && !['assistant-user', 'user-assistant', 'user-system'].includes(`${message.role}-${parentMessage.role}`)) {
             console.log(`session ${message.sessionId} message ${message.messageId} parent message ${message.parentMessageId} unexpected role relationship ${message.role}-${parentMessage.role}`);
         }
 
         // why do many user message have token count while assistant message don't have token count?
-        // answer 2: assistant message token count is erased after edit
-        // all these happen at message id migrate to session scope, check old version of source code
-        // what is sessionversion, why is token count on this object? I guess that's data migration error when updating database schema, stop investigation
+        // 1 seems to be related to data migration error, 2 is because token count is erased after edit
         if (message.role != 'assistant' && (message.inputToken || message.outputToken)) {
             // console.log(`session ${message.sessionId} message ${message.messageId} has token count`);
-            // RESULT none
-            // cannot answer 1, so assign these token counts to their parent assistant message
+            // following results are none
             if (message.role != 'user') {
                 console.log(`   this message is not user`);
             }
@@ -245,12 +256,10 @@ async function source3() {
             }
         }
 
-        // RESULT: none
         if (message.thinkingContent) {
             console.log(`session ${message.sessionId} message ${message.messageId} has thinking content?`);
         }
 
-        // RESULT: ok
         if (!message.createTime) {
             console.log(`session ${message.sessionId} message ${message.messageId} missing create time`);
         }
@@ -261,14 +270,17 @@ async function source3() {
         if (message.createTime != message.updateTime) {
             // console.log(`session ${message.sessionId} message ${message.messageId} create time not same as update time, ${message.createTime}, ${message.updateTime}`);
         }
-        // don't forget normal datetime format can compare string
-        // RESULT: ok
         if (message.createTime > message.updateTime) {
             console.log(`session ${message.sessionId} message ${message.messageId} create time > update time?`);
         }
     }
+    return [sessions, messages];
+}
+async function write3(sessions: Session3[], messages: Message3[]) {
 
-    // convert
+    let ok_session_count = 0;
+    let ok_message_count = 0;
+    let ok_content_length = 0;
     for (const session of sessions) {
         let filename = session.createTime.substring(0, 4) + session.createTime.substring(5, 7)
             + session.createTime.substring(8, 10) + '-' + session.createTime.substring(11, 13)
@@ -283,7 +295,8 @@ async function source3() {
         }
         if (session.comment) {
             if (session.comment.includes('\n')) {
-                b += `  source-comment: '${session.comment.replace('\n', '\\n')}'\n`;
+                // you need double quote for this?
+                b += `  source-comment: "${session.comment.replace('\n', '\\n')}"\n`;
             } else {
                 b += `  source-comment: ${session.comment}\n`;
             }
@@ -350,24 +363,89 @@ async function source3() {
             }
         }
 
+        const document = yaml.parse(b);
+        // const document = yaml.parse(await fs.readFile(`${filename}.yml`, 'utf-8'));
+
+        if (document.name != session.name) {
+            console.log(`document ${filename} unexpected name`);
+        }
+        if (document.metadata.source != 'chatapp2025/theai/yala') {
+            console.log(`document ${filename} unexpected source`);
+        }
+        if (document.metadata['source-id'] != session.id) {
+            console.log(`document ${filename} unexpected source id`);
+        }
+        if (document.metadata['source-create-time'] != session.createTime) {
+            console.log(`document ${filename} unexpected source create time`);
+        }
+        if (session.createTime != session.updateTime && document.metadata['source-update-time'] != session.updateTime) {
+            console.log(`document ${filename} unexpected source update time`);
+        }
+        if (session.comment && document.metadata['source-comment'] != session.comment) {
+            console.log(`document ${filename} unexpected source comment`);
+        }
+        if (session.tags && document.metadata['source-tags'] != session.tags) {
+            console.log(`document ${filename} unexpected source tags`);
+        }
+        if (session.shared && document.metadata['source-shared-flag'] != 1) {
+            console.log(`document ${filename} unexpected source shared flag`);
+        }
+        if (session.shareId && document.metadata['source-share-id'] != session.shareId) {
+            console.log(`document ${filename} unexpected source share id`);
+        }
+        for (const message of messages.filter(m => m.sessionId == session.id).sort((m1, m2) => m1.messageId - m2.messageId)) {
+            const key = `${message.role} ${message.messageId}${message.parentMessageId ? `>${message.parentMessageId}` : ''}`;
+            if (!document[key]) {
+                console.log(`document ${filename} message ${message.messageId} missing`);
+            }
+            const element = document[key];
+            if (message.role == 'assistant') {
+                if (element.content[0].kind != 'text') {
+                    console.log(`document ${filename} message ${message.messageId} content[0].kind not text`);
+                }
+                if (element.content[0].value != message.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                    console.log(`document ${filename} message ${message.messageId} content[0].value not same`);
+                } else {
+                    ok_content_length += element.content[0].value.length;
+                }
+            } else {
+                if (element.content != message.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                    console.log(`document ${filename} message ${message.messageId} content not same`);
+                } else {
+                    ok_content_length += element.content.length;
+                }
+            }
+            const metadata = message.role == 'assistant' ? element.response : element.metadata;
+            if (metadata['source-create-time'] != message.createTime) {
+                console.log(`document ${filename} message ${message.messageId} unexpected source create time`);
+            }
+            if (message.createTime != message.updateTime && metadata['source-update-time'] != message.updateTime) {
+                console.log(`document ${filename} message ${message.messageId} unexpected source update time`);
+            }
+            if (message.inputToken && metadata['source-usage-input-token'] != message.inputToken) {
+                console.log(`document ${filename} message ${message.messageId} unexpected source input token`);
+            }
+            if (message.outputToken && metadata['source-usage-output-token'] != message.outputToken) {
+                console.log(`document ${filename} message ${message.messageId} unexpected source output token`);
+            }
+            ok_message_count += 1; // run to here does not imply ok, but lazy to add a lot of else clause
+        }
+        ok_session_count += 1; // run to here does not imply ok, but lazy to add a lot of else clause
+
         // console.log(`write ${filename}.yml`);
         // await fs.writeFile(`${filename}.yml`, b);
-        // if (session.id > 30) { break; }
-        
-        // read conversion result
     }
+    console.log(ok_session_count, ok_message_count, ok_content_length);
 }
-await source3();
+// const session3s = await read3();
 
 // TODO validate source3 against chatapp2025-backup-*.sql files
-function altsource34() {{
-
-}}
+function readalt34() {
+}
 
 // source#4, deepseek chat app old data migration, it is collected from f12 api not nowadays formal export function, 543 sessions
 // reference archive/theai/shapes.xml, theai/migrate.ts
-
-interface ChatMessageFile {
+interface Message4File {
     id: string, // `file-${GUID}`
     status: 'SUCCESS', // according to current few records, only this
     file_name: string,
@@ -377,7 +455,7 @@ interface ChatMessageFile {
     inserted_at: number,
     updated_at: number,
 }
-interface ChatMessageSearchResult {
+interface Message4Result {
     url: string,
     title: string,
     snippet: string,
@@ -386,9 +464,8 @@ interface ChatMessageSearchResult {
     site_name: string,
     site_icon: string, // url
 }
-
 // confirmed by current records that all property available in all objects
-interface ChatSessionInfo {
+interface Session4Info {
     id: string, // guid string
     seq_id: number,
     agent: 'chat', // type confirmed by current records
@@ -401,7 +478,7 @@ interface ChatSessionInfo {
     inserted_at: number, // timestamp number
     updated_at: number, // timestamp number
 }
-interface ChatMessage {
+interface Message4 {
     // according to inspection, despite this id is inside session,
     // the message_id-parent_id tree structure is same as my design
     message_id: number,
@@ -430,7 +507,7 @@ interface ChatMessage {
     // according to current records, will not be null
     // https://chat.deepseek.com/api/v0/file/preview?file_id=${id}
     // get a responseData.data.biz_data.url to download file, this result url has access key and should be short lived
-    files: ChatMessageFile[],
+    files: Message4File[],
     // according to current records, will not be null
     // no record in current records, type still unknown
     // but you can see tips on website and website http request have tips in response, which have this type
@@ -443,24 +520,23 @@ interface ChatMessage {
     // type confirmed by current records
     // can still be null when saerch_enabled
     search_status: 'FINISHED' | 'ANSWER' | 'INIT' | null,
-    search_results: ChatMessageSearchResult[] | null,
+    search_results: Message4Result[] | null,
 }
-interface ChatSession {
-    chat_session: ChatSessionInfo,
-    chat_messages: ChatMessage[],
+interface Session4 {
+    chat_session: Session4Info,
+    chat_messages: Message4[],
     cache_valid: false, // type confirmed by current records
     route_id: null, // type confirmed by current records
 }
 
-async function source4() {
-    const sessions = JSON.parse(await fs.readFile('deepseek-extract-20250709.json', 'utf-8')) as ChatSession[];
+async function read4(): Promise<Session4[]> {
+    const sessions = JSON.parse(await fs.readFile('deepseek-extract-20250709.json', 'utf-8')) as Session4[];
 
     console.log(sessions.length,
         sessions.reduce((acc, s) => acc + s.chat_messages.length, 0),
         sessions.reduce((acc, s) => acc + s.chat_messages.reduce((acc, m) => acc
             + Buffer.from(m.content).length + (m.thinking_content ? Buffer.from(m.thinking_content).length : 0), 0), 0));
 
-    // validate
     const validateResult: string[] = [];
     if (new Set(sessions.map(s => s.chat_session.id)).size != sessions.length) {
         validateResult.push(`duplicate session id`);
@@ -490,8 +566,9 @@ async function source4() {
         if (typeof info.seq_id != 'number') {
             validateResult.push(`session ${info.seq_id} seq_id is not number`);
         }
+        // RESULT: 1
         if (typeof info.title != 'string') {
-            validateResult.push(`session ${info.seq_id} missing title, you'd better add one on the website`);
+            validateResult.push(`session ${info.seq_id} missing title`);
         }
         if (typeof info.inserted_at != 'number' || typeof info.updated_at != 'number') {
             validateResult.push(`session ${info.seq_id} inserted_at or updated_at is not number`);
@@ -625,20 +702,16 @@ async function source4() {
                 // but all of these files are not important, so will not try to access them, but record for fun
 
                 // RESULT: very many mismatch, no relationship between enabled and data
-                // 3 messages
                 if (!message.search_enabled && message.search_status) {
                     // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch, ${message.search_enabled}, ${message.search_status}`);
                 }
-                // 2 messages
                 if (!message.search_enabled && message.search_results) {
                     // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (2), ${message.search_enabled}, ${JSON.stringify(message.search_results).substring(0, 100)}`);
                 }
                 if (message.search_enabled) {
-                    // very many
                     if (!message.search_status) {
                         // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (3), ${message.search_enabled}, ${message.search_status}`);
                     }
-                    // very many
                     if (!Array.isArray(message.search_results)) {
                         // validateResult.push(`session ${info.seq_id} message ${message.message_id} search enabled mismatch (4), ${message.search_enabled}, ${JSON.stringify(message.search_results).substring(0, 100)}`);
                     }
@@ -660,8 +733,17 @@ async function source4() {
         }
     }
     validateResult.forEach(v => console.log(v));
+    return sessions;
+}
+async function write4(sessions: Session4[]) {
 
     let sessionIndex = 0;
+    // rv: reverse validation
+    let rvSessionCount = 0;
+    let rvMessageCount = 0;
+    let rvBlockCount = 0;
+    let onlyThisDifferenceCount = 0;
+
     for (const session of sessions) {
         const info = session.chat_session;
         const filename = dayjs.unix(info.inserted_at).format('YYYYMMDD-HHmmss');
@@ -698,7 +780,6 @@ async function source4() {
                             b += `      ${line.trimEnd()}\n`;
                         }
                     }
-                    // this is required
                     b += `    signature: ''\n`;
                 }
                 b += `  - kind: text\n`;
@@ -725,22 +806,16 @@ async function source4() {
                         }
                     }
                 } else if (
-                    // UPDATE after committed: \s# is regarded as comment, need quote
                     message.content.trim().includes(' #')
-                    // message.content.trim().startsWith('"')
-                    // || message.content.trim().startsWith('[')
-                    // || /^\d+(\.\d+)?$/.test(message.content.trim())
                 ) {
                     b += `  content: '${message.content.trim()}'\n`;
-                // } else if (message.content.trim().length == 0) {
-                //     b += `  content: ''\n`;
                 } else {
                     b += `  content: ${message.content.trim()}\n`;
                 }
                 b += '  metadata:\n';
             }
             b += `    status: ${message.status}\n`;
-            b += `    create-time: ${dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+            b += `    create-time: ${dayjs.unix(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
             if (message.thinking_enabled) {
                 b += `    thinking-enabled: true\n`;
             }
@@ -785,6 +860,8 @@ async function source4() {
                     if (search_result.title.trim().startsWith('[')
                         || search_result.title.trim().includes(': ')
                         || search_result.title.trim().startsWith('"')
+                        || search_result.title.trim().startsWith('#')
+                        || search_result.title.trim().includes(' #')
                     ) {
                         if (search_result.title.trim().includes("'")) {
                             b += `      title: "${search_result.title.trim()}"\n`;
@@ -802,6 +879,7 @@ async function source4() {
                         || search_result.snippet.trim().startsWith('- ')
                         || search_result.snippet.trim().includes(': ')
                         || search_result.snippet.trim().endsWith(':')
+                        || search_result.snippet.trim().includes(' #')
                     ) {
                         if (search_result.snippet.includes('"') && search_result.snippet.includes("'")) {
                             b += `      snippet: |-\n`;
@@ -835,13 +913,180 @@ async function source4() {
         }
 
         // if (sessionIndex <= 600 && sessionIndex > 400) {
-            await fs.writeFile(`${filename}.yml`, b);
-            // TODO read yaml file to validate
+        // await fs.writeFile(`${filename}.yml`, b);
         // }
         sessionIndex += 1;
+
+        // const document = yaml.parse(b);
+        const currentContent = await fs.readFile(`${filename}.yml`, 'utf-8');
+        const document = yaml.parse(currentContent);
+
+        // temporary for fix message create time error
+        let hasDifference = false;
+
+        if (document.name != (info.title?.trim() ?? '(no title)')) {
+            console.log(`session ${filename} unexpected name`);
+        }
+        if (document.metadata['source'] != 'deepseek-extract-2025') {
+            console.log(`session ${filename} unexpected source`);
+        }
+        if (document.metadata['source-id'] != info.id) {
+            console.log(`session ${filename} unexpected source id`);
+        }
+        if (document.metadata['source-seq-id'] != info.seq_id) {
+            console.log(`session ${filename} unexpected source seq id`);
+        }
+        if (document.metadata['source-title-type'] != info.title_type) {
+            console.log(`session ${filename} unexpected source title type`);
+        }
+        if (document.metadata['source-version'] != info.version) {
+            console.log(`session ${filename} unexpected source version`);
+        }
+        if (document.metadata['source-current-message-id'] != info.current_message_id) {
+            console.log(`session ${filename} unexpected source current message id`);
+        }
+        if (document.metadata['source-create-time'] != dayjs.unix(info.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')) {
+            console.log(`session ${filename} unexpected source create time`);
+        }
+        if (info.inserted_at != info.updated_at
+            && document.metadata['source-update-time'] != dayjs.unix(info.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')
+        ) {
+            console.log(`session ${filename} unexpected source update time`);
+        }
+        for (const message of session.chat_messages) {
+            const key = `${message.role.toLowerCase()} ${message.message_id}${message.parent_id ? `>${message.parent_id}` : ''}`;
+            const element = document[key];
+            if (!element) {
+                console.log(`document ${filename} message ${message.message_id} missing`);
+            }
+            if (message.role == 'ASSISTANT') {
+                if (message.thinking_content) {
+                    if (element.content[0].kind != 'think') {
+                        console.log(`document ${filename} message ${message.message_id} content[0].kind not think`);
+                    }
+                    if (element.content[0].value != message.thinking_content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                        console.log(`document ${filename} message ${message.message_id} content[0].value not same`);
+                    } else {
+                        rvBlockCount += 1;
+                    }
+                    if (element.content[1].kind != 'text') {
+                        console.log(`document ${filename} message ${message.message_id} content[1].kind not text`);
+                    }
+                    if (element.content[1].value != message.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                        console.log(`document ${filename} message ${message.message_id} content[1].value not same`);
+                    } else {
+                        rvBlockCount += 1;
+                    }
+                } else {
+                    if (element.content[0].kind != 'text') {
+                        console.log(`document ${filename} message ${message.message_id} content[0].kind not text`);
+                    }
+                    if (element.content[0].value != message.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                        console.log(`document ${filename} message ${message.message_id} content[0].value not same`);
+                    } else {
+                        rvBlockCount += 1;
+                    }
+                }
+            } else {
+                if (element.content != message.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                    console.log(`document ${filename} message ${message.message_id} content not same`);
+                } else {
+                    rvBlockCount += 1;
+                }
+            }
+            const metadata = message.role == 'ASSISTANT' ? element.response : element.metadata;
+            if (metadata.status != message.status) {
+                console.log(`document ${filename} message ${message.message_id} status not same`);
+            }
+            if (metadata['create-time'] != dayjs.unix(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')) {
+                hasDifference = true;
+                console.log(`document ${filename} message ${message.message_id} create time not same`);
+            }
+            if (message.thinking_enabled && !metadata['thinking-enabled']) {
+                console.log(`document ${filename} message ${message.message_id} thinking enabled not same`);
+            }
+            if (message.thinking_elapsed_secs && metadata['thinking-elapsed-seconds'] != message.thinking_elapsed_secs) {
+                console.log(`document ${filename} message ${message.message_id} thinking elapsed seconds not same`);
+            }
+            if (!message.thinking_content && (message.ban_edit && message.ban_regenerate)
+                && (metadata['ban-edit-regenerate'][0] != message.ban_edit || metadata['ban-edit-regenerate'][1] != message.ban_regenerate)
+            ) {
+                console.log(`document ${filename} message ${message.message_id} ban edit regenerate not same`);
+            }
+            if (message.accumulated_token_usage && metadata['accumulated-token-usage'] != message.accumulated_token_usage) {
+                console.log(`document ${filename} message ${message.message_id} accumulated token usage not same`);
+            }
+            if (message.tip_content_risk && metadata['tip-content-risk-category'] != message.tip_content_risk.tip_params.category) {
+                console.log(`document ${filename} message ${message.message_id} tip content risk category not same`);
+            }
+            if (message.files) {
+                for (const [file, fileIndex] of message.files.map((f, i) => [f, i] as const)) {
+                    const element = metadata.files[fileIndex];
+                    if (file.id != element.id) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} id not same`);
+                    }
+                    if (file.status != element.status) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} status not same`);
+                    }
+                    if (file.file_name != element['file-name']) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} file name not same`);
+                    }
+                    if (file.file_size != element['file-size']) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} file size not same`);
+                    }
+                    if (file.token_usage != element['token-usage']) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} token usage not same`);
+                    }
+                    if (dayjs.unix(file.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]') != element['create-time']) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} create time not same`);
+                    }
+                    if (file.inserted_at != file.updated_at && dayjs.unix(file.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]') != element['update-time']) {
+                        console.log(`document ${filename} message ${message.message_id} file ${fileIndex} update time not same`);
+                    }
+                }
+            }
+            if (message.search_results) {
+                for (const [result, resultIndex] of message.search_results.map((f, i) => [f, i] as const)) {
+                    const element = metadata['search-results'][resultIndex];
+                    if (result.url != element.url) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} url not same`);
+                    }
+                    if (result.title.trim() != element.title) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} title not same`);
+                    }
+                    if (result.snippet.trim().split('\n').map(v => v.trimEnd()).join('\n') != element.snippet) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} snippet not same\n${element.snippet}\n${result.snippet.trim().split('\n').map(v => v.trimEnd()).join('\n')}`);
+                    }
+                    if (result.cite_index && result.cite_index != element['cite-index']) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} cite index not same`);
+                    }
+                    if (result.published_at && dayjs.unix(result.published_at).format('YYYY-MM-DDTHH:mm:ss[Z]') != element['publish-time']) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} publish time not same`);
+                    }
+                    if ((result.site_name || '(empty)') != element['site-name']) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} site name not same`);
+                    }
+                    if (result.site_icon != element['site-icon']) {
+                        console.log(`document ${filename} message ${message.message_id} result ${resultIndex} site icon not same`);
+                    }
+                }
+            }
+            rvMessageCount += 1;
+        }
+        rvSessionCount += 1;
+        if (hasDifference) {  
+            const changes = diffLines(currentContent, b);
+            if (changes.some(c => (c.added || c.removed) && !c.value.trim().startsWith('create-time'))) {
+                console.log(`has difference, and is not about create time`, changes);
+            } else {
+                onlyThisDifferenceCount += 1;
+            }
+        }
     }
+    console.log(rvSessionCount, rvMessageCount, rvBlockCount, onlyThisDifferenceCount);
 }
-// await source4();
+// const session4s = await read4();
+// await write4(session4s);
 
 // you need a name to differ from other types, so use True for true source
 type TrueContentBlock =
@@ -866,65 +1111,69 @@ interface TrueSession {
     messages: TrueMessage[],
     metadata: Record<string, any>,
 }
+async function readtrue(): Promise<TrueSession[]> {
 
-const truesessions: TrueSession[] = await Promise.all((await fs.readdir('/workspaces/huan-data')).map(async filename => {
-    const session = yaml.parse(await fs.readFile(`/workspaces/huan-data/${filename}`, 'utf-8'));
-    const messages: TrueMessage[] = [];
-    for (const key of Object.keys(session)) {
-        if (key.startsWith('user ')) {
-            messages.push({
-                role: 'user',
-                id: +key.substring(5).split('>')[0],
-                parentId: key.includes('>') ? +key.substring(5).split('>')[1] : 0,
-                ...session[key],
-            });
-        } else if (key.startsWith('assistant ')) {
-            messages.push({
-                role: 'assistant',
-                id: +key.substring(10).split('>')[0],
-                parentId: key.includes('>') ? +key.substring(10).split('>')[1] : 0,
-                ...session[key],
-            });
-        } else if (key.startsWith('system ')) {
-            messages.push({
-                role: 'system',
-                id: +key.substring(7).split('>')[0],
-                parentId: key.includes('>') ? +key.substring(7).split('>')[1] : 0,
-                ...session[key],
-            });
+    const sessions: TrueSession[] = await Promise.all((await fs.readdir('.')).map(async filename => {
+        const session = yaml.parse(await fs.readFile(`${filename}`, 'utf-8'));
+        const messages: TrueMessage[] = [];
+        for (const key of Object.keys(session)) {
+            if (key.startsWith('user ')) {
+                messages.push({
+                    role: 'user',
+                    id: +key.substring(5).split('>')[0],
+                    parentId: key.includes('>') ? +key.substring(5).split('>')[1] : 0,
+                    ...session[key],
+                });
+            } else if (key.startsWith('assistant ')) {
+                messages.push({
+                    role: 'assistant',
+                    id: +key.substring(10).split('>')[0],
+                    parentId: key.includes('>') ? +key.substring(10).split('>')[1] : 0,
+                    ...session[key],
+                });
+            } else if (key.startsWith('system ')) {
+                messages.push({
+                    role: 'system',
+                    id: +key.substring(7).split('>')[0],
+                    parentId: key.includes('>') ? +key.substring(7).split('>')[1] : 0,
+                    ...session[key],
+                });
+            }
+        }
+        return { filename: filename.split('.')[0], name: session.name, messages, metadata: session.metadata };
+    }));
+    for (const session of sessions) {
+        // console.log(session.filename, session.name, session.messages.length, JSON.stringify(session.metadata));
+        for (const message of session.messages) {
+            // don't forget content in truemessage can be string
+            if (typeof message.content == 'string') {
+                message.content = [{ kind: 'text', value: message.content }];
+            }
         }
     }
-    return { filename: filename.split('.')[0], name: session.name, messages, metadata: session.metadata };
-}));
-for (const session of truesessions) {
-    // console.log(session.filename, session.name, session.messages.length, JSON.stringify(session.metadata));
-    for (const message of session.messages) {
-        // don't forget content in truemessage can be string
-        if (typeof message.content == 'string') {
-            message.content = [{ kind: 'text', value: message.content }];
-        }
-    }
+    return sessions;
 }
+const truesessions = await readtrue();
 
-interface S5Session {
+interface Session5 {
     id: string,
     title: string,
     inserted_at: string, // this use iso8601
     updated_at: string, // this use iso8601
-    mapping: Record<string, S5MessageAndId>,
+    mapping: Record<string, Message5AndId>,
 }
-interface S5MessageAndId {
+interface Message5AndId {
     id: string,
     parent: string,
     children: string[],
-    message: S5Message,
+    message: Message5,
 }
-interface S5Message {
+interface Message5 {
     model: string,
     inserted_at: string,
-    fragments: S5Fragment[],
+    fragments: Fragment5[],
 }
-type S5Fragment =
+type Fragment5 =
     | { type: 'REQUEST', content: string }
     | { type: 'RESPONSE', content: string }
     | { type: 'THINK', content: string }
@@ -934,8 +1183,8 @@ type S5Fragment =
 // source#5, deepseek chat app data migration, from formal export function, 1990 sessions (include 543 existing sessions)
 // TODO s5 will be rerun with same or larger dataset and same or slightly changed data schema
 
-async function source5() {
-    const sessions = JSON.parse(await fs.readFile('/workspaces/huan-data-stage/deepseek-export-20261105.json', 'utf-8')) as S5Session[];
+async function read5(): Promise<Session5[]> {
+    const sessions = JSON.parse(await fs.readFile('deepseek-export-20261105.json', 'utf-8')) as Session5[];
 
     let sessionCount = 0;
     let existingSessionCount = 0;
@@ -1043,13 +1292,14 @@ async function source5() {
 
             // this is still using -chat and -reasoner? but not -flash and -pro?
             // source5 has model, but source4 don't have a field to distinguish -chat and -reasoner or -flash and -pro
+            // RESULT from later validation: message.model can be regarded as consistent with has-thinking-block
+            // but I'd like to add additional model information to distinguish v3, v4 and v4.1, split line according to official news release date
+            // source4 data is not changed, source: deepseek-extract implies deepseek v3
+            // 2026-04-24 change to -v4-flash and -v4-pro, 2026-09-10 change to -flash and -v4-pro
             if (!['deepseek-chat', 'deepseek-reasoner'].includes(message.model)) {
                 console.log(`session ${session.id} message ${messageId} model ${message.model}`);
             }
-            // many
-            if (truemessage && message.model == 'deepseek-reasoner') {
-                // console.log(`session ${truesession.filename} message ${messageId} model ${message.model}`);
-            }
+
             // const createTime = dayjs(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]');
             // console.log(`session ${session.id} message ${messageId} create time ${createTime}`);
             if (!Array.isArray(message.fragments)) {
@@ -1145,6 +1395,10 @@ async function source5() {
             if (!(requestCount || filesCount) && !(responseCount || thinkCount || resultsCount)) {
                 // console.log(`session ${session.id} message ${messageId} neither user nor assistant?, ${JSON.stringify({ requestCount, responseCount, thinkCount, filesCount, resultsCount })}`);
             }
+            // no fragment message don't have children
+            if (message.fragments.length == 0 && messageAndId.children.length) {
+                console.log(`session ${session.id} message ${messageId} is empty but has children`);
+            }
 
             // same as source 4, deepseek export don't have system message
             const role = requestCount || filesCount ? 'user' : 'assistant';
@@ -1182,6 +1436,18 @@ async function source5() {
                 }
             }
 
+            if (role == 'user' && message.model == 'deepseek-reasoner') {
+                // RESULT: many
+                // console.log(`session ${session.title} message ${messageId} is user while model is reasoner`);
+            } else if (role == 'assistant') {
+                if (thinkFragment && message.model != 'deepseek-reasoner') {
+                    console.log(`session ${session.id} message ${messageId} is assistant, has thinking block but not reasoner`);
+                // RESULT: some, at least 1 empty message, at least 5 服务器繁忙请稍后再试
+                } else if (!thinkFragment && message.model == 'deepseek-reasoner') {
+                    // console.log(`session ${session.id} message ${messageId} is assistant, has no thinking block but is reasoner`);
+                }
+            }
+
             const files = message.fragments.find(f => f.type == 'FILE')?.files;
             if (files && truemessage) {
                 if (!Array.isArray(truemessage.metadata.files)) {
@@ -1190,7 +1456,7 @@ async function source5() {
                 if (files.length != truemessage.metadata.files.length) {
                     console.log(`session ${truesession.filename} message ${messageId} file count mismatch`);
                 }
-                const s4files = truemessage.metadata.files.sort((f1: ChatMessageFile, f2: ChatMessageFile) => f1.id.localeCompare(f2.id));
+                const s4files = truemessage.metadata.files.sort((f1: Message4File, f2: Message4File) => f1.id.localeCompare(f2.id));
                 const s5files = [...files].sort((f1, f2) => f1.file_id.localeCompare(f2.file_id));
                 for (let fileIndex = 0; fileIndex < s4files.length; fileIndex += 1) {
                     const s4file = s4files[fileIndex];
@@ -1216,7 +1482,7 @@ async function source5() {
                     if (results.length != truemessage.response['search-results'].length) {
                         console.log(`session ${truesession.filename} message ${messageId} search result count mismatch`);
                     }
-                    const s4results = truemessage.response['search-results'].sort((f1: ChatMessageSearchResult, f2: ChatMessageSearchResult) => f1.url.localeCompare(f2.url));
+                    const s4results = truemessage.response['search-results'].sort((f1: Message4Result, f2: Message4Result) => f1.url.localeCompare(f2.url));
                     const s5results = [...results].sort((f1, f2) => f1.url.localeCompare(f2.url));
                     for (let resultIndex = 0; resultIndex < s4results.length; resultIndex += 1) {
                         const s4file = s4results[resultIndex];
@@ -1236,14 +1502,259 @@ async function source5() {
         if (!hasRoot) {
             console.log(`session ${session.id} no root`);
         }
-
-        // this data structure is very simple, only contain some create-time, and files and search results and no more
-
-        // if (sessionIndex <= 600 && sessionIndex > 400) {
-        // await fs.writeFile(`${filename}.yml`, b);
-        // }
-        // if (sessionIndex > 10) { break; }
     }
     console.log(sessionCount, existingSessionCount, messageCount, blockCount);
+    return sessions;
 }
-// await source5();
+async function write5(sessions: Session5[]) {
+
+    let sessionIndex = 0;
+    // rv: reverse validation
+    let reverseValidationSessionCount = 0;
+    let reverseValidationMessageCount = 0;
+    let reverseValidationContentBlockContent = 0;
+
+    for (const session of sessions) {
+        const filename = dayjs(session.inserted_at).format('YYYYMMDD-HHmmss');
+        if (filename != '20250708-005909' && npfs.existsSync(`${filename}.yml`)) {
+            // console.log(`skip ${filename}`);
+            continue;
+        }
+
+        let b = '';
+        // oh, title can have colon
+        if (!session.title) {
+            b += `name: (no title)\n`;
+        } else if (session.title.includes(': ')) {
+            b += `name: '${session.title.trim()}'\n`;
+        } else {
+            b += `name: ${session.title.trim()}\n`;
+        }
+        b += `metadata:\n`;
+        b += `  source: deepseek-chatapp-migration-202611\n`;
+        b += `  source-id: ${session.id}\n`;
+        b += `  source-create-time: ${dayjs(session.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        if (session.inserted_at != session.updated_at) {
+            b += `  source-update-time: ${dayjs(session.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+        }
+        for (const [messageId, messageAndId] of Object.entries(session.mapping)) {
+            if (messageId == 'root') { continue; }
+            const message = messageAndId.message;
+            const role = message.fragments.some(f => f.type == 'REQUEST' || f.type == 'FILE') ? 'user' : 'assistant';
+            b += '\n';
+            b += `${role} ${messageId}${messageAndId.parent && messageAndId.parent != 'root' ? `>${messageAndId.parent}` : ''}:\n`;
+            if (role == 'assistant') {
+                b += `  content:\n`;
+                // server side search tool's result is assitant message's content block
+                // but for now just record them in metadata
+                const thinkingFragment = message.fragments.find(f => f.type == 'THINK');
+                if (thinkingFragment) {
+                    b += `  - kind: think\n`;
+                    b += `    value: |-\n`;
+                    for (const line of thinkingFragment.content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `      ${line.trimEnd()}\n`;
+                        }
+                    }
+                }
+                const textFragment = message.fragments.find(f => f.type == 'RESPONSE');
+                if (textFragment) {
+                    b += `  - kind: text\n`;
+                    b += `    value: |-\n`;
+                    for (const line of textFragment.content.trim().split('\n')) {
+                        if (line.trim().length == 0) {
+                            b += '\n'
+                        } else {
+                            b += `      ${line.trimEnd()}\n`;
+                        }
+                    }
+                }
+                if (!thinkingFragment && !textFragment) {
+                    b += `  - kind: text\n`;
+                    b += `    value: (this is empty message in migrate data, which means 服务器繁忙，请稍后再试)\n`;
+                }
+                b += '  response:\n';
+            } else {
+                const textFragment = message.fragments.find(f => f.type == 'REQUEST');
+                if (textFragment) {
+                    if (textFragment.content.trim().includes('\n')
+                        || textFragment.content.trim().includes(': ')
+                        || textFragment.content.trim().startsWith('"')
+                        || textFragment.content.trim().startsWith('- ')
+                    ) {
+                        b += `  content: |-\n`;
+                        for (const line of textFragment.content.trim().split('\n')) {
+                            if (line.trim().length == 0) {
+                                b += '\n'
+                            } else {
+                                b += `    ${line.trimEnd()}\n`;
+                            }
+                        }
+                    } else if (
+                        textFragment.content.trim().includes(' #')
+                        // message.content.trim().startsWith('"')
+                        // || message.content.trim().startsWith('[')
+                        // || /^\d+(\.\d+)?$/.test(message.content.trim())
+                    ) {
+                        b += `  content: '${textFragment.content.trim()}'\n`;
+                    // } else if (message.content.trim().length == 0) {
+                    //     b += `  content: ''\n`;
+                    } else {
+                        b += `  content: ${textFragment.content.trim()}\n`;
+                    }
+                }
+                b += '  metadata:\n';
+            }
+            b += `    create-time: ${dayjs(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')}\n`;
+            const filesFragment = message.fragments.find(f => f.type == 'FILE');
+            if (filesFragment) {
+                b += `    files:\n`;
+                for (const file of filesFragment.files) {
+                    b += `    - file-id: ${file.file_id}\n`;
+                    b += `      file-name: ${file.file_name}\n`;
+                    b += `      file-size: ${file.file_size}\n`;
+                }
+            }
+            const resultsFragments = message.fragments.filter(f => f.type == 'SEARCH');
+            if (resultsFragments.length) {
+                b += `    search-results:\n`;
+                for (const search_result of resultsFragments
+                    .reduce<{ url: string, title: string }[]>((acc, f) => { acc.push(...f.results); return acc; }, []))
+                {
+                    // console.log(search_result);
+                    b += `    - url: ${search_result.url}\n`;
+                    if (search_result.title.trim().startsWith('[')
+                        || search_result.title.trim().includes(': ')
+                        || search_result.title.trim().includes(' #')
+                        || search_result.title.trim().startsWith('#')
+                        || search_result.title.trim().startsWith('@')
+                        || search_result.title.trim().startsWith('*')
+                        || search_result.title.trim().startsWith("'")
+                        || search_result.title.trim().endsWith(':')
+                        || search_result.title.trim().startsWith('"')
+                    ) {
+                        if (search_result.title.trim().includes("'")) {
+                            b += `      title: "${search_result.title.trim()}"\n`;
+                        } else {
+                            b += `      title: '${search_result.title.trim()}'\n`;
+                        }
+                    } else if (!search_result.title.trim()) {
+                        b += `      title: (empty)\n`;
+                    } else {
+                        b += `      title: ${search_result.title.trim()}\n`;
+                    }
+                }
+            }
+        }
+
+        await fs.writeFile(`${filename}.yml`, b);
+        sessionIndex += 1;
+
+        // console.log(filename);
+        const document = yaml.parse(b);
+        // const document = yaml.parse(await fs.readFile(`${filename}.yml`, 'utf-8'));
+
+        if (document.name != (session.title?.trim() || '(no title)')) {
+            console.log(`session ${filename} unexpected name`);
+        }
+        if (document.metadata['source'] != 'deepseek-chatapp-migration-202611') {
+            console.log(`session ${filename} unexpected source`);
+        }
+        if (document.metadata['source-id'] != session.id) {
+            console.log(`session ${filename} unexpected source id`);
+        }
+        if (document.metadata['source-create-time'] != dayjs(session.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')) {
+            console.log(`session ${filename} unexpected source create time`);
+        }
+        if (session.inserted_at != session.updated_at
+            && document.metadata['source-update-time'] != dayjs(session.updated_at).format('YYYY-MM-DDTHH:mm:ss[Z]')
+        ) {
+            console.log(`session ${filename} unexpected source update time`);
+        }
+        for (const [messageId, messageAndId] of Object.entries(session.mapping)) {
+            if (messageId == 'root') { continue; }
+            const message = messageAndId.message;
+            const role = message.fragments.some(f => f.type == 'REQUEST' || f.type == 'FILE') ? 'user' : 'assistant';
+
+            const key = `${role} ${messageId}${messageAndId.parent && messageAndId.parent != 'root' ? `>${messageAndId.parent}` : ''}`;
+            const element = document[key];
+            if (!element) {
+                console.log(`document ${filename} message ${messageId} missing`);
+            }
+            if (role == 'assistant') {
+                let blockIndex = 0;
+                const thinkingFragment = message.fragments.find(f => f.type == 'THINK');
+                if (thinkingFragment) {
+                    if (element.content[blockIndex].kind != 'think') {
+                        console.log(`document ${filename} message ${messageId} content[${blockIndex}].kind not think`);
+                    }
+                    if (element.content[blockIndex].value != thinkingFragment.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                        console.log(`document ${filename} message ${messageId} content[${blockIndex}].value not same`);
+                    } else {
+                        reverseValidationContentBlockContent += 1;
+                    }
+                    blockIndex += 1;
+                }
+                const textFragment = message.fragments.find(f => f.type == 'RESPONSE');
+                if (textFragment) {
+                    if (element.content[blockIndex].kind != 'text') {
+                        console.log(`document ${filename} message ${messageId} content[${blockIndex}].kind not text`);
+                    }
+                    if (element.content[blockIndex].value != textFragment.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                        console.log(`document ${filename} message ${messageId} content[${blockIndex}].value not same`);
+                    } else {
+                        reverseValidationContentBlockContent += 1;
+                    }
+                }
+            } else {
+                const textFragment = message.fragments.find(f => f.type == 'REQUEST');
+                if (element.content != textFragment.content.trim().split('\n').map(v => v.trimEnd()).join('\n')) {
+                    console.log(`document ${filename} message ${messageId} content not same`);
+                } else {
+                    reverseValidationContentBlockContent += 1;
+                }
+            }
+            const metadata = role == 'assistant' ? element.response : element.metadata;
+            if (metadata['create-time'] != dayjs(message.inserted_at).format('YYYY-MM-DDTHH:mm:ss[Z]')) {
+                console.log(`document ${filename} message ${messageId} create time not same`);
+            }
+            const filesFragment = message.fragments.find(f => f.type == 'FILE');
+            if (filesFragment) {
+                for (const [file, fileIndex] of filesFragment.files.map((f, i) => [f, i] as const)) {
+                    const element = metadata.files[fileIndex];
+                    if (file.file_id != element['file-id']) {
+                        console.log(`document ${filename} message ${messageId} file ${fileIndex} file id not same`);
+                    }
+                    if (file.file_name != element['file-name']) {
+                        console.log(`document ${filename} message ${messageId} file ${fileIndex} file name not same`);
+                    }
+                    if (file.file_size != element['file-size']) {
+                        console.log(`document ${filename} message ${messageId} file ${fileIndex} file size not same`);
+                    }
+                }
+            }
+            const resultsFragments = message.fragments.filter(f => f.type == 'SEARCH');
+            if (resultsFragments.length) {
+                for (const [result, resultIndex] of resultsFragments
+                    .reduce<{ url: string, title: string }[]>((acc, f) => { acc.push(...f.results); return acc; }, [])
+                    .map((r, i) => [r, i] as const))
+                {
+                    const element = metadata['search-results'][resultIndex];
+                    if (result.url != element.url) {
+                        console.log(`document ${filename} message ${messageId} result ${resultIndex} url not same`);
+                    }
+                    if ((result.title.trim() || '(empty)') != element.title) {
+                        console.log(`document ${filename} message ${messageId} result ${resultIndex} title not same`);
+                    }
+                }
+            }
+            reverseValidationMessageCount += 1;
+        }
+        reverseValidationSessionCount += 1;
+    }
+    console.log(reverseValidationSessionCount, reverseValidationMessageCount, reverseValidationContentBlockContent);
+}
+const session5s = await read5();
+await write5(session5s);
