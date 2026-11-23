@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import npfs from 'node:fs';
 import dayjs from 'dayjs';
 import { diffLines } from 'diff';
+import mysql from 'mysql2/promise';
 import yaml from 'yaml';
 
 // source#1 was assigned to huan initial test data, but the data schema really changes many times so this batch index is meaningless
@@ -18,6 +19,9 @@ function readMySQLCSV<T>(raw: string, map: (fields: string[]) => T): T[] {
             if (inQuotes) {
                 current += ch;
                 if (ch == '\\' && line[i + 1] == '"') {
+                    current += line[i + 1];
+                    i++;
+                } else if (ch == '\\' && line[i + 1] == '\\') {
                     current += line[i + 1];
                     i++;
                 } else if (ch == '"') {
@@ -438,10 +442,6 @@ async function write3(sessions: Session3[], messages: Message3[]) {
     console.log(ok_session_count, ok_message_count, ok_content_length);
 }
 // const session3s = await read3();
-
-// TODO validate source3 against chatapp2025-backup-*.sql files
-function readalt34() {
-}
 
 // source#4, deepseek chat app old data migration, it is collected from f12 api not nowadays formal export function, 543 sessions
 // reference archive/theai/shapes.xml, theai/migrate.ts
@@ -1756,5 +1756,499 @@ async function write5(sessions: Session5[]) {
     }
     console.log(reverseValidationSessionCount, reverseValidationMessageCount, reverseValidationContentBlockContent);
 }
-const session5s = await read5();
-await write5(session5s);
+// const session5s = await read5();
+// await write5(session5s);
+
+// source alternative#1, mysql csv backup files for tables that is created from source#4, it tries to match source#3 data
+// schema but still results in a lot of differences and different database table while still discards a lot of information
+
+interface SessionAlt1 {
+    id: string,
+    seqId: number,
+    title: string,
+    createTime: string,
+    updateTime: string,
+}
+interface MessageAlt1 {
+    sessionId: string,
+    messageId: number,
+    parentId: number,
+    role: string,
+    content: string,
+    thinkingEnabled: boolean,
+    thinkingContent: string,
+    searchEnabled: boolean,
+    accumulatedTokenUsage: number,
+    createTime: string,
+}
+async function readalt1() {
+
+    const sessions = readMySQLCSV(await fs.readFile('mysql-backup-20260319-dsession.csv', 'utf8'), fields => ({
+        id: fields[0],
+        seqId: +fields[1],
+        title: fields[2],
+        createTime: fields[3],
+        updateTime: fields[4],
+    } as SessionAlt1));
+
+    const messages = readMySQLCSV(await fs.readFile('mysql-backup-20260319-dmessage.csv', 'utf8'), fields => ({
+        sessionId: fields[0],
+        messageId: +fields[1],
+        parentId: +fields[2],
+        role: fields[3],
+        content: fields[4],
+        thinkingEnabled: fields[5].codePointAt(0) != 0,
+        thinkingContent: fields[6],
+        accumulatedTokenUsage: +fields[7],
+        createTime: fields[8],
+        searchEnabled: fields[9].codePointAt(0) != 0,
+    } as MessageAlt1));
+
+    let matchCount = 0;
+    const sessionIds: string[] = [];
+    for (const session of sessions) {
+        if (sessionIds.includes(session.id)) {
+            console.log(`alt1: session ${session.id} duplicate id`);
+        }
+        sessionIds.push(session.id);
+    
+        const truesession = truesessions.find(s => s.metadata && s.metadata['source-id'] == session.id);
+        if (!truesession) {
+            console.log(`alt1: session ${session.id} not found in true data`);
+        }
+        const filename = truesession.filename;
+        if (sessions.some(s => s.id != session.id && s.seqId == session.seqId)) {
+            console.log(`alt1: session ${filename} duplicate seq id`);
+        }
+        if (session.seqId != truesession.metadata['source-seq-id']) {
+            console.log(`alt1: session ${filename} seq id not same as true`);
+        } else { matchCount += 1; }
+        if (session.title.trim() != truesession.name) {
+            console.log(`alt1: session ${filename} name not same as true`);
+        } else { matchCount += 1; }
+        // dayjs need additional plugin to work with tz, so the answer is...
+        // hardcode subtract 8 hours
+        const createTime = dayjs(session.createTime, 'YYYY-MM-DD HH:mm:ss').subtract(8, 'hour');
+        // may be +1s difference
+        if (createTime.diff(dayjs(truesession.metadata['source-create-time']), 'second') > 1){
+            console.log(`alt1: session ${filename} create time not same as true`, createTime, truesession.metadata['source-create-time']);
+        } else { matchCount += 1; }
+        const updateTime = dayjs(session.updateTime, 'YYYY-MM-DD HH:mm:ss').subtract(8, 'hour');
+        const trueUpdateTime = dayjs(truesession.metadata['source-update-time'] ?? truesession.metadata['source-create-time']);
+        if (updateTime.diff(trueUpdateTime, 'second') > 1 || updateTime.diff(trueUpdateTime, 'second') < -1) {
+            // RESULT: the classic case captured in source4 and changed in source5 in the process of developing source3
+            console.log(`alt1: session ${filename} update time not same as true`);
+        } else { matchCount += 1; }
+
+        for (const message of messages.filter(m => m.sessionId == session.id)) {
+            const truemessage = truesession.messages.find(m => m.id == message.messageId);
+            if (!truemessage) {
+                console.log(`alt1: session ${filename} message ${message.messageId} not found in true`);
+            }
+            if (truemessage.role != message.role.toLowerCase()) {
+                console.log(`alt1: session ${filename} message ${message.messageId} role not same`);
+            } else { matchCount += 1; }
+            if (truemessage.parentId && message.parentId != truemessage.parentId) {
+                console.log(`alt1: session ${filename} message ${message.messageId} parent id not same`);
+            } else { matchCount += 1; }
+
+            if (message.thinkingContent) {
+                const thinkingBlock = truemessage.content.find(c => c.kind == 'think');
+                if (message.thinkingContent.trim().split('\n').map(v => v.trimEnd()).join('\n') != thinkingBlock.value) {
+                    console.log(`alt1: session ${filename} message ${message.messageId} thinking content not same`);
+                } else { matchCount += 1; }
+            }
+            const textBlock = truemessage.content.find(c => c.kind == 'text');
+            if (message.content.trim().split('\n').map(v => v.trimEnd()).join('\n') != textBlock.value) {
+                console.log(`alt1: session ${filename} message ${message.messageId} content not same`);
+            } else { matchCount += 1; }
+
+            const metadata = truemessage.role == 'assistant' ? truemessage.response : truemessage.metadata;
+            if (message.thinkingEnabled && !metadata['thinking-enabled']) {
+                console.log(`alt1: session ${filename} message ${message.messageId} thinking enabled not same`);
+            } else { matchCount += 1; }
+            if (message.searchEnabled && !metadata['search-enabled']) {
+                console.log(`alt1: session ${filename} message ${message.messageId} search enabled not same`);
+            } else { matchCount += 1; }
+            if (message.accumulatedTokenUsage && metadata['accumulated-token-usage'] != message.accumulatedTokenUsage) {
+                console.log(`alt1: session ${filename} message ${message.messageId} accumulated token usage not same`);
+            } else { matchCount += 1; }
+
+            const createTime = dayjs(message.createTime, 'YYYY-MM-DD HH:mm:ss').subtract(8, 'hour');
+            // may be +1s difference
+            if (createTime.diff(dayjs(metadata['create-time']), 'second') > 1 || createTime.diff(dayjs(metadata['create-time']), 'second') < -1){
+                console.log(`alt1: session ${filename} message ${message.messageId} create time not same`);
+            } else { matchCount += 1; }
+        }
+    }
+    for (const message of messages) {
+        if (!sessionIds.includes(message.sessionId)) {
+            console.log(`alt1: message ${message.sessionId} ${message.messageId} sessionid not found`);
+        }
+    }
+
+    console.log(sessions.length, messages.length, matchCount);
+}
+// await readalt1();
+
+// source alternative#2, mysql sql backup files for source#3,
+// or more specifically, chatapp2025 before message id scope change
+
+// https://dev.mysql.com/doc/mysql-installation-excerpt/8.0/en/docker-mysql-more-topics.html
+// docker run -d --rm --name mysql1
+//   -e MYSQL_RANDOM_ROOT_PASSWORD=1 -e MYSQL_DATABASE=YALA -e MYSQL_USER=yala -e MYSQL_PASSWORD=123456
+//   -v init.sql:/docker-entrypoint-initdb.d/init.sql -v ~/mysql-socket:/var/run/mysqld
+//   -p 3306:3306 mysql
+
+interface SessionAlt2 {
+    SessionId: number,
+    UserId: number,
+    Name: string,
+    Comment?: string,
+    // Date become iso8601 after json.stringify,
+    // and incorrectly add a Z flag although the value is +8:00
+    CreateTime: string, // Date // mysql library default setting result in this
+    Tags: string,
+    // buffer become this after json.stringify
+    Shared: { type: 'buffer', data: number[] }, // Buffer, // length 1
+    ShareId?: string,
+}
+interface MessageAlt2 {
+    MessageId: number,
+    SessionId: number,
+    Role: string,
+    Content: string,
+    CreateTime: string,
+    PromptTokenCount?: number,
+    CompletionTokenCount?: number,
+    ParentMessageId?: number,
+}
+async function readalt2() {
+
+    // // https://sidorares.github.io/node-mysql2/docs
+    // await using connection = await mysql.createConnection({
+    //     socketPath: '/var/run/mysqld/mysqld.sock',
+    //     user: 'yala',
+    //     password: '123456',
+    //     database: 'YALA',
+    // });
+
+    // const [sessions] = await connection.query<SessionAlt2[] & mysql.QueryResult>('SELECT * FROM `Session`;');
+    // const [messages] = await connection.query<MessageAlt2[] & mysql.QueryResult>('SELECT * FROM `Message`;');
+    // await fs.writeFile('session.json', JSON.stringify(sessions));
+    // await fs.writeFile('message.json', JSON.stringify(messages)); 
+
+    const sessions: SessionAlt2[] = JSON.parse(await fs.readFile('session.json', 'utf-8'));
+    const messages: MessageAlt2[] = JSON.parse(await fs.readFile('message.json', 'utf-8'));
+
+    // database validated a lot for you,
+    // no unkown columnes, no duplicate pk, not null when column is not null
+
+    let matchCount = 0;
+    for (const session of sessions) {
+        if (session.UserId != 1) {
+            console.log(`session ${session.SessionId} user id not 1`);
+        }
+        const truesession = truesessions.find(s => s.metadata &&
+            s.metadata.source == 'chatapp2025/theai/yala' && s.metadata['source-id'] == session.SessionId);
+        if (!truesession) {
+            console.log(`session ${session.SessionId} not found true session`);
+        }
+        if (session.Name != truesession.name) {
+            console.log(`session ${truesession.filename} name not same`);
+        } else { matchCount += 1; }
+        if (session.Comment && session.Comment != truesession.metadata['source-comment']) {
+            console.log(`session ${truesession.filename} comment not same`);
+        } else { matchCount += 1; }
+        const createTime = dayjs(session.CreateTime).subtract(8, 'hours');
+        const trueCreateTime = dayjs(truesession.metadata['source-create-time'], 'YYYY-MM-DD HH:mm:ss');
+        if (createTime.diff(trueCreateTime, 'second') > 1 || createTime.diff(trueCreateTime, 'second') < -1) {
+            console.log(`session ${truesession.filename} create time not same`, session.CreateTime, truesession.metadata['source-create-time']);
+        } else { matchCount += 1; }
+        // RESULT: 1, obviously test data because that tag is called "test tag"
+        if (session.Tags && session.Tags != truesession.metadata['source-tags']) {
+            console.log(`session ${truesession.filename} tags not same`);
+        } else { matchCount += 1; }
+        if ((session.Shared.data[0] == 1) != (truesession.metadata['source-shared-flag'] == 1)) {
+            console.log(`session ${truesession.filename} share flag not same`);
+        } else { matchCount += 1; }
+        // RESULT: 1, obviously enabled share after backup
+        if (session.ShareId != truesession.metadata['source-share-id']) {
+            console.log(`session ${truesession.filename} share id not same`);
+        } else { matchCount += 1; }
+
+        // alt21 message id is overall pk
+        for (const message of messages.filter(m => m.SessionId == session.SessionId)) {
+            const truemessage = truesession.messages.find(m => m.id == message.MessageId);
+            // RESULT: 2 sets of message-x content mismatch, message x+1 missing, message x+2 parent id not same
+            //         they are assumed manual fixed result of incorrect role relationship because of chatapp2025 ui bug or data migration error
+            if (!truemessage) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} not found`);
+                continue;
+            }
+            if (message.Role != truemessage.role) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} role not same`);
+            } else { matchCount += 1; }
+            if (message.ParentMessageId && message.ParentMessageId != truemessage.parentId) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} parent id not same`);
+            } else { matchCount += 1; }
+            // source3 have system message but don't have thinking content if you forget
+            // RESULT: 1 mismatch, check the update time which is obviously edited after backup
+            if (truemessage.content[0].kind != 'text') {
+                console.log(`session ${truesession.filename} message ${message.MessageId} true content block type not text?`);
+            } else { matchCount += 1; }
+            if (message.Content.trim().split('\n').map(v => v.trimEnd()).join('\n') != (truemessage.content[0] as any).value) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} content not same`);
+            } else { matchCount += 1; }
+            const metadata = message.Role == 'assistant' ? truemessage.response : truemessage.metadata;
+            const createTime = dayjs(message.CreateTime).subtract(8, 'hours');
+            const trueCreateTime = dayjs(metadata['source-create-time'], 'YYYY-MM-DD HH:mm:ss');
+            if (createTime.diff(trueCreateTime, 'second') > 1 || createTime.diff(trueCreateTime, 'second') < -1) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} create time not same`);
+            } else { matchCount += 1; }
+            if (message.PromptTokenCount && message.PromptTokenCount != metadata['source-usage-input-token']) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} input token not same`);
+            } else { matchCount += 1; }
+            if (message.CompletionTokenCount && message.CompletionTokenCount != metadata['source-usage-output-token']) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} output token not same`);
+            } else { matchCount += 1; }
+        }
+    }
+    // alt2 don't have message.sessionid fk if you forget
+    for (const message of messages) {
+        if (!sessions.some(s => s.SessionId == message.SessionId)) {
+            console.log(`message ${message.SessionId} ${message.MessageId} session id not found`);
+        }
+    }
+    console.log(sessions.length, messages.length, matchCount);
+}
+// await readalt2();
+
+// source alternative#3, mysql sql backup files for source#3 and source#4,
+// compare to alt2, this is after message id scope change and include simplified source#4
+
+interface SessionAlt3 extends SessionAlt2 {
+    // same
+}
+interface MessageAlt3 extends MessageAlt2 {
+    UpdateTime: string,
+    ThinkingContent?: string,
+}
+// dsession and dmessage
+interface SessionAlt3Alt {
+    id: string,
+    seq_id: number,
+    title: string,
+    inserted_at: string,
+    updated_at: string,
+}
+interface MessageAlt3Alt {
+    session_id: string,
+    message_id: number,
+    parent_id?: number,
+    role: string,
+    content: string,
+    thinking_enabled: { type: 'buffer', data: number[] },
+    thinking_content?: string,
+    accumulated_token_usage: number,
+    inserted_at: string,
+    search_enabled: { type: 'buffer', data: number[] },
+}
+
+async function readalt3() {
+
+    // await using connection = await mysql.createConnection({
+    //     socketPath: '/var/run/mysqld/mysqld.sock',
+    //     user: 'yala',
+    //     password: '123456',
+    //     database: 'YALA',
+    // });
+    // const [sessions] = await connection.query<SessionAlt3[] & mysql.QueryResult>('SELECT * FROM `Session`;');
+    // const [messages] = await connection.query<MessageAlt3[] & mysql.QueryResult>('SELECT * FROM `Message`;');
+    // const [dsessions] = await connection.query<SessionAlt3[] & mysql.QueryResult>('SELECT * FROM `dsession`;');
+    // const [dmessages] = await connection.query<MessageAlt3[] & mysql.QueryResult>('SELECT * FROM `dmessage`;');
+    // await fs.writeFile('session.json', JSON.stringify(sessions));
+    // await fs.writeFile('message.json', JSON.stringify(messages)); 
+    // await fs.writeFile('dsession.json', JSON.stringify(dsessions));
+    // await fs.writeFile('dmessage.json', JSON.stringify(dmessages)); 
+
+    const sessions: SessionAlt3[] = JSON.parse(await fs.readFile('session.json', 'utf-8'));
+    const messages: MessageAlt3[] = JSON.parse(await fs.readFile('message.json', 'utf-8'));
+    const dsessions: SessionAlt3Alt[] = JSON.parse(await fs.readFile('dsession.json', 'utf-8'));
+    const dmessages: MessageAlt3Alt[] = JSON.parse(await fs.readFile('dmessage.json', 'utf-8'));
+
+    // database validated a lot for you,
+    // no unkown columnes, no duplicate pk, not null when column is not null
+
+    let matchCount = 0;
+    for (const session of sessions) {
+        if (session.UserId != 1) {
+            console.log(`session ${session.SessionId} user id not 1`);
+        }
+        const truesession = truesessions.find(s => s.metadata &&
+            s.metadata.source == 'chatapp2025/theai/yala' && s.metadata['source-id'] == session.SessionId);
+        if (!truesession) {
+            console.log(`session ${session.SessionId} not found true session`);
+        }
+        // RESULT: 3, obviously improved session name after backup
+        if (session.Name != truesession.name) {
+            console.log(`session ${truesession.filename} name not same`);
+        } else { matchCount += 1; }
+        // RESULT: 1, obviously test data because the content is "test comment"
+        if (session.Comment && session.Comment != truesession.metadata['source-comment']) {
+            console.log(`session ${truesession.filename} comment not same`);
+        } else { matchCount += 1; }
+
+        // compare to alt2 same mysqldump file, this time don't need -8hour
+        const createTime = dayjs(session.CreateTime);
+        const trueCreateTime = dayjs(truesession.metadata['source-create-time'], 'YYYY-MM-DD HH:mm:ss');
+        if (createTime.diff(trueCreateTime, 'second') > 1 || createTime.diff(trueCreateTime, 'second') < -1) {
+            console.log(`session ${truesession.filename} create time not same`, session.CreateTime, truesession.metadata['source-create-time']);
+        } else { matchCount += 1; }
+        if (session.Tags && session.Tags != truesession.metadata['source-tags']) {
+            console.log(`session ${truesession.filename} tags not same`);
+        } else { matchCount += 1; }
+        // RESULT: several, obviously enabled share after backup
+        if ((session.Shared.data[0] == 1) != (truesession.metadata['source-shared-flag'] == 1)) {
+            console.log(`session ${truesession.filename} share flag not same`);
+        } else { matchCount += 1; }
+        if (session.ShareId != truesession.metadata['source-share-id']) {
+            console.log(`session ${truesession.filename} share id not same`);
+        } else { matchCount += 1; }
+
+        // alt21 message id is overall pk
+        for (const message of messages.filter(m => m.SessionId == session.SessionId)) {
+            const truemessage = truesession.messages.find(m => m.id == message.MessageId);
+            // same x-content, x+1-missing, x+2-parent-id sequence as alt2, but only remain 1 set,
+            // that mean one set is fixed between alt2 and alt3, but the remaining set is fixed later
+            if (!truemessage) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} not found`);
+                continue;
+            }
+            if (message.Role != truemessage.role) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} role not same`);
+            } else { matchCount += 1; }
+            if (message.ParentMessageId && message.ParentMessageId != truemessage.parentId) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} parent id not same`);
+            } else { matchCount += 1; }
+            // source3 have system message but don't have thinking content if you forget
+            // RESULT: 2, obviously edited after backup
+            if (truemessage.content[0].kind != 'text') {
+                console.log(`session ${truesession.filename} message ${message.MessageId} true content block type not text?`);
+            } else { matchCount += 1; }
+            if (message.Content.trim().split('\n').map(v => v.trimEnd()).join('\n') != (truemessage.content[0] as any).value) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} content not same`);
+            } else { matchCount += 1; }
+            const metadata = message.Role == 'assistant' ? truemessage.response : truemessage.metadata;
+
+            const createTime = dayjs(message.CreateTime);
+            const trueCreateTime = dayjs(metadata['source-create-time'], 'YYYY-MM-DD HH:mm:ss');
+            if (createTime.diff(trueCreateTime, 'second') > 1 || createTime.diff(trueCreateTime, 'second') < -1) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} create time not same`);
+            } else { matchCount += 1; }
+            // compare to alt2, added column update time
+            if (message.UpdateTime != message.CreateTime) {
+                const updateTime = dayjs(message.UpdateTime);
+                const trueUpdateTime = dayjs((metadata['source-update-time'] || metadata['source-create-time']), 'YYYY-MM-DD HH:mm:ss');
+                if (updateTime.diff(trueUpdateTime, 'second') > 1 || updateTime.diff(trueUpdateTime, 'second') < -1) {
+                    console.log(`session ${truesession.filename} message ${message.MessageId} update time not same`);
+                } else { matchCount += 1; }
+            }
+
+            if (message.PromptTokenCount && message.PromptTokenCount != metadata['source-usage-input-token']) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} input token not same`);
+            } else { matchCount += 1; }
+            if (message.CompletionTokenCount && message.CompletionTokenCount != metadata['source-usage-output-token']) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} output token not same`);
+            } else { matchCount += 1; }
+
+            if (message.ThinkingContent) {
+                console.log(`session ${truesession.filename} message ${message.MessageId} has thinking content?`);
+            }
+        }
+    }
+    // alt3 both message and dmessage have correct fk so no need to validate that
+
+    console.log(sessions.length, messages.length, matchCount);
+
+    // RESULT overall 1 mismatch, which is the classic session edited after backup
+    matchCount = 0;
+    const sessionIds: string[] = [];
+    for (const session of dsessions) {
+        if (sessionIds.includes(session.id)) {
+            console.log(`alt3: session ${session.id} duplicate id`);
+        }
+        sessionIds.push(session.id);
+    
+        const truesession = truesessions.find(s => s.metadata && s.metadata['source-id'] == session.id);
+        if (!truesession) {
+            console.log(`alt3: dsession ${session.id} not found in true data`);
+        }
+        const filename = truesession.filename;
+        if (dsessions.some(s => s.id != session.id && s.seq_id == session.seq_id)) {
+            console.log(`alt3: dsession ${filename} duplicate seq id`);
+        }
+        if (session.seq_id != truesession.metadata['source-seq-id']) {
+            console.log(`alt3: dsession ${filename} seq id not same as true`);
+        } else { matchCount += 1; }
+        if (session.title.trim() != truesession.name) {
+            console.log(`alt3: dsession ${filename} name not same as true`);
+        } else { matchCount += 1; }
+
+        // the time from mysql2 library default setting and then json.stringify results in +8:00 but incorrectly ends with z
+        // the correct action is hardcode subtract 8 hours
+        const createTime = dayjs(session.inserted_at).subtract(8, 'hours');
+        // may be +1s difference
+        if (createTime.diff(dayjs(truesession.metadata['source-create-time']), 'second') > 1){
+            console.log(`alt3: dsession ${filename} create time not same as true`);
+        } else { matchCount += 1; }
+        const updateTime = dayjs(session.updated_at).subtract(8, 'hours');
+        const trueUpdateTime = dayjs(truesession.metadata['source-update-time'] ?? truesession.metadata['source-create-time']);
+        if (updateTime.diff(trueUpdateTime, 'second') > 1 || updateTime.diff(trueUpdateTime, 'second') < -1) {
+            console.log(`alt3: dsession ${filename} update time not same as true`);
+        } else { matchCount += 1; }
+
+        for (const message of dmessages.filter(m => m.session_id == session.id)) {
+            const truemessage = truesession.messages.find(m => m.id == message.message_id);
+            if (!truemessage) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} not found in true`);
+            }
+            if (truemessage.role != message.role.toLowerCase()) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} role not same`);
+            } else { matchCount += 1; }
+            if (truemessage.parentId && message.parent_id != truemessage.parentId) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} parent id not same`);
+            } else { matchCount += 1; }
+
+            if (message.thinking_content) {
+                const thinkingBlock = truemessage.content.find(c => c.kind == 'think');
+                if (message.thinking_content.trim().split('\n').map(v => v.trimEnd()).join('\n') != thinkingBlock.value) {
+                    console.log(`alt3: dsession ${filename} message ${message.message_id} thinking content not same`);
+                } else { matchCount += 1; }
+            }
+            const textBlock = truemessage.content.find(c => c.kind == 'text');
+            if (message.content.trim().split('\n').map(v => v.trimEnd()).join('\n') != textBlock.value) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} content not same`);
+            } else { matchCount += 1; }
+
+            const metadata = truemessage.role == 'assistant' ? truemessage.response : truemessage.metadata;
+            if ((message.thinking_enabled.data[0] == 1) != (metadata['thinking-enabled'] === true)) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} thinking enabled not same`);
+            } else { matchCount += 1; }
+            if ((message.search_enabled.data[0] == 1) != (metadata['search-enabled'] === true)) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} search enabled not same`);
+            } else { matchCount += 1; }
+            if (message.accumulated_token_usage && metadata['accumulated-token-usage'] != message.accumulated_token_usage) {
+                console.log(`alt3: dsession ${filename} message ${message.message_id} accumulated token usage not same`);
+            } else { matchCount += 1; }
+
+            const createTime = dayjs(message.inserted_at).subtract(8, 'hours');
+            // may be +1s difference
+            if (createTime.diff(dayjs(metadata['create-time']), 'second') > 1 || createTime.diff(dayjs(metadata['create-time']), 'second') < -1){
+                console.log(`alt3: dsession ${filename} message ${message.message_id} create time not same`);
+            } else { matchCount += 1; }
+        }
+    }
+    console.log(dsessions.length, dmessages.length, matchCount);
+}
+await readalt3();
