@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import npfs from 'node:fs';
+import path from 'node:path';
 import dayjs from 'dayjs';
 import { diffLines } from 'diff';
 import mysql from 'mysql2/promise';
@@ -1153,7 +1154,7 @@ async function readtrue(): Promise<TrueSession[]> {
     }
     return sessions;
 }
-const truesessions = await readtrue();
+const truesessions: TrueSession[] = []; // await readtrue();
 
 interface Session5 {
     id: string,
@@ -2251,4 +2252,228 @@ async function readalt3() {
     }
     console.log(dsessions.length, dmessages.length, matchCount);
 }
-await readalt3();
+// await readalt3();
+
+// source 6, vscode copilot sessions from workspace storage
+// note this is the old storage format of vscode github copilot plugin, at the time of
+// writing, the directories and json files is merged into vscdb sqlite database file not outside it
+async function read6() {
+    const baseBaseDirectory = '/workspaces/vscode-workspace-storage-';
+
+    let matchCount1 = 0;
+    let matchCount2 = 0;
+
+    // 1. collect basic ids from file structure
+    // - top level is workspace folders, folder name is workspace id, for each workspace folder
+    // - workspace.json, which exactly contains 1 property which value is a path to folder or .code-workspace file
+    // - state.vscdb file which contains actual data for workspace related settings
+    // - chatSessions directory to store chat sessions, chatEditingSessions directory seems related to edit file tools
+    interface Workspace1 {
+        backupId: string,
+        id: string,
+        path: string,
+        sessionIds: string[],
+    }
+    const workspace1s: Workspace1[] = []
+    for (const backupId of ['20250813', '20251022']) {
+        const baseDirectory = baseBaseDirectory + backupId;
+        for (const entry of await fs.readdir(baseDirectory, { withFileTypes: true })) {
+            if (!entry.isDirectory()) { continue; }
+
+            const workspaceId = entry.name;
+            const workspaceJsonPath = path.join(baseDirectory, workspaceId, 'workspace.json');
+            if (!npfs.existsSync(workspaceJsonPath)) { continue; }
+
+            // this json only include one property, folder or workspace,
+            // workspace is a .code-workspace file path, folder is folder (file://), or according to existing data,
+            // - remote folder (vscode-remote://wsl%2Bubuntu-24.04/home/)
+            // - remote folder over mounted files? (vscode-remote://wsl%2Bubuntu-24.04/mnt/c/Users/)
+            // - dev container (vscode-remote://dev-container%2Bverylonghexhere/volume)
+            // - attached container (vscode-remote://attached-container%2Bveryverylonghexhere/x)
+            const workspaceJsonText = await fs.readFile(workspaceJsonPath, 'utf-8');
+            const workspaceJsonProperties = Object.entries(JSON.parse(workspaceJsonText));
+            if (workspaceJsonProperties.length != 1) {
+                console.log(`backup ${backupId} workspace ${workspaceId} workspace.json unexpected structure? ${workspaceJsonText}`);
+                continue;
+            } else if (workspaceJsonProperties[0][0] != 'folder' && workspaceJsonProperties[0][0] != 'workspace') {
+                console.log(`backup ${backupId} workspace ${workspaceId} workspace.json unknown property name? ${workspaceJsonText}`);
+                continue;
+            }
+            const workspacePath = workspaceJsonProperties[0][1] as string;
+            
+            const sessionIds: string[] = [];
+            // ignore no chatSessions workspace as they are not related to this migration work
+            if (!npfs.existsSync(path.join(baseDirectory, workspaceId, 'chatSessions'))) { continue; }
+            for (const entry of await fs.readdir(path.join(baseDirectory, workspaceId, 'chatSessions'))) {
+                // lazy to parse guid here, just check by length
+                if (entry.length != 41 || !entry.endsWith('.json')) { continue; }
+                const sessionId = entry.substring(0, 36);
+                if (!npfs.existsSync(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId))) {
+                    console.log(`backup ${backupId} workspace ${workspaceId} session ${sessionId} not found in chatEditingSessions directory?`);
+                }
+                sessionIds.push(sessionId);
+            }
+            workspace1s.push({ backupId, id: workspaceId, path: workspacePath, sessionIds });
+        }
+    }
+
+    // 2. cross backup relationships
+    // RESULTS: workspace.json, session files, chatEditingSession state.json and contents files are exactly same
+    // so can be stored as this
+    interface Workspace2 {
+        id: string,
+        path: string,
+        backupId: string,
+        sessions: string[],
+    }
+    const workspace2s: Workspace2[] = [];
+    for (const workspaceId of workspace1s.map(w => w.id).filter((e, i, a) => a.indexOf(e) == i)) {
+        const records = workspace1s.filter(w => w.id == workspaceId);
+        // RESULT: many
+        if (records.length > 1) {
+            // console.log(`workspace ${workspaceId} appears in multiple backups`);
+        }
+        // RESULT: none
+        if (records.map(r => r.path).filter((e, i, a) => a.indexOf(e) == i).length > 1) {
+            console.log(`workspace ${workspaceId} have different path in different backups`);
+        }
+        let sessionIds: string[] = [];
+        for (const record of records) {
+            for (const sessionId of record.sessionIds) {
+                if (sessionIds.includes(sessionId)) {
+                    // RESULT: many
+                    // console.log(`workspace ${workspaceId} session ${sessionId} appear in multiple backups`);
+                } else {
+                    sessionIds.push(sessionId)
+                }
+            }
+        }
+        for (const sessionId of sessionIds) {
+            // RESULT: 1, obviously new session between backups, and is an empty session, so ignore
+            if (records.some(r => !r.sessionIds.includes(sessionId))) {
+                // console.log(`workspace ${workspaceId} session ${sessionId} some backup don't have this session`);
+            }
+
+            let previousSessionFileContent: string;
+            let previousStateFileContent: string;
+            let previousEditingContentFiles: string[]; // file names in chatEditingSession/<>/contents directory
+            let previousEditingContentFileContents: Record<string, string>;
+            for (const backupId of records.filter(r => r.sessionIds.includes(sessionId)).map(r => r.backupId)) {
+                const baseDirectory = baseBaseDirectory + backupId;
+
+                const sessionFileContent = await fs.readFile(
+                    path.join(baseDirectory, workspaceId, 'chatSessions', `${sessionId}.json`), 'utf-8');
+                if (!previousSessionFileContent) {
+                    previousSessionFileContent = sessionFileContent;
+                } else if (previousSessionFileContent != sessionFileContent) {
+                    // RESULT: none, sessions are not changed between backups
+                    console.log(`workspace ${workspaceId} session ${sessionId} file content not same as before?`);
+                } else { matchCount1 += 1; }
+
+                const stateFilePath = path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'state.json');
+                // RESULT: none
+                if (!npfs.existsSync(stateFilePath)) {
+                    console.log(`workspace ${workspaceId} session ${sessionId} backup ${backupId} chatEditingSession/<sessionid>/state.json not exist?`);
+                }
+                const stateFileContent = await fs.readFile(stateFilePath, 'utf-8');
+                if (!previousStateFileContent) {
+                    previousStateFileContent = stateFileContent;
+                } else if (previousStateFileContent != stateFileContent) {
+                    // RESULT: none
+                    console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/state.json content not same as before?`);
+                } else { matchCount1 += 1; }
+
+                const editingContentFiles = await fs.readdir(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'contents'));
+                editingContentFiles.sort((a, b) => a.localeCompare(b));
+                // if (contents.length) { console.log(workspaceId, sessionId, backupId, contents); }
+                if (!previousEditingContentFiles) {
+                    previousEditingContentFiles = editingContentFiles;
+                } else if (previousEditingContentFiles.length != editingContentFiles.length || editingContentFiles.some((c, i) => previousEditingContentFiles[i] != c)) {
+                    // RESULT: none
+                    console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/contents files not same as before?`);
+                } else { matchCount1 += 1; }
+
+                const contents = await Promise.all(editingContentFiles.map(async f =>
+                    [f, await fs.readFile(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'contents', f), 'utf-8')] as const));
+                if (!previousEditingContentFileContents) {
+                    previousEditingContentFileContents = Object.fromEntries(contents);
+                } else {
+                    const mismatchFiles = contents.filter(([name, content]) => previousEditingContentFileContents[name] != content);
+                    // RESULT: none, they are super same
+                    if (mismatchFiles.length) {
+                        console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/contents files content mismatch, ${mismatchFiles.map(f => f[0])}`);
+                    }
+                    matchCount1 += contents.length - mismatchFiles.length;
+                }
+            }
+        }
+        const backupId = records[records.length - 1].backupId;
+        workspace2s.push({ id: workspaceId, path: records[0].path, backupId, sessions: sessionIds });
+    }
+    // console.log(workspace2s);
+    // RESULT: 26 workspaces, 99 sessions
+    console.log(workspace2s.length, workspace2s.reduce((acc, w) => acc + w.sessions.length, 0), matchCount1);
+    // RESULT: by the way, session id is unique accross workspaces
+    // console.log(workspace2s.reduce((acc, w) => acc.concat(w.sessions), []).filter((e, i, a) => a.indexOf(e) == i).length);
+
+    // 3. session json file schema
+    interface Session6 {
+        version: 3,
+        requesterUsername: string,
+        requesterAvatarIconUri: object,
+        responderUsername: string,
+        responderAvatarIconUri: string,
+        initialLocation: string,
+        requests: object[],
+        sessionId: string,
+        creationDate: number,
+        isImported: false,
+        lastMessageDate: number,
+    }
+    matchCount1 = 0;
+    for (const workspace of workspace2s) {
+        for (const sessionId of workspace.sessions) {
+            const sessionFilePath = path.join(baseBaseDirectory + workspace.backupId, workspace.id, 'chatSessions', sessionId + '.json');
+            const session = JSON.parse(await fs.readFile(sessionFilePath, 'utf-8')) as Session6;
+
+            const actualPropertyNames = Object.keys(session).sort((a, b) => a.localeCompare(b))
+                // these seems optional
+                .filter(k => k != 'requesterAvatarIconUri' && k != 'responderAvatarIconUri' && k != 'customTitle');
+            const expectPropertyNames = [
+                'version', 'requesterUsername', 'responderUsername',
+                'initialLocation', 'requests', 'sessionId', 'creationDate', 'isImported', 'lastMessageDate',
+            ].sort((a, b) => a.localeCompare(b));
+            if (actualPropertyNames.length != expectPropertyNames.length || expectPropertyNames.some((e, i) => actualPropertyNames[i] != e)) {
+                console.log(`session ${sessionId} unexpected properties`);
+            }
+
+            // at the time of backups, they are all version 3
+            if (session.version != 3) {
+                console.log(`session ${sessionId} version not 3`);
+            } else { matchCount1 += 1; }
+            // always my github user name
+            // if (session.requesterUsername && session.requesterUsername != 'my github username') {
+            //     console.log(`session ${sessionId} unexpected user name`);
+            // } else { matchCount1 += 1; }
+            if (session.responderUsername && session.responderUsername != 'GitHub Copilot') {
+                console.log(`session ${sessionId} unexpected responder user name ${session.responderUsername}`);
+            } else { matchCount1 += 1; }
+
+            if (session.sessionId != sessionId) {
+                console.log(`session ${sessionId} not same as content .sessionId`);
+            } else { matchCount1 += 1; }
+
+            // RESULT: 16/99 empty
+            if (session.requests.length == 0) { matchCount1 += 1; }
+
+            // RESULT: none
+            if (session.isImported) {
+                console.log(`session ${sessionId} is imported`);
+            }
+        }
+    }
+    console.log(matchCount1);
+
+    return;
+}
+await read6();
