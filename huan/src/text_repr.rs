@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fmt;
 use anyhow::Result;
@@ -37,6 +38,33 @@ fn merge_trailing_whitespace_records(trimmed_value: &str, records: Vec<(usize, S
         return Err(format!("side map line number out of range {:?}", records.into_iter().map(|r| r.0).collect::<Vec<_>>()));
     }
     Ok(b)
+}
+
+struct CowStrDeserializeVisitor;
+impl<'de> DeserializeVisitor<'de> for CowStrDeserializeVisitor {
+    type Value = Cow<'de, str>;
+    fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_str("str")
+    }
+    // this is borrowed from input data
+    fn visit_borrowed_str<E>(self, v: &'de str) -> Result<Self::Value, E> where E: DeserializeError {
+        Ok(Cow::Borrowed(v))
+    }
+    // this is not borrowed from input data, may be smaller lifetime in concrete Deserializer parse function etc.
+    fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> where E: DeserializeError {
+        Ok(Cow::Owned(v.to_string()))
+    }
+    fn visit_string<E>(self, v: String) -> Result<Self::Value, E> where E: DeserializeError {
+        Ok(Cow::Owned(v))
+    }
+}
+
+struct CowStrDeserializeSeed;
+impl<'de> DeserializeSeed<'de> for CowStrDeserializeSeed {
+    type Value = Cow<'de, str>;
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error> where D: Deserializer<'de> {
+        deserializer.deserialize_any(CowStrDeserializeVisitor)
+    }
 }
 
 // to collect value from value+whitespace multiple keys, you must custom deserialize
@@ -88,7 +116,16 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
                 "id" if matches!(kind, Some("tool-use" | "tool-result")) => tool_use_id = Some(map.next_value()?),
                 // tool use input is inline json
                 "input" if kind == Some("tool-use") =>
-                    tool_use_input = Some(serde_json::from_str::<serde_json::Value>(map.next_value::<&str>()?)
+                    // // not this, sometimes underlying deserializer cannot provide a borrowed string,
+                    // // like when there is escape in the original text
+                    // tool_use_input = Some(serde_json::from_str::<serde_json::Value>(map.next_value::<&str>()?)
+                    // // not this, this calls generic impl<T> Deserialize for Cow<T>
+                    // // which calls T::Owned::deserialize which always calls String::deserialize and lose the str benefit
+                    // tool_use_input = Some(serde_json::from_str::<serde_json::Value>(map.next_value::<Cow<str>>()?.as_ref())
+                    // // the correct answer is this, serde has impl Deserializer for Cow<str>,
+                    // // and has #[serde(borrow)] for Cow<str> struct fields, but don't have this, why?
+                    tool_use_input = Some(serde_json
+                        ::from_str::<serde_json::Value>(map.next_value_seed(CowStrDeserializeSeed)?.as_ref())
                         .map_err(|e| DeserializeError::invalid_value(Unexpected::Str(&format!("{}", e)), &"valid json value"))?),
                 // no need to precisely read tool execution metadata
                 "metadata" if kind == Some("tool-result") => { map.next_value::<IgnoredAny>()?; },
@@ -114,8 +151,8 @@ impl<'de> DeserializeVisitor<'de> for ContentBlockDeserializeVisitor {
 
         // check value before whitespace don't have trailing whitespaces
         let Some(value) = value else { return Err(DeserializeError::missing_field("value")) };
-        if value.trim().len() != value.len() {
-            return Err(DeserializeError::invalid_value(Unexpected::Str("leading or trailing whitespaces"), &"none"));
+        if value.trim_ascii_end().len() != value.len() {
+            return Err(DeserializeError::invalid_value(Unexpected::Str("trailing whitespaces"), &"none"));
         } else if let Some(position) = value.find(" \n") {
             return Err(DeserializeError::invalid_value(Unexpected::Str(&format!("intermediate trailing whitespaces, {}", position)), &"none"));
         }

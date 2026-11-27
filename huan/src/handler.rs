@@ -155,7 +155,7 @@ pub fn handle_read_file(workspace: &str, input: ReadFileInput) -> Result<String>
     let content = fs::read_to_string(Path::new(workspace).join(input.path))?;
     // these start from 1
     match (input.start_line, input.end_line) {
-        (None, None) => Ok(content),
+        (None, None) => Ok(content.lines().take(399).collect::<Vec<_>>().join("\n")),
         // TODO validate this subtractions
         (None, Some(end_line)) => Ok(content.lines().take(end_line - 1).collect::<Vec<_>>().join("\n")),
         (Some(start_line), None) => Ok(content.lines().skip(start_line - 1).collect::<Vec<_>>().join("\n")),

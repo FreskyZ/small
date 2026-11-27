@@ -46,7 +46,7 @@ async fn step(workspace: Option<&str>, file_name: &str, dry: bool) -> Result<()>
             bail!("env var HUAN_API_KEY missing");
         };
         llm::run(llm::RequestParameters{ dry, api_key, session: &session, config: request_config }).await?
-    } else if request_message.role.is_user() && request_message.content.iter().any(|b| b.is_tool_use()) {
+    } else if request_message.role.is_assistant() && request_message.content.iter().any(|b| b.is_tool_use()) {
         handler::run(workspace, &session, request_config)?
     } else {
         bail!("request config message id is an assistant message but don't have tool use blocks?")
