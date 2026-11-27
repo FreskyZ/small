@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import npfs from 'node:fs';
+import path from 'node:path';
 import dayjs from 'dayjs';
 import { diffLines } from 'diff';
 import mysql from 'mysql2/promise';
@@ -1153,7 +1154,7 @@ async function readtrue(): Promise<TrueSession[]> {
     }
     return sessions;
 }
-const truesessions = await readtrue();
+const truesessions: TrueSession[] = []; // await readtrue();
 
 interface Session5 {
     id: string,
@@ -2251,4 +2252,829 @@ async function readalt3() {
     }
     console.log(dsessions.length, dmessages.length, matchCount);
 }
-await readalt3();
+// await readalt3();
+
+// source 6, vscode copilot sessions from workspace storage
+// note this is the old storage format of vscode github copilot plugin, at the time of
+// writing, the directories and json files is merged into vscdb sqlite database file not outside it
+async function read6() {
+    const baseBaseDirectory = '/workspaces/vscode-workspace-storage-';
+
+    let matchCount = 0;
+
+    // 1. collect basic ids from file structure
+    // - top level is workspace folders, folder name is workspace id, for each workspace folder
+    // - workspace.json, which exactly contains 1 property which value is a path to folder or .code-workspace file
+    // - state.vscdb file which contains actual data for workspace related settings
+    // - chatSessions directory to store chat sessions, chatEditingSessions directory seems related to edit file tools
+    interface Workspace1 {
+        backupId: string,
+        id: string,
+        path: string,
+        sessionIds: string[],
+    }
+    const workspace1s: Workspace1[] = []
+    for (const backupId of ['20250813', '20251022']) {
+        const baseDirectory = baseBaseDirectory + backupId;
+        for (const entry of await fs.readdir(baseDirectory, { withFileTypes: true })) {
+            if (!entry.isDirectory()) { continue; }
+
+            const workspaceId = entry.name;
+            const workspaceJsonPath = path.join(baseDirectory, workspaceId, 'workspace.json');
+            if (!npfs.existsSync(workspaceJsonPath)) { continue; }
+
+            // this json only include one property, folder or workspace,
+            // workspace is a .code-workspace file path, folder is folder (file://), or according to existing data,
+            // - remote folder (vscode-remote://wsl%2Bubuntu-24.04/home/)
+            // - remote folder over mounted files? (vscode-remote://wsl%2Bubuntu-24.04/mnt/c/Users/)
+            // - dev container (vscode-remote://dev-container%2Bverylonghexhere/volume)
+            // - attached container (vscode-remote://attached-container%2Bveryverylonghexhere/x)
+            const workspaceJsonText = await fs.readFile(workspaceJsonPath, 'utf-8');
+            const workspaceJsonProperties = Object.entries(JSON.parse(workspaceJsonText));
+            if (workspaceJsonProperties.length != 1) {
+                console.log(`backup ${backupId} workspace ${workspaceId} workspace.json unexpected structure? ${workspaceJsonText}`);
+                continue;
+            } else if (workspaceJsonProperties[0][0] != 'folder' && workspaceJsonProperties[0][0] != 'workspace') {
+                console.log(`backup ${backupId} workspace ${workspaceId} workspace.json unknown property name? ${workspaceJsonText}`);
+                continue;
+            }
+            const workspacePath = workspaceJsonProperties[0][1] as string;
+            
+            const sessionIds: string[] = [];
+            // ignore no chatSessions workspace as they are not related to this migration work
+            if (!npfs.existsSync(path.join(baseDirectory, workspaceId, 'chatSessions'))) { continue; }
+            for (const entry of await fs.readdir(path.join(baseDirectory, workspaceId, 'chatSessions'))) {
+                // lazy to parse guid here, just check by length
+                if (entry.length != 41 || !entry.endsWith('.json')) { continue; }
+                const sessionId = entry.substring(0, 36);
+                if (!npfs.existsSync(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId))) {
+                    console.log(`backup ${backupId} workspace ${workspaceId} session ${sessionId} not found in chatEditingSessions directory?`);
+                }
+                sessionIds.push(sessionId);
+            }
+            workspace1s.push({ backupId, id: workspaceId, path: workspacePath, sessionIds });
+        }
+    }
+
+    // 2. cross backup relationships
+    // RESULTS: workspace.json, session files, chatEditingSession state.json and contents files are exactly same
+    // so can be stored as this
+    interface Workspace2 {
+        id: string,
+        path: string,
+        backupId: string,
+        sessions: string[],
+    }
+    const workspace2s: Workspace2[] = [];
+    for (const workspaceId of workspace1s.map(w => w.id).filter((e, i, a) => a.indexOf(e) == i)) {
+        const records = workspace1s.filter(w => w.id == workspaceId);
+        // RESULT: many
+        if (records.length > 1) {
+            // console.log(`workspace ${workspaceId} appears in multiple backups`);
+        }
+        // RESULT: none
+        if (records.map(r => r.path).filter((e, i, a) => a.indexOf(e) == i).length > 1) {
+            console.log(`workspace ${workspaceId} have different path in different backups`);
+        }
+        let sessionIds: string[] = [];
+        for (const record of records) {
+            for (const sessionId of record.sessionIds) {
+                if (sessionIds.includes(sessionId)) {
+                    // RESULT: many
+                    // console.log(`workspace ${workspaceId} session ${sessionId} appear in multiple backups`);
+                } else {
+                    sessionIds.push(sessionId)
+                }
+            }
+        }
+        for (const sessionId of sessionIds) {
+            // RESULT: 1, obviously new session between backups, and is an empty session, so ignore
+            if (records.some(r => !r.sessionIds.includes(sessionId))) {
+                // console.log(`workspace ${workspaceId} session ${sessionId} some backup don't have this session`);
+            }
+
+            let previousSessionFileContent: string;
+            let previousStateFileContent: string;
+            let previousEditingContentFiles: string[]; // file names in chatEditingSession/<>/contents directory
+            let previousEditingContentFileContents: Record<string, string>;
+            for (const backupId of records.filter(r => r.sessionIds.includes(sessionId)).map(r => r.backupId)) {
+                const baseDirectory = baseBaseDirectory + backupId;
+
+                const sessionFileContent = await fs.readFile(
+                    path.join(baseDirectory, workspaceId, 'chatSessions', `${sessionId}.json`), 'utf-8');
+                if (!previousSessionFileContent) {
+                    previousSessionFileContent = sessionFileContent;
+                } else if (previousSessionFileContent != sessionFileContent) {
+                    // RESULT: none, sessions are not changed between backups
+                    console.log(`workspace ${workspaceId} session ${sessionId} file content not same as before?`);
+                } else { matchCount += 1; }
+
+                const stateFilePath = path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'state.json');
+                // RESULT: none
+                if (!npfs.existsSync(stateFilePath)) {
+                    console.log(`workspace ${workspaceId} session ${sessionId} backup ${backupId} chatEditingSession/<sessionid>/state.json not exist?`);
+                }
+                const stateFileContent = await fs.readFile(stateFilePath, 'utf-8');
+                if (!previousStateFileContent) {
+                    previousStateFileContent = stateFileContent;
+                } else if (previousStateFileContent != stateFileContent) {
+                    // RESULT: none
+                    console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/state.json content not same as before?`);
+                } else { matchCount += 1; }
+
+                const editingContentFiles = await fs.readdir(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'contents'));
+                editingContentFiles.sort((a, b) => a.localeCompare(b));
+                // if (contents.length) { console.log(workspaceId, sessionId, backupId, contents); }
+                if (!previousEditingContentFiles) {
+                    previousEditingContentFiles = editingContentFiles;
+                } else if (previousEditingContentFiles.length != editingContentFiles.length || editingContentFiles.some((c, i) => previousEditingContentFiles[i] != c)) {
+                    // RESULT: none
+                    console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/contents files not same as before?`);
+                } else { matchCount += 1; }
+
+                const contents = await Promise.all(editingContentFiles.map(async f =>
+                    [f, await fs.readFile(path.join(baseDirectory, workspaceId, 'chatEditingSessions', sessionId, 'contents', f), 'utf-8')] as const));
+                if (!previousEditingContentFileContents) {
+                    previousEditingContentFileContents = Object.fromEntries(contents);
+                } else {
+                    const mismatchFiles = contents.filter(([name, content]) => previousEditingContentFileContents[name] != content);
+                    // RESULT: none, they are super same
+                    if (mismatchFiles.length) {
+                        console.log(`workspace ${workspaceId} session ${sessionId} chatEditingSession/<sessionid>/contents files content mismatch, ${mismatchFiles.map(f => f[0])}`);
+                    }
+                    matchCount += contents.length - mismatchFiles.length;
+                }
+            }
+        }
+        const backupId = records[records.length - 1].backupId;
+        workspace2s.push({ id: workspaceId, path: records[0].path, backupId, sessions: sessionIds });
+    }
+    // console.log(workspace2s);
+    // RESULT: 26 workspaces, 99 sessions
+    console.log(workspace2s.length, workspace2s.reduce((acc, w) => acc + w.sessions.length, 0), matchCount);
+    // RESULT: by the way, session id is unique accross workspaces
+    // console.log(workspace2s.reduce((acc, w) => acc.concat(w.sessions), []).filter((e, i, a) => a.indexOf(e) == i).length);
+
+    interface Session6 {
+        version: 3,
+        sessionId: string,
+        initialLocation: 'panel',
+        requesterUsername: string,
+        requesterAvatarIconUri: object,
+        responderUsername: string,
+        responderAvatarIconUri: string,
+        requests: Request6[],
+        creationDate: number,
+        lastMessageDate: number,
+        isImported: false,
+    }
+    interface Request6 {
+        requestId: string,
+        // it's reasonable to include the leading slash command in request data,
+        // but why do you put the description and duplicate an name + description and include an example in my disk storage?
+        // only recorded 1 type of slash command
+        slashCommand?: {
+            name: 'explain',
+            description: 'Explain how the code in your active editor works',
+            disambiguation: {
+                category: 'explain',
+                description: 'Explain how the code in your active editor works',
+                examples: "Write an explanation for the code above as paragraphs of text."[],
+            }[],
+        },
+        // why only 4 requests have these properties?
+        confirmation?: 'Enable' | 'Pause' | 'Continue',
+        message: {
+            text: string,
+            parts: ({
+                range: { start: number, endInclusive: number },
+                editorRange: { startLineNumber: number, startColumn: number, endLineNumber: number, endColumn: number },
+            } & (
+                | { kind: 'text', text: string }
+                | { kind: 'agent', agent: any }
+                | { kind: 'slash', slashCommand: any }
+                | { kind: 'subcommand', command: any }
+            ))[],
+        },
+        variableData: { variables: {
+            kind: 'file',
+            id: string,
+            name: string,
+            value: any,
+            modelDescription?: string,
+        }[] },
+        responseId: string,
+        response: {
+            // can without kind
+            kind?: 'inlineReference' | 'thinking' | 'progressMessage'
+                | 'warning' | 'command' | 'codeblockUri' | 'progressTaskSerialized'
+                | 'markdownVuln' | 'toolInvocationSerialized' | 'prepareToolInvocation'
+                | 'textEditGroup' | 'undoStop' | 'confirmation',
+            // if without kind, value is string
+            value?: string,
+        }[],
+        // does not record any data of this property
+        responseMarkdownInfo?: [],
+        result: {
+            timings: { firstProgress: number, totalElapsed: number },
+            details?: string,
+            metadata: {
+                codeBlocks?: {
+                    code: string,
+                    language: string,
+                    markdownBeforeBlock: string,
+                    resource?: any,
+                }[],
+                toolCallRounds?: {
+                    id: string,
+                    response: string,
+                    toolCalls: { id: string, name: string, arguments: string }[],
+                    // no data for this
+                    toolInputRetry: null,
+                    statefulMarker?: string,
+                    thinking?: {
+                        id: string,
+                        text: string,
+                        encrypted: string,
+                        tokens: number,
+                    },
+                }[],
+                toolCallResults?: Record<string, { content: { value: any }[] }>,
+                renderedUserMessage?: ({ type: 1, text: string } | { type: 3, cacheType: 'ephemeral'})[],
+                renderedGlobalContext?: ({ type: 1, text: string } | { type: 3, cacheType: 'ephemeral'})[],
+                modelMessageId: string,
+                responseId: string,
+                sessionId: string,
+                agentId: string,
+                command?: string,
+                maxToolCallsExceeded?: true,
+            },
+        },
+        // does not record any data of this property
+        followups?: [],
+        isCanceled: false,
+        // TODO I guess contentReference is related to chatEditingSessions/contents
+        contentReferences: {
+            kind: 'reference',
+            reference: {
+                uri: any,
+                range: { startLineNumber: number, /* the 4 props */ },
+            },
+            options?: { isFromTool: false },
+        }[],
+        // TODO record the reference in output for fun, only record url, not code content
+        codeCitations: {
+            kind: 'codeCitation',
+            value: {
+                scheme: 'https',
+                authority: 'github.com',
+                path: string,
+            },
+            license: string,
+            snippet: string,
+        }[],
+        timestamp: number,
+        // I think this is the @vscode, @workspace functionality
+        // TODO can learn description of different workflows by different agent's slash commands
+        agent?: any,
+        modelId?: string,
+    }
+
+    // 3. session json file schema
+    matchCount = 0;
+    // 202508 => count
+    const monthlyDistribution: Record<string, number> = {};
+    for (const workspace of workspace2s) {
+        for (const sessionId of workspace.sessions) {
+            const sessionFilePath = path.join(baseBaseDirectory + workspace.backupId, workspace.id, 'chatSessions', sessionId + '.json');
+            const session = JSON.parse(await fs.readFile(sessionFilePath, 'utf-8')) as Session6;
+
+            const actualPropertyNames = Object.keys(session).sort((a, b) => a.localeCompare(b))
+                // these seems optional
+                .filter(k => k != 'requesterAvatarIconUri' && k != 'responderAvatarIconUri' && k != 'customTitle');
+            const expectPropertyNames = [
+                'version', 'requesterUsername', 'responderUsername',
+                'initialLocation', 'requests', 'sessionId', 'creationDate', 'isImported', 'lastMessageDate',
+            ].sort((a, b) => a.localeCompare(b));
+            if (actualPropertyNames.length != expectPropertyNames.length || expectPropertyNames.some((e, i) => actualPropertyNames[i] != e)) {
+                console.log(`session ${sessionId} unexpected properties`);
+            }
+
+            // at the time of backups, they are all version 3
+            if (session.version != 3) {
+                console.log(`session ${sessionId} version not 3`);
+            } else { matchCount += 1; }
+            if (session.sessionId != sessionId) {
+                console.log(`session ${sessionId} not same as content .sessionId`);
+            } else { matchCount += 1; }
+
+            // only recorded this value, is inline chat not recorded here?
+            if (session.initialLocation != 'panel') {
+                console.log(`session ${sessionId} unexpected initial location ${session.initialLocation}`);
+            } else { matchCount += 1; }
+            // RESULT: none
+            if (session.isImported) {
+                console.log(`session ${sessionId} is imported`);
+            }
+
+            const createTime = dayjs(session.creationDate);
+            const updateTime = dayjs(session.lastMessageDate);
+            // console.log(`session ${sessionId} create time ${createTime.format('YYYY-MM-DD HH:mm:ssZ')}`);
+            if (createTime.isAfter(updateTime)) {
+                console.log(`session ${sessionId} update time is before create time`);
+            } else { matchCount += 1; }
+
+            // RESULT: 202505:13, 06:41, 07:16, 08:28, 09:1
+            const month = createTime.format('YYYYMM');
+            // if (session.requests.length)
+            // if (month in monthlyDistribution) { monthlyDistribution[month] += 1; } else { monthlyDistribution[month] = 1; }
+
+            // always my github user name
+            // if (session.requesterUsername && session.requesterUsername != 'my github username') {
+            //     console.log(`session ${sessionId} unexpected user name`);
+            // } else { matchCount1 += 1; }
+            if (session.responderUsername && session.responderUsername != 'GitHub Copilot') {
+                console.log(`session ${sessionId} unexpected responder user name ${session.responderUsername}`);
+            } else { matchCount += 1; }
+
+            // RESULT: many
+            if (session.requests.length == 0) {
+                // console.log(`session ${workspace.backupId}/${workspace.id}/${sessionId} seems to be empty`);
+                // RESULT: many, not relavent
+                // if (session.requesterUsername) {
+                //     console.log(`session ${sessionId} is empty but has request user name`);
+                // }
+                // if (session.responderUsername) {
+                //     console.log(`session ${sessionId} is empty but has respond user name`);
+                // }
+            }
+
+            for (const [request, requestIndex] of session.requests.map((r, i) => [r, i] as const)) {
+                const actualPropertyNames = Object.keys(request).sort((a, b) => a.localeCompare(b))
+                    // these are optionally
+                    .filter(k => k != 'responseMarkdownInfo' && k != 'confirmation'
+                        && k != 'modelId' && k != 'agent' && k != 'followups' && k != 'slashCommand');
+                const expectPropertyNames = [
+                    'requestId', 'message', 'variableData', 'response', 'responseId', 'result',
+                    'isCanceled', 'contentReferences', 'codeCitations', 'timestamp',
+                ].sort((a, b) => a.localeCompare(b));
+                if (actualPropertyNames.length != expectPropertyNames.length || expectPropertyNames.some((e, i) => actualPropertyNames[i] != e)) {
+                    console.log(`session ${sessionId} turn ${requestIndex} unexpected properties, ${actualPropertyNames}, ${expectPropertyNames}`);
+                }
+                if (!request.requestId) {
+                    console.log(`${workspace.backupId}/${workspace.id}/${sessionId}: request ${requestIndex} missing id`);
+                }
+                const header = `${workspace.backupId}/${workspace.id}/${sessionId}/${request.requestId}`;
+
+                // RESULT: none
+                if (request.isCanceled) {
+                    console.log(`${header}: is canceled`);
+                }
+                // I really have used some gpt and claude at that time
+                if (request.modelId && ![
+                    'copilot/gpt-4.1',
+                    'copilot/gpt-5-mini',
+                    'copilot/gpt-5-codex',
+                    'github.copilot-chat/gpt-4.1',
+                    'github.copilot-chat/gpt-4o',
+                    'github.copilot-chat/claude-3.7-sonnet-thought',
+                    'github.copilot-chat/claude-sonnet-4',
+                ].includes(request.modelId)) {
+                    console.log(`${header}: unknown model id ${request.modelId}`);
+                } else { matchCount += 1; }
+
+                // some minor or not important properties
+                // RESULT: 2 requests 1 type of slash commands
+                if (request.slashCommand) {
+                    // console.log(`${header}: has slash command`, request.slashCommand, JSON.stringify(request.slashCommand));
+                }
+                if (request.confirmation && typeof request.confirmation != 'string') {
+                    console.log(`${header}: unexpected confirmation type ${request.confirmation}`);
+                } else { matchCount += 1; }
+                if (request.confirmation && !['Enable', 'Pause', 'Continue'].includes(request.confirmation)) {
+                    console.log(`${header}: unexpected confirmation ${request.confirmation}`);
+                } else { matchCount += 1; }
+                // RESULT: none
+                if (request.followups && request.followups.length) {
+                    console.log(`${header}: has followups ${request.followups}`);
+                }
+                // I think this is the @vscode and @workspace functionality, seems not supported today
+                if (request.agent && !['GitHub Copilot', 'VS Code', 'Workspace'].includes(request.agent.fullName)) {
+                    // console.log(`${header}: agent`, request.agent);
+                }
+                // RESULT: 2 requests 3 citations, referencing real github repository source code
+                if (request.codeCitations && request.codeCitations.length) {
+                    // console.log(`${header}: has codecitations`, request.codeCitations);
+                }
+                // RESULT: none
+                if (request.responseMarkdownInfo && request.responseMarkdownInfo.length) {
+                    console.log(`${header}: has responsemarkdowninfo`, request.responseMarkdownInfo);
+                }
+
+                if (!request.variableData) {
+                    console.log(`${header}: missing variabledata`);
+                }
+                if (Object.keys(request.variableData).length != 1) {
+                    console.log(`${header}: variabledata unexpected structure?`, request.variableData);
+                }
+                if (Object.keys(request.variableData)[0] != 'variables') {
+                    console.log(`${header}: variabledata unexpected structure? (2)`, request.variableData);
+                }
+                for (const [variable, variableIndex] of request.variableData.variables.map((v, i) => [v, i] as const)) {
+                    // console.log(variable);
+                    if (variable.kind != 'file') {
+                        console.log(`${header}: variable ${variableIndex} kind not file`);
+                    } else { matchCount += 1; }
+                    // id, name, value.uri is even more complex than workspace path,
+                    // I guess this information will be duplicate in request and response, if so skip this property
+                }
+
+                // RESULT: is referencing some content, but seems no id-like property in this object, how to reference these objects?
+                if (request.contentReferences) {
+                    for (const contentReference of request.contentReferences) {
+                        console.log(contentReference);
+                    }
+                }
+                
+                if (!request.message) {
+                    console.log(`${header}: missing message`);
+                }
+                const actualProperties = Object.keys(request.message).sort((a, b) => a.localeCompare(b));
+                if (actualProperties.length != 2 && actualProperties[0] != 'parts' && actualProperties[1] != 'text') {
+                    console.log(`${header}: message unknown structure?`);
+                }
+                // RESULT: all string
+                if (typeof request.message.text != 'string') {
+                    console.log(`${header}: message.text not string?`);
+                }
+                // RESULT: all have value
+                if (!request.message.text.length) {
+                    console.log(`${header}: message.text is empty?`);
+                }
+                // RESULT: all array
+                if (!Array.isArray(request.message.parts)) {
+                    console.log(`${header}: message.parts not array?`);
+                }
+                // RESULT: all have elements
+                if (!request.message.parts.length) {
+                    console.log(`${header}: message.parts is empty?`);
+                }
+                for (const [part, partIndex] of request.message.parts.map((p, i) => [p, i] as const)) {
+                    if (!['text', 'agent', 'subcommand', 'slash'].includes(part.kind)) {
+                        console.log(`${header}: message part kind unexpected ${part.kind}`);
+                    } else { matchCount += 1; }
+                    const actualPropertyNames = Object.keys(part).sort((a, b) => a.localeCompare(b));
+                    const expectPropertyNames = ['kind', 'range', 'editorRange',
+                        part.kind == 'text' ? 'text' : part.kind == 'agent' ? 'agent' : part.kind == 'subcommand' ? 'command' : 'slashCommand',
+                    ].sort((a, b) => a.localeCompare(b));
+                    if (actualPropertyNames.length != expectPropertyNames.length || expectPropertyNames.some((e, i) => actualPropertyNames[i] != e)) {
+                        console.log(`${header} part ${partIndex} unexpected properties, ${actualPropertyNames}, ${expectPropertyNames}`);
+                    }
+
+                    // for agent, all part.agent is exactly same as request.agent, include property order
+                    if (part.kind == 'agent' && JSON.stringify(part.agent) != JSON.stringify(request.agent)) {
+                        console.log(`${header} part ${partIndex} .agent not same as request.agent`);
+                    // for subcommand attention not for slash
+                    } else if (part.kind == 'subcommand' && JSON.stringify(part.command) != JSON.stringify(request.slashCommand)) {
+                        console.log(`${header} part ${partIndex} .command not same as request.slashCommand`);
+                    }
+                    // but for kind=slash, it is not same as request.slashCommand, as the only session to contain this value is 202505,
+                    // I think it is the old plugin version, note that /help command is no longer available in current version of vscode
+
+                    // additionally, message.text is constructed from parts that
+                    // agent part become @something and subcommand part become /somecommand and text become text
+                    // lazy to validate that, use message.text is super enough for this migration work
+                }
+                
+                if (!request.response) {
+                    console.log(`${header}: missing response`);
+                }
+                if (!Array.isArray(request.response)) {
+                    console.log(`${header}: response is not array`);
+                }
+                // RESULT: all not empty
+                if (!request.response.length) {
+                    console.log(`${header}: response is empty`);
+                }
+                // block.kind is very formatting and ui related (click to goto somewhere, etc.),
+                // not to be confused with messages api content block kind,
+                // I borrow this name because there is no obvious name for response element in the schema
+                for (const [block, blockIndex] of request.response.map((b, i) => [b, i] as const)) {
+                    // TODO with so many kind it is hard to construct a result text, if request.result is ok use that
+                    if (block.kind && !['inlineReference', 'thinking', 'progressMessage', 'confirmation',
+                        'warning', 'command', 'codeblockUri', 'progressTaskSerialized', 'undoStop',
+                        'markdownVuln', 'toolInvocationSerialized', 'prepareToolInvocation', 'textEditGroup'].includes(block.kind)
+                    ) {
+                        console.log(`${header} response block ${blockIndex} unknown kind ${block.kind}`);
+                    }
+
+                    // this kind seems most
+                    if (block.kind == 'inlineReference' && typeof (block.inlineReference.name || block.inlineReference.path) != 'string') {
+                        console.log(`${header} response block ${blockIndex} is inline reference but missing name or path`, block);
+                    } else if (block.kind == 'inlineReference') {
+                        // LGTM
+                        // console.log(block.inlineReference.name || block.inlineReference.path);
+                    }
+                    // this kind seems second most
+                    if (block.kind == 'codeblockUri' && typeof block.uri.path != 'string') {
+                        console.log(`${header} response block ${blockIndex} is codeblock uri but missing path`, block);
+                    } else if (block.kind == 'codeblockUri') {
+                        // LGTM
+                        // console.log(block.uri.path);
+                    }
+
+                    // RESULT: thinking block can be empty, not sure why
+                    if (block.kind == 'thinking' && typeof block.value != 'string') { // || !block.value {
+                        console.log(`${header} response block ${blockIndex} is thinking but missing .value or is empty`, block);
+                    }
+
+                    // seems all system level message (I mean agent system, not system prompt),
+                    // TODO so should be not used to construct response message?
+                    if (block.kind == 'progressMessage'
+                        && block.content.value != 'Getting Copilot ready'
+                        && block.content.value != 'Copilot is almost ready'
+                        && block.content.value != 'Refining question to improve search accuracy.'
+                        && block.content.value != 'Searching command and setting index....'
+                        && block.content.value != 'Searching doc index...'
+                    ) {
+                        console.log(`${header} response block ${blockIndex} unknown progress message`, block);
+                    }
+                    // all warnings are this
+                    if (block.kind == 'warning'
+                        && block.content.value != 'Copilot took too long to get ready. Please ensure you are signed in to GitHub and that the extension `GitHub.copilot-chat` is installed and enabled.'
+                    ) {
+                        console.log(`${header} response block ${blockIndex} unknown warning message`, block);
+                    }
+
+                    // RESULT: block kind confirmation and request.confirmation is anti-related
+                    // RESULT: use .title and .message if you want to collect this block
+                    if (block.kind == 'confirmation') {
+                    //     console.log(block, request.confirmation);
+                    }
+                    // if (request.confirmation) {
+                    //     console.log(block, request.confirmation);
+                    // }
+                    // don't understand why there is a kind like this and not interested in recorded values
+                    if (block.kind == 'markdownVuln') {
+                        // console.log(header, block)
+                    }
+                    // RESULT: many, only have a .id, not sure what id, not found the id value in the session file?
+                    if (block.kind == 'undoStop') {
+                        // console.log(header, block);
+                    }
+                    // RESULT: all are open vscode settings button, generated from @vscode messages
+                    // the vscode setting name is present in preceding vanilla block so no need to care about this
+                    if (block.kind == 'command') {
+                        // console.log(header, block);
+                    }
+
+                    // RESULT: just a name to display a message, no need to include
+                    if (block.kind == 'prepareToolInvocation'
+                        && (Object.keys(block).filter(k => k != 'kind').length != 1 || Object.keys(block).filter(k => k != 'kind')[0] != 'toolName')
+                    ) {
+                        console.log(`${header}: response block ${blockIndex} is preparetoolinvocation but unknown structure`, block);
+                    } else if (block.kind == 'prepareToolInvocation' && typeof block.toolName != 'string') {
+                        console.log(`${header}: response block ${blockIndex} is preparetoolinvocation but unknown structure`, block);
+                    }
+
+                    if (block.kind == 'toolInvocationSerialized') {
+                        // console.log(header, block);
+                        // toolId is tool name, toolCallId, pastTenseMessage.value is display message
+                        // but where is tool call result?
+                        // request.result.metadata.toolCallResults have ast! result, abstract! syntax! tree! of markdown!
+                        // so tool call rounds should be in results, no need to care about details of this block
+                    }
+
+                    // RESULT: 1 occurance, the @workspace Enable: "Enable GPT-5-Codex (Preview) for all clients" session
+                    if (block.kind == 'progressTaskSerialized') {
+                        // console.log(header, block);
+                        // just collect .content.value if you are collecting this session
+                    }
+
+                    if (block.kind && block.kind != 'inlineReference' && block.kind != 'codeblockUri'
+                        && block.kind != 'confirmation' && block.kind != 'markdownVuln' && block.kind != 'undoStop'
+                        && block.kind != 'command' && block.kind != 'prepareToolInvocation' && block.kind != 'toolInvocationSerialized'
+                        && block.kind != 'thinking' && block.kind != 'progressMessage' && block.kind != 'warning'
+                        && block.kind != 'progressTaskSerialized'
+                    ) {
+                        // after all exclusions this is for block.kind == textEditGroup
+                        // according to previous inspection, I think this as tool call is included in request.result
+                        // but this block does not have tool call id to reference?
+                        // but some session does not have this relationship?
+                        // console.log(header, block);
+                    }
+                }
+
+                if (!request.result) {
+                    console.log(`${header} missing result`);
+                }
+                // RESULT: 3 sessions are response is copilot take too long to get ready
+                if (Object.keys(request.result).length == 0) {
+                    // console.log(`${header} result is empty`);
+                } else {
+                    const actualProperties = Object.keys(request.result).filter(k => k != 'details').sort((a, b) => a.localeCompare(b));
+                    // RESULT: 1 missing metadata: enable claude sonnet for all clients
+                    if (actualProperties[0] != 'metadata' || actualProperties[1] != 'timings') {
+                        // console.log(`${header} result object unknown properties`, actualProperties);
+                    } else {
+                        // RESULT: all valid
+                        if (typeof request.result.timings.firstProgress != 'number' || typeof request.result.timings.totalElapsed != 'number') {
+                            console.log(`${header} timing unknown structure`, request.result.timings);
+                        } else { matchCount += 1; }
+
+                        // the property called details is a string? values are consistent with request.modelId
+                        // GPT-4.1 • 0x
+                        // GPT-5 mini • 0x
+                        // GPT-5-Codex (Preview) • 1x
+                        if (request.result.details && typeof request.result.details != 'string') {
+                            console.log(`${header} details is not string`, request.result.details);
+                        }
+                        // if (request.result.details) { console.log(request.result.details, request.modelId); }
+
+                        const metadata = request.result.metadata;
+                        const actualProperties = Object.keys(metadata).filter(k =>
+                            k != 'renderedUserMessage' && k != 'renderedGlobalContext' && k != 'toolCallRounds'
+                            && k != 'toolCallResults' && k != 'command' && k != 'codeBlocks' && k != 'maxToolCallsExceeded'
+                        ).sort((a, b) => a.localeCompare(b));
+                        const expectProperties = [
+                            'modelMessageId', 'responseId', 'sessionId', 'agentId',
+                        ].sort((a, b) => a.localeCompare(b));
+                        if (actualProperties.length != expectProperties.length || expectProperties.some((e, i) => actualProperties[i] != e)) {
+                            console.log(`${header} result metadata unexpected properties, ${actualProperties}, ${expectProperties}`);
+                        }
+
+                        // RESULT: 1, what does it mean by message.text is @agent Pause: "Continue to iterate?"?
+                        if (!metadata.modelMessageId) {
+                            // console.log(`${header} result metadata missing model message id`);
+                        }
+                        if (metadata.modelMessageId && typeof metadata.modelMessageId != 'string') {
+                            console.log(`${header} result metadata model message id is not string`);
+                        }
+                        if (typeof metadata.responseId != 'string') {
+                            console.log(`${header} result metadata response id is not string`);
+                        }
+                        // RESULT: none is same, completely irrelavent
+                        if (metadata.responseId != request.responseId) {
+                            // console.log(`${header} result request.result.metadata.responseid not same as request.responseid`, metadata.responseId, request.responseId);
+                        } else { matchCount += 1; }
+                        if (typeof metadata.sessionId != 'string'){
+                            console.log(`${header} result metadata session id is not string`);
+                        }
+                        // RESULT: none is same??, what are you storing here?
+                        if (metadata.sessionId != sessionId) {
+                            // console.log(`${header} request.result.metadata.sessionId is not same as sessionId`, metadata.sessionId, sessionId);
+                        } else { matchCount += 1; }
+
+                        if (!metadata.agentId) {
+                            console.log(`${header} missing agent id`);
+                        }
+                        // RESULT finally find a same
+                        if (metadata.agentId != request.agent.id) {
+                            console.log(`${header} request.result.metadata.agentId not same as request.agent.id`);
+                        }
+
+                        // RESULT: the 2 /explain, again
+                        if (metadata.command) {
+                            // console.log(header, metadata.command);
+                        }
+                        // RESULT 2 messages
+                        if (metadata.maxToolCallsExceeded) {
+                            // console.log(header, metadata.maxToolCallsExceeded);
+                        }
+
+                        if (!metadata.codeBlocks || metadata.codeBlocks.length == 0) {
+                            // RESULT: many
+                            // console.log(`${header} codeblocks is empty`);
+                        } else {
+                            // console.log(`${header} code blocks is not empty`);
+                            // the struct of code,language,markdownBeforeBlock is easy to understand,
+                            // but how is this referenced?
+                            for (const codeBlock of metadata.codeBlocks) {
+                                // console.log(Object.keys(codeBlock));
+                            }
+                        }
+
+                        // they seem always stick together, contain 2 elements, type:1+text, type:3+cacheType
+
+                        // RESULT: 3 request has rendereduser no renderedglobal
+                        if (metadata.renderedUserMessage && !metadata.renderedGlobalContext) {
+                            // console.log(`${header} renderedUserMessage and renderedGlobalContext don't appear at the same time`);
+                        }
+                        // RESULT: as expected, can I use this as user message?
+                        if (metadata.renderedUserMessage) {
+                            if (!Array.isArray(metadata.renderedUserMessage)) {
+                                console.log(`${header} renderedUserMessage is not array`);
+                            }
+                            if (metadata.renderedUserMessage.length != 2) {
+                                console.log(`${header} renderedUserMessage is not length 2`);
+                            }
+                            if (metadata.renderedUserMessage[0].type != 1) {
+                                console.log(`${header} renderedUserMessage[0].type is not 1`);
+                            }
+                            if (typeof metadata.renderedUserMessage[0].text != 'string' || !metadata.renderedUserMessage[0].text) {
+                                console.log(`${header} renderedUserMessage[0].text is empty`);
+                            }
+                            if (metadata.renderedUserMessage[1].type != 3) {
+                                console.log(`${header} renderedUserMessage[1].type is not 3`);
+                            }
+                            if (metadata.renderedUserMessage[1].cacheType != 'ephemeral') {
+                                console.log(`${header} renderedUserMessage[1].cacheType is not ephemeral`);
+                            }
+                        }
+                        // RESULT as expected, can I use this as user message or system message?
+                        if (metadata.renderedGlobalContext) {
+                            if (!Array.isArray(metadata.renderedGlobalContext)) {
+                                console.log(`${header} renderedGlobalContext is not array`);
+                            }
+                            if (metadata.renderedGlobalContext.length != 2) {
+                                console.log(`${header} renderedGlobalContext is not length 2`);
+                            }
+                            if (metadata.renderedGlobalContext[0].type != 1) {
+                                console.log(`${header} renderedGlobalContext[0].type is not 1`);
+                            }
+                            if (typeof metadata.renderedGlobalContext[0].text != 'string' || !metadata.renderedGlobalContext[0].text) {
+                                console.log(`${header} renderedGlobalContext[0].text is empty`);
+                            }
+                            if (metadata.renderedGlobalContext[1].type != 3) {
+                                console.log(`${header} renderedGlobalContext[1].type is not 3`);
+                            }
+                            if (metadata.renderedGlobalContext[1].cacheType != 'ephemeral') {
+                                console.log(`${header} renderedGlobalContext[1].cacheType is not ephemeral`);
+                            }
+                        }
+
+                        // RESULT: many
+                        if (!!metadata.toolCallRounds != !!metadata.toolCallResults) {
+                            // console.log(`${header} toolCallRounds and toolCallResults don't appear at the same time`);
+                        }
+                        if (metadata.toolCallRounds) {
+                            for (const round of metadata.toolCallRounds) {
+                                if (typeof round.id != 'string' || !round.id) {
+                                    console.log(`${header} tool call round id is empty`);
+                                } else { matchCount += 1; }
+                                // RESULT: 2, very long base64 string, can decode, but result is not ascii
+                                if (round.statefulMarker && typeof round.statefulMarker != 'string') {
+                                    console.log('stateful marker is not string');
+                                }
+                                // if (round.statefulMarker) {
+                                //     console.log(round.statefulMarker);
+                                // }
+
+                                // RESULT: 2, large chunk of encrypted text, should be closed source model's simplified thinking
+                                // if you are collecting this, thinking.text is the available short text
+                                if (round.thinking) {
+                                    // console.log(round.thinking);
+                                }
+                                // RESULT: none
+                                if (round.toolInputRetry) {
+                                    console.log(round.toolInputRetry);
+                                }
+                                if (typeof round.response != 'string') {
+                                    console.log(`${header} request.result.metadata.toolcallrounds.response is not string`);
+                                }
+                                if (!round.response) {
+                                    // RESULT: many
+                                    // console.log(`${header} request.result.metadata.toolcallrounds.response is empty`);
+                                } else {
+                                    // console.log(round.response);
+                                }
+                                if (!round.toolCalls.length) {
+                                    // RESULT: many, what does it mean by toolcallrounds.toolcalls is empty?
+                                    // console.log(`${header} tool call round tool calls is empty?`);
+                                } else {
+                                    // finally something looks like tool call
+                                    for (const toolCall of round.toolCalls) {
+                                        // RESULT: all same property name and is string and is not empty
+                                        const actualProperties = Object.keys(toolCall).sort((a, b) => a.localeCompare(b));
+                                        if (actualProperties.length != 3 || actualProperties[0] != 'arguments'
+                                            || actualProperties[1] != 'id' || actualProperties[2] != 'name'
+                                        ) {
+                                            console.log(`${header} request.result.metadata.toolcallrounds.toolscalls unexpected structure`);
+                                        }
+                                        if (typeof toolCall.id != 'string' || typeof toolCall.name != 'string' || typeof toolCall.arguments != 'string') {
+                                            console.log(`${header} request.result.metadata.toolcallrounds.toolscalls unexpected structure`);
+                                        }
+                                        if (!toolCall.id || !toolCall.name || !toolCall.arguments) {
+                                            console.log(`${header} request.result.metadata.toolcallrounds.toolscalls some property is empty?`);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if (metadata.toolCallResults) {
+                            for (const [resultId, result] of Object.entries(metadata.toolCallResults)) {
+                                // this is yet another ast, ABSTRACT SYNTAX TREE, tens of thousands of lines of ast
+                                // although they occupies thousands of lines, it's meaningless to construct them back
+                                // console.log(header, resultId) //, result.content[0].value);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    console.log(matchCount);
+
+    return;
+}
+await read6();
